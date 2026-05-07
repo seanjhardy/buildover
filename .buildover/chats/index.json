@@ -1,0 +1,15 @@
+{
+  "chats": [
+    {
+      "id": "ch_mow17uukp7aahh",
+      "title": "List All Current Files",
+      "status": "running",
+      "userMarkedFinished": false,
+      "sessionId": "34b822dd-6285-4336-be59-6f1f1072db48",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-07T22:02:29.996Z",
+      "updatedAt": "2026-05-07T22:02:44.159Z",
+      "preview": "Can you list all current files"
+    }
+  ]
+}
