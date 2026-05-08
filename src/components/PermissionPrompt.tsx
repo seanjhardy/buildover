@@ -103,6 +103,9 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
     if (p.toolName === "ExitPlanMode") {
       return exitPlanBranch(p, respond, () => sendDeny(false));
     }
+    if (p.toolName === "RequestAcknowledgement") {
+      return acknowledgementBranch(p, respond, (interrupt) => sendDeny(interrupt));
+    }
 
     const headerText = headerForTool(p.toolName, inputAny);
     return {
@@ -295,6 +298,54 @@ function exitPlanBranch(
         dynamicLabel: (fb) =>
           fb.trim() ? "Send feedback and keep planning" : "No, keep planning",
         invoke: defaultDeny,
+      },
+    ],
+  };
+}
+
+// ---- RequestAcknowledgement ----
+
+function acknowledgementBranch(
+  pending: PendingPermission,
+  respond: (r: Result) => void,
+  sendDenyWithFeedback: (interrupt: boolean) => void,
+): Branch {
+  const input = pending.input as { message?: string; summary?: string };
+  const message = String(
+    input.message ??
+      "I've completed this step and am waiting for your confirmation.",
+  );
+  const summary = input.summary ? String(input.summary) : undefined;
+
+  return {
+    header: "Waiting for your acknowledgement",
+    body: (
+      <div className="plan-body assistant-text">
+        <p style={{ margin: "0 0 8px" }}>{message}</p>
+        {summary && (
+          <ReactMarkdown remarkPlugins={[remarkGfm]}>{summary}</ReactMarkdown>
+        )}
+      </div>
+    ),
+    showRejectInput: true,
+    defaultRejectMessage: "User provided feedback",
+    actions: [
+      {
+        label: "Acknowledged",
+        kind: "primary",
+        invoke: () => respond({ behavior: "allow" }),
+      },
+      {
+        label: "Send feedback",
+        kind: "default",
+        dynamicLabel: (fb) =>
+          fb.trim() ? "Send feedback and continue" : "Send feedback",
+        invoke: () => sendDenyWithFeedback(false),
+      },
+      {
+        label: "Stop",
+        kind: "default",
+        invoke: () => sendDenyWithFeedback(true),
       },
     ],
   };

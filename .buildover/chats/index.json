@@ -3,13 +3,24 @@
     {
       "id": "ch_mox9yb5fxmivj5",
       "title": "Agent State Management And User Confirmation",
-      "status": "running",
+      "status": "agent_done",
       "userMarkedFinished": false,
       "sessionId": "d4c7ec69-9c3e-41c6-a5ea-64330800c81f",
       "model": "claude-sonnet-4-6",
       "createdAt": "2026-05-08T18:54:47.283Z",
-      "updatedAt": "2026-05-08T18:57:31.233Z",
-      "preview": "How do we currently define which state the agents are in in buildover, e.g. agents can be idle, running, awaiting user input, or completed. Occasionally if I've asked an AI to go off and research something, it will write its report but still show as complete, despite the fact that really its awaiting my aknowledgement/confirmation of the plan in plaintext. We need some way for the chat to register this state, e.g. the agent has to physically mark the task as finished in order to set the task as finished, and if not, it shows as awaiting user input"
+      "updatedAt": "2026-05-08T21:51:14.270Z",
+      "preview": "How do we currently define which state the agents are in in buildover, e.g. agents can be idle, running, awaiting user input, or completed. Occasionally if I've asked an AI to go off and research something, it will write its report but still show as complete, despite the fact that really its awaiting my aknowledgement/confirmation of the plan in plaintext. We need some way for the chat to register this state, e.g. the agent has to physically mark the task as finished in order to set the task as finished, and if not, it shows as awaiting user input Here's a thorough breakdown of the current sta"
+    },
+    {
+      "id": "ch_moxa2pnom63ry9",
+      "title": "Configure Buildover GitHub Private Repository",
+      "status": "agent_done",
+      "userMarkedFinished": false,
+      "sessionId": "9b667b4f-0376-412f-9583-030edd290c4d",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T18:58:12.708Z",
+      "updatedAt": "2026-05-08T21:50:31.159Z",
+      "preview": "Can you set up buildover to push to a private remote repo for my personal github account Let me explore the codebase to understand the current setup before planning. Now I have a clear picture. Let me ask the key questions I need before planning. Can you continue? Let me check the SSH configuration and GitHub CLI setup first. I can see everything I need. You have:\n- An SSH key for your personal account (`id_ed25519_personal`) with the alias `personal` in `~/.ssh/config`\n- A `seanjhardy` GitHub account already authenticated via `gh`\n\nNow let me execute the plan:\n1. Switch `gh` to the `seanjhard"
     },
     {
       "id": "ch_mox038bd1q745b",

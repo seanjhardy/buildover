@@ -911,6 +911,13 @@ button {
   background: rgba(217, 119, 87, 0.04);
   pointer-events: none;
 }
+.permission[data-tool="RequestAcknowledgement"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(87, 153, 217, 0.04);
+  pointer-events: none;
+}
 .permission-header {
   font-size: 14px;
   font-weight: 600;
