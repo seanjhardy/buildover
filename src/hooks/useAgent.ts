@@ -48,6 +48,7 @@ interface UseAgentReturn {
   cwd: string | undefined;
   status: ChatStatus | null;
   pendingPermission: PendingPermission | undefined;
+  chatPermissionMode: PermissionMode | undefined;
   send: (text: string, opts: SendOptions) => void;
   respondPermission: (
     requestId: string,
@@ -60,6 +61,7 @@ interface UseAgentReturn {
       | { behavior: "deny"; message: string; interrupt?: boolean },
   ) => void;
   interrupt: () => void;
+  setPermissionMode: (mode: PermissionMode) => void;
 }
 
 export function useAgent(
@@ -76,6 +78,8 @@ export function useAgent(
   const [status, setStatus] = useState<ChatStatus | null>(null);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | undefined>();
+  const [chatPermissionMode, setChatPermissionMode] =
+    useState<PermissionMode | undefined>();
   // Mirror state in refs so handlers can read without re-subscribing.
   const chatIdRef = useRef(chatId);
   chatIdRef.current = chatId;
@@ -92,6 +96,7 @@ export function useAgent(
       setCwd(undefined);
       setStatus(null);
       setPendingPermission(undefined);
+      setChatPermissionMode(undefined);
       return;
     }
 
@@ -109,6 +114,7 @@ export function useAgent(
         setCwd,
         setStatus,
         setPendingPermission,
+        setChatPermissionMode,
       });
     };
 
@@ -167,6 +173,16 @@ export function useAgent(
     agentSocket.send({ type: "interrupt", chatId: id });
   }, []);
 
+  const setPermissionMode = useCallback((mode: PermissionMode) => {
+    const id = chatIdRef.current;
+    if (!id) return;
+    agentSocket.send({
+      type: "set_permission_mode",
+      chatId: id,
+      permissionMode: mode,
+    });
+  }, []);
+
   return {
     turns,
     connection,
@@ -177,9 +193,11 @@ export function useAgent(
     cwd,
     status,
     pendingPermission,
+    chatPermissionMode,
     send,
     respondPermission,
     interrupt,
+    setPermissionMode,
   };
 }
 
@@ -193,6 +211,9 @@ interface Setters {
   setStatus: React.Dispatch<React.SetStateAction<ChatStatus | null>>;
   setPendingPermission: React.Dispatch<
     React.SetStateAction<PendingPermission | undefined>
+  >;
+  setChatPermissionMode: React.Dispatch<
+    React.SetStateAction<PermissionMode | undefined>
   >;
 }
 
@@ -214,6 +235,8 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       );
       s.setStatus(event.record.status);
       s.setIsStreaming(event.record.status === "running");
+      // Expose this chat's saved permission mode so App.tsx can sync its UI.
+      s.setChatPermissionMode(event.record.permissionMode);
       break;
     }
     case "system_init":

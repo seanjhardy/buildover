@@ -18,17 +18,43 @@ export function OpenRepoMenu({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
+    null,
+  );
   const ref = useRef<HTMLDivElement>(null);
+  const triggerRef = useRef<HTMLButtonElement>(null);
+  const popoverRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!open) return;
     const onDocClick = (e: MouseEvent) => {
-      if (!ref.current) return;
-      if (e.target instanceof Node && !ref.current.contains(e.target))
-        setOpen(false);
+      const target = e.target;
+      if (!(target instanceof Node)) return;
+      if (ref.current?.contains(target)) return;
+      if (popoverRef.current?.contains(target)) return;
+      setOpen(false);
     };
     document.addEventListener("mousedown", onDocClick);
     return () => document.removeEventListener("mousedown", onDocClick);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) {
+      setCoords(null);
+      return;
+    }
+    const update = () => {
+      const rect = triggerRef.current?.getBoundingClientRect();
+      if (!rect) return;
+      setCoords({ top: rect.bottom + 4, left: rect.left });
+    };
+    update();
+    window.addEventListener("resize", update);
+    window.addEventListener("scroll", update, true);
+    return () => {
+      window.removeEventListener("resize", update);
+      window.removeEventListener("scroll", update, true);
+    };
   }, [open]);
 
   const handleBrowse = async () => {
@@ -65,6 +91,7 @@ export function OpenRepoMenu({
   return (
     <div className="open-repo-menu" ref={ref}>
       <button
+        ref={triggerRef}
         type="button"
         className="repo-tab open-repo-trigger"
         onClick={() => setOpen((v) => !v)}
@@ -73,8 +100,13 @@ export function OpenRepoMenu({
       >
         + Open repo
       </button>
-      {open && (
-        <div className="open-repo-popover" role="menu">
+      {open && coords && (
+        <div
+          ref={popoverRef}
+          className="open-repo-popover"
+          role="menu"
+          style={{ top: coords.top, left: coords.left }}
+        >
           <button
             type="button"
             className="open-repo-browse"

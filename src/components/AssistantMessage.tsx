@@ -9,12 +9,12 @@ interface Props {
   // Map of tool_use_id → tool result, threaded in from the parent so the
   // tool card can show its own output.
   toolResults: Record<string, { content: string; isError: boolean }>;
+  cwd?: string;
 }
 
-export function AssistantMessage({ content, toolResults }: Props) {
+export function AssistantMessage({ content, toolResults, cwd }: Props) {
   return (
     <div className="message assistant">
-      <div className="message-role">Claude</div>
       {content.map((block, i) => {
         if (block.type === "text") {
           return (
@@ -35,6 +35,7 @@ export function AssistantMessage({ content, toolResults }: Props) {
               name={block.name}
               input={block.input}
               result={toolResults[block.id]}
+              cwd={cwd}
             />
           );
         }

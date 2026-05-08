@@ -1,8 +1,8 @@
-import { query } from "@anthropic-ai/claude-agent-sdk";
+import { complete } from "./anthropicDirect.js";
 
-// Generates a short chat title from the user's first prompt by asking Haiku.
-// Returns the title string, or null if generation fails or yields nothing.
-// We disable all tools so the model just produces text.
+// Generates a short chat title from the user's first prompt by asking Haiku
+// over the bare Messages API (NOT through claude-agent-sdk) so it doesn't
+// leave a phantom "chat" in ~/.claude/projects/.
 export async function generateTitle(userPrompt: string): Promise<string | null> {
   const trimmed = userPrompt.trim().slice(0, 800);
   if (!trimmed) return null;
@@ -20,33 +20,19 @@ User request:
 ${trimmed}
 """`;
 
-  const stream = query({
-    prompt: instruction,
-    options: {
-      model: "claude-haiku-4-5",
-      // No tools, no working dir mutation — we just want one text reply.
-      allowedTools: [],
-      includePartialMessages: false,
-    },
-  });
-
-  let collected = "";
+  let raw: string;
   try {
-    for await (const message of stream as AsyncIterable<any>) {
-      if (message.type === "assistant") {
-        for (const block of message.message?.content ?? []) {
-          if (block?.type === "text") collected += String(block.text ?? "");
-        }
-      } else if (message.type === "result") {
-        // Once we hit a result event the turn is done.
-        break;
-      }
-    }
+    const result = await complete({
+      model: "claude-haiku-4-5",
+      userPrompt: instruction,
+      maxTokens: 64,
+    });
+    raw = result.text;
   } catch {
     return null;
   }
 
-  return cleanTitle(collected);
+  return cleanTitle(raw);
 }
 
 function cleanTitle(raw: string): string | null {

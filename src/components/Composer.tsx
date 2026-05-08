@@ -1,15 +1,26 @@
 import { useEffect, useRef, useState } from "react";
+import type { ReactNode } from "react";
 import {
-  type Attachment,
-  type Model,
-  type PermissionMode,
-} from "../types.js";
+  ArrowUp,
+  ClipboardList,
+  Hammer,
+  MessageCircleQuestion,
+  Mic,
+  Paperclip,
+  Settings,
+  ShieldOff,
+  Square,
+} from "lucide-react";
+import { type Attachment, type Model, type PermissionMode } from "../types.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 import { useTranscription } from "../hooks/useTranscription.js";
 
 interface Props {
+  chatId: string;
   onSend: (text: string, attachments: Attachment[]) => void;
+  onQueueMessage?: (text: string, attachments: Attachment[]) => void;
   onInterrupt: () => void;
+  onDraftChange?: (text: string) => void;
   disabled: boolean;
   isStreaming: boolean;
   model: Model;
@@ -36,29 +47,29 @@ const MODE_CYCLE: PermissionMode[] = [
 
 const MODE_META: Record<
   PermissionMode,
-  { label: string; description: string; icon: string }
+  { label: string; description: string; icon: ReactNode }
 > = {
   default: {
     label: "Ask before edits",
     description: "Claude will ask for approval before making each edit",
-    icon: "✋",
+    icon: <MessageCircleQuestion size={13} />,
   },
   acceptEdits: {
     label: "Edit automatically",
     description: "Claude will edit your selected text or the whole file",
-    icon: "</>",
+    icon: <Hammer size={13} />,
   },
   plan: {
     label: "Plan mode",
     description:
       "Claude will explore the code and present a plan before editing",
-    icon: "▤",
+    icon: <ClipboardList size={13} />,
   },
   bypassPermissions: {
     label: "Bypass permissions",
     description:
       "Claude will not ask for approval before running potentially dangerous commands",
-    icon: "⊕",
+    icon: <ShieldOff size={13} />,
   },
 };
 
@@ -72,7 +83,9 @@ async function fileToAttachment(file: File): Promise<Attachment> {
       );
     }
     if (file.size > MAX_IMAGE_BYTES) {
-      throw new Error(`Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024}MB)`);
+      throw new Error(
+        `Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024}MB)`,
+      );
     }
     const dataUrl = await new Promise<string>((resolve, reject) => {
       const reader = new FileReader();
@@ -97,8 +110,11 @@ async function fileToAttachment(file: File): Promise<Attachment> {
 
 export function Composer(props: Props) {
   const {
+    chatId,
     onSend,
+    onQueueMessage,
     onInterrupt,
+    onDraftChange,
     disabled,
     isStreaming,
     permissionMode,
@@ -106,8 +122,17 @@ export function Composer(props: Props) {
     onToggleMcp,
   } = props;
 
-  const [text, setText] = useState("");
+  const DRAFT_KEY = `buildover.draft.${chatId}`;
+
+  const [text, setText] = useState(() => {
+    try {
+      return localStorage.getItem(DRAFT_KEY) ?? "";
+    } catch {
+      return "";
+    }
+  });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
+  const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modePopupOpen, setModePopupOpen] = useState(false);
@@ -116,27 +141,44 @@ export function Composer(props: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const modeWrapRef = useRef<HTMLDivElement>(null);
   const plusWrapRef = useRef<HTMLDivElement>(null);
-  // Snapshot of composer text at the moment recording started; transcripts
-  // are appended to this prefix so partial updates can replace cleanly.
-  const transcriptPrefixRef = useRef<string>("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // Debounce-save the draft text to localStorage and notify parent.
+  const saveDraft = (value: string) => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    draftTimerRef.current = setTimeout(() => {
+      try {
+        if (value) {
+          localStorage.setItem(DRAFT_KEY, value);
+        } else {
+          localStorage.removeItem(DRAFT_KEY);
+        }
+      } catch {
+        // localStorage unavailable — silently ignore
+      }
+    }, 300);
+    onDraftChange?.(value);
+  };
 
   const transcription = useTranscription({
     onTranscript: (transcript) => {
-      const prefix = transcriptPrefixRef.current;
-      const sep = prefix && transcript && !/\s$/.test(prefix) ? " " : "";
-      setText(prefix + sep + transcript);
+      // Replace the textarea content with the latest Whisper output directly.
+      // We deliberately do NOT snapshot and re-prepend the text that was in
+      // the box when recording started: if the user deletes or edits text
+      // while the mic is running, those changes must be respected. The
+      // transcript is always the authoritative live value during recording.
+      setText(transcript);
+      saveDraft(transcript);
     },
   });
 
   const toggleMic = async () => {
     if (transcription.state === "recording") {
       await transcription.stop();
-      transcriptPrefixRef.current = "";
       return;
     }
     if (transcription.state === "transcribing") return;
     setError(null);
-    transcriptPrefixRef.current = text;
     await transcription.start();
   };
 
@@ -156,18 +198,47 @@ export function Composer(props: Props) {
     return () => document.removeEventListener("mousedown", onDoc);
   }, [modePopupOpen, plusPopupOpen]);
 
+  // Auto-resize textarea to fit content, up to a maximum height.
+  useEffect(() => {
+    const el = textareaRef.current;
+    if (!el) return;
+    el.style.height = "auto";
+    el.style.height = `${el.scrollHeight}px`;
+  }, [text]);
+
   const cycleMode = () => {
     const idx = MODE_CYCLE.indexOf(permissionMode);
     const next = MODE_CYCLE[(idx + 1) % MODE_CYCLE.length];
     onPermissionModeChange(next);
   };
 
+  const clearDraft = () => {
+    if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    try {
+      localStorage.removeItem(DRAFT_KEY);
+    } catch {
+      // ignore
+    }
+    onDraftChange?.("");
+  };
+
   const submit = () => {
     const trimmed = text.trim();
-    if ((!trimmed && attachments.length === 0) || disabled) return;
+    if (!trimmed && attachments.length === 0) return;
+    if (disabled) {
+      // If we have a queue handler, queue the message instead of dropping it
+      if (onQueueMessage) {
+        onQueueMessage(trimmed, attachments);
+        setText("");
+        setAttachments([]);
+        clearDraft();
+      }
+      return;
+    }
     onSend(trimmed, attachments);
     setText("");
     setAttachments([]);
+    clearDraft();
   };
 
   const addFiles = async (files: FileList | File[]) => {
@@ -217,6 +288,7 @@ export function Composer(props: Props) {
       {error && <div className="composer-error">{error}</div>}
 
       <textarea
+        ref={textareaRef}
         className="composer-input"
         placeholder={
           disabled
@@ -226,7 +298,10 @@ export function Composer(props: Props) {
               : "Message Claude (Shift+Tab cycles modes)"
         }
         value={text}
-        onChange={(e) => setText(e.target.value)}
+        onChange={(e) => {
+          setText(e.target.value);
+          saveDraft(e.target.value);
+        }}
         onPaste={async (e) => {
           const items = e.clipboardData?.items;
           if (!items) return;
@@ -253,7 +328,6 @@ export function Composer(props: Props) {
             submit();
           }
         }}
-        rows={2}
       />
 
       <div className="composer-bar">
@@ -276,7 +350,7 @@ export function Composer(props: Props) {
                     fileInputRef.current?.click();
                   }}
                 >
-                  <span className="popup-item-icon">↥</span>
+                  <span className="popup-item-icon"><Paperclip size={13} /></span>
                   <div>
                     <div className="popup-item-label">Add context</div>
                     <div className="popup-item-desc">
@@ -291,7 +365,7 @@ export function Composer(props: Props) {
                     onToggleMcp();
                   }}
                 >
-                  <span className="popup-item-icon">⚙</span>
+                  <span className="popup-item-icon"><Settings size={13} /></span>
                   <div>
                     <div className="popup-item-label">View tools</div>
                     <div className="popup-item-desc">
@@ -317,10 +391,8 @@ export function Composer(props: Props) {
         <div className="composer-bar-right">
           <button
             className={`mic-btn ${transcription.state}`}
-            onClick={toggleMic}
-            disabled={
-              disabled || transcription.state === "transcribing"
-            }
+            onClick={() => void toggleMic()}
+            disabled={disabled || transcription.state === "transcribing"}
             title={
               transcription.state === "recording"
                 ? "Stop recording"
@@ -341,7 +413,7 @@ export function Composer(props: Props) {
             ) : transcription.state === "transcribing" ? (
               <span className="mic-spinner" />
             ) : (
-              <span className="mic-icon" aria-hidden="true">🎤</span>
+              <Mic className="mic-icon" size={14} aria-hidden="true" />
             )}
           </button>
           <div ref={modeWrapRef} className="popup-wrap">
@@ -389,13 +461,23 @@ export function Composer(props: Props) {
           </div>
 
           {isStreaming ? (
-            <button
-              className="send-btn stop"
-              onClick={onInterrupt}
-              title="Stop"
-            >
-              ◼
-            </button>
+            <>
+              <button
+                className="send-btn queue"
+                onClick={submit}
+                disabled={!text.trim() && attachments.length === 0}
+                title="Queue message"
+              >
+                <ArrowUp size={16} />
+              </button>
+              <button
+                className="send-btn stop"
+                onClick={onInterrupt}
+                title="Stop"
+              >
+                <Square size={12} />
+              </button>
+            </>
           ) : (
             <button
               className="send-btn"
@@ -403,7 +485,7 @@ export function Composer(props: Props) {
               disabled={disabled || (!text.trim() && attachments.length === 0)}
               title="Send"
             >
-              ↑
+              <ArrowUp size={16} />
             </button>
           )}
         </div>

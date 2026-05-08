@@ -4,7 +4,9 @@ import {
   computeStatus,
   readChat,
   rebuildIndex,
+  recoverStaleChat,
   setTitle,
+  withChatLock,
   writeChat,
 } from "./chats.js";
 import { generateTitle } from "./title.js";
@@ -46,6 +48,10 @@ class AgentSession {
   private pendingPermissions = new Map<string, PendingPermission>();
   private abort?: AbortController;
   private running = false;
+  // Tracks the active turn's permissionMode so it can be updated mid-turn.
+  // canUseTool reads this on every invocation via the getter passed to the
+  // SDK, so toggling bypass takes effect on the next decision.
+  private currentPermissionMode: PermissionMode = "default";
 
   constructor(chatId: string, repoPath: string) {
     this.chatId = chatId;
@@ -124,6 +130,18 @@ class AgentSession {
     return true;
   }
 
+  // Updates the in-flight turn's permissionMode. When switching to bypass we
+  // also auto-resolve any outstanding permission prompts so the user doesn't
+  // have to click each one individually after toggling the mode.
+  setPermissionMode(mode: PermissionMode): void {
+    this.currentPermissionMode = mode;
+    if (mode === "bypassPermissions" && this.pendingPermissions.size > 0) {
+      for (const [requestId] of this.pendingPermissions) {
+        this.resolvePermission(requestId, { behavior: "allow" });
+      }
+    }
+  }
+
   interrupt(): void {
     this.abort?.abort();
     for (const [, pending] of this.pendingPermissions) {
@@ -134,6 +152,25 @@ class AgentSession {
       });
     }
     this.pendingPermissions.clear();
+    // If there's no live turn, the abort above was a no-op but the persisted
+    // record may still claim "running" (e.g. a previous server died mid-turn
+    // and this AgentSession was just spun up by getSession). Heal the record
+    // and push the new status so the client's stop button has visible effect.
+    if (!this.running) void this.healAndBroadcast();
+  }
+
+  // Walks the persisted chat events, denies any unresolved permission_request
+  // and closes any open turn, then broadcasts the recovered status. Safe to
+  // call when nothing is wrong — recoverStaleChat returns false in that case.
+  private async healAndBroadcast(): Promise<void> {
+    try {
+      const changed = await recoverStaleChat(this.repoPath, this.chatId);
+      if (!changed) return;
+      const record = await readChat(this.repoPath, this.chatId);
+      await this.pushStatusFor(record);
+    } catch {
+      // Best-effort; the next subscribe will retry.
+    }
   }
 
   // Kicks off a turn in the background. Resolves immediately; the actual work
@@ -149,15 +186,20 @@ class AgentSession {
     }
     this.running = true;
     this.abort = new AbortController();
+    this.currentPermissionMode = args.permissionMode;
 
-    const record = await readChat(this.repoPath, this.chatId);
+    const record = await withChatLock(this.repoPath, this.chatId, async () => {
+      const r = await readChat(this.repoPath, this.chatId);
+      if (!r) return null;
+      r.model = args.model;
+      r.permissionMode = args.permissionMode;
+      await writeChat(this.repoPath, r);
+      return r;
+    });
     if (!record) {
       this.running = false;
       throw new Error(`Chat ${this.chatId} not found`);
     }
-    record.model = args.model;
-    record.permissionMode = args.permissionMode;
-    await writeChat(this.repoPath, record);
 
     const isFirstUserTurn = !record.events.some(
       (e) => e.type === "user_message",
@@ -202,6 +244,7 @@ class AgentSession {
         sessionId: record.sessionId,
         cwd: this.repoPath,
         permissionMode: args.permissionMode,
+        getPermissionMode: () => this.currentPermissionMode,
         attachments: args.attachments,
         emit,
         requestPermission: (req) =>
@@ -227,7 +270,7 @@ class AgentSession {
             this.broadcast(ev);
             void this.persistAgentEvent(ev);
           }),
-        signal: this.abort.signal,
+        abortController: this.abort,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -240,12 +283,14 @@ class AgentSession {
     } finally {
       this.running = false;
       this.pendingPermissions.clear();
-      const final = await readChat(this.repoPath, this.chatId);
-      if (final) {
-        final.status = computeStatus(final);
-        await writeChat(this.repoPath, final);
-        await this.pushStatusFor(final);
-      }
+      const final = await withChatLock(this.repoPath, this.chatId, async () => {
+        const r = await readChat(this.repoPath, this.chatId);
+        if (!r) return null;
+        r.status = computeStatus(r);
+        await writeChat(this.repoPath, r);
+        return r;
+      });
+      if (final) await this.pushStatusFor(final);
     }
   }
 

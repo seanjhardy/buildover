@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <!-- Required for Electron's V8 JIT compiler -->
+    <key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+    <true/>
+    <!-- Outbound HTTP/WebSocket to Express server and Anthropic API -->
+    <key>com.apple.security.network.client</key>
+    <true/>
+    <!-- Express server binds to localhost ports -->
+    <key>com.apple.security.network.server</key>
+    <true/>
+    <!-- User-picked folders via the folder picker dialog -->
+    <key>com.apple.security.files.user-selected.read-write</key>
+    <true/>
+    <!-- Read/write project files in opened repos -->
+    <key>com.apple.security.files.downloads.read-write</key>
+    <true/>
+  </dict>
+</plist>

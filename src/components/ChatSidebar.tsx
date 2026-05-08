@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { ChatSidebarItem } from "./ChatSidebarItem.js";
+import { GitPanel } from "./GitPanel.js";
 import type { ChatStatus, ChatSummary } from "../types.js";
 
 interface Props {
@@ -9,6 +10,8 @@ interface Props {
   onCreate: () => void;
   onToggleFinished: (chatId: string, finished: boolean) => void;
   onDelete: (chatId: string) => void;
+  repoPath: string;
+  chatDrafts?: Record<string, string>;
 }
 
 // Sidebar grouping order. Awaiting-input is most urgent (user has to click
@@ -36,6 +39,8 @@ export function ChatSidebar({
   onCreate,
   onToggleFinished,
   onDelete,
+  repoPath,
+  chatDrafts = {},
 }: Props) {
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -107,6 +112,7 @@ export function ChatSidebar({
                     onToggleFinished(c.id, !c.userMarkedFinished)
                   }
                   onDelete={() => onDelete(c.id)}
+                  draftText={chatDrafts[c.id]}
                 />
               ))}
             </div>
@@ -143,11 +149,13 @@ export function ChatSidebar({
                     onToggleFinished(c.id, !c.userMarkedFinished)
                   }
                   onDelete={() => onDelete(c.id)}
+                  draftText={chatDrafts[c.id]}
                 />
               ))}
           </div>
         )}
       </div>
+      <GitPanel repoPath={repoPath} />
     </aside>
   );
 }

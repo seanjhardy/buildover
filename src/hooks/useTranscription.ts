@@ -26,6 +26,10 @@ export function useTranscription(opts: Options) {
   const intervalRef = useRef<number | null>(null);
   const inflightRef = useRef<AbortController | null>(null);
   const mimeRef = useRef<string>("audio/webm");
+  // Text from the seed blob (pre-detection audio). Prepended to all
+  // subsequent recorder transcripts so Whisper's rolling output is combined
+  // with the words spoken before/during the wake word trigger.
+  const seedTextRef = useRef<string>("");
 
   const cleanupTracks = () => {
     if (intervalRef.current != null) {
@@ -74,7 +78,14 @@ export function useTranscription(opts: Options) {
         throw new Error(j.error || `Transcription failed (${r.status})`);
       }
       const j = (await r.json()) as { text: string };
-      onTranscriptRef.current(j.text ?? "", isFinal);
+      // Prepend seed text (words before/during the wake word trigger) so that
+      // recorder transcripts are combined with the pre-detection audio text.
+      const seed = seedTextRef.current;
+      const recText = j.text ?? "";
+      const combined = seed
+        ? seed + (recText && !/\s$/.test(seed) ? " " : "") + recText
+        : recText;
+      onTranscriptRef.current(combined, isFinal);
     } catch (e) {
       if ((e as { name?: string }).name === "AbortError") return;
       setError(e instanceof Error ? e.message : String(e));
@@ -82,8 +93,9 @@ export function useTranscription(opts: Options) {
     }
   };
 
-  const start = async () => {
+  const start = async (seedBlob?: Blob) => {
     setError(null);
+    seedTextRef.current = "";
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -110,6 +122,43 @@ export function useTranscription(opts: Options) {
       intervalRef.current = window.setInterval(() => {
         void sendChunks(false);
       }, intervalMs);
+
+      // If a seed blob is provided (e.g. pre-detection audio captured by the
+      // ring buffer before the wake word fired), transcribe it immediately and
+      // emit the result as an initial partial transcript. This ensures that
+      // words spoken during or immediately after the wake word phrase are not
+      // lost during MediaRecorder startup.
+      // The seed is transcribed independently (it's a WAV blob, which has a
+      // different container format from the WebM chunks the recorder produces,
+      // so they cannot be concatenated). Subsequent recorder polls will
+      // continue appending to the transcript from that point forward.
+      if (seedBlob) {
+        void (async () => {
+          try {
+            const seedMime = seedBlob.type || "audio/wav";
+            const r = await fetch(
+              `/api/transcribe?mime=${encodeURIComponent(seedMime)}`,
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/octet-stream" },
+                body: seedBlob,
+              },
+            );
+            if (r.ok) {
+              const j = (await r.json()) as { text: string };
+              if (j.text) {
+                // Store so sendChunks can prepend it to all subsequent polls.
+                seedTextRef.current = j.text;
+                // Emit immediately so the composer shows text right away.
+                onTranscriptRef.current(j.text, false);
+              }
+            }
+          } catch {
+            // Non-fatal: if seed transcription fails, recording continues
+            // normally from the MediaRecorder output.
+          }
+        })();
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
       setState("error");
@@ -151,6 +200,7 @@ export function useTranscription(opts: Options) {
 
   const cancel = () => {
     cleanupTracks();
+    seedTextRef.current = "";
     setState("idle");
     setError(null);
   };

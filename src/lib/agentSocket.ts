@@ -2,7 +2,10 @@ import type { AgentEvent, ClientMessage } from "../types.js";
 
 export type Connection = "connecting" | "connected" | "error" | "closed";
 
-const WS_URL = `ws://${window.location.hostname}:8787/agent`;
+// Fall back to 'localhost' when window.location.hostname is empty, which
+// happens in Electron production builds where the page is served via file://.
+const host = window.location.hostname || "localhost";
+const WS_URL = `ws://${host}:8787/agent`;
 
 type ConnectionListener = (c: Connection) => void;
 type EventListener = (event: AgentEvent) => void;

@@ -6,6 +6,7 @@ import {
   deleteChat,
   listChats,
   readChat,
+  recoverStaleChatsForRepo,
   setTitle,
   setUserFinished,
 } from "./chats.js";
@@ -17,11 +18,38 @@ import {
   touchRecent,
 } from "./repos.js";
 import { dropSession, getSession, tryGetSession } from "./sessions.js";
+import { getOrchestrator } from "./orchestrator.js";
+import { classifySegment } from "./segmenter.js";
 import { fetchUsage } from "./usage.js";
+import {
+  getGitStatus,
+  gitCheckout,
+  gitCommit,
+  gitPush,
+  gitPull,
+} from "./git.js";
+import {
+  readDashboard,
+  addNote,
+  updateNote,
+  deleteNote,
+  addTodo,
+  updateTodo,
+  deleteTodo,
+} from "./dashboard.js";
+import {
+  readSchedules,
+  createTask,
+  updateTask,
+  deleteTask,
+  startScheduler,
+} from "./schedules.js";
 import type {
   AgentEvent,
   ClientMessage,
   Model,
+  OrchestratorClientMessage,
+  OrchestratorEvent,
   PermissionMode,
 } from "../src/types.js";
 
@@ -65,7 +93,7 @@ app.post(
     }
     const mime =
       typeof req.query.mime === "string" ? req.query.mime : "audio/webm";
-    const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") ? "m4a" : "webm";
+    const ext = mime.includes("ogg") ? "ogg" : mime.includes("mp4") ? "m4a" : mime.includes("wav") ? "wav" : "webm";
     try {
       const form = new FormData();
       const ab = new ArrayBuffer(buffer.byteLength);
@@ -96,6 +124,20 @@ app.post(
     }
   },
 );
+
+// ---- Orchestrator: voice segmenter ----
+app.post("/api/segment", async (req, res) => {
+  try {
+    const text = String(req.body?.text ?? "");
+    const rateKey = req.ip ?? "anon";
+    const result = await classifySegment(text, rateKey);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
 
 // ---- Folder picker ----
 app.get("/api/picker/folder", async (_req, res) => {
@@ -237,9 +279,205 @@ app.delete("/api/chats/:chatId", async (req, res) => {
   }
 });
 
+// ---- Git operations ----
+app.get("/api/git/status", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const status = await getGitStatus(repoPath);
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/git/checkout", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const branch = String(req.body?.branch ?? "");
+    if (!branch) throw new Error("branch required");
+    await gitCheckout(repoPath, branch);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/git/commit", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const message = String(req.body?.message ?? "");
+    if (!message) throw new Error("message required");
+    await gitCommit(repoPath, message);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/git/push", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    await gitPush(repoPath);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/git/pull", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    await gitPull(repoPath);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- Dashboard ----
+app.get("/api/dashboard", async (_req, res) => {
+  try {
+    res.json(await readDashboard());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/dashboard/notes", async (req, res) => {
+  try {
+    const content = String(req.body?.content ?? "").trim();
+    if (!content) { res.status(400).json({ error: "content required" }); return; }
+    const pinned = Boolean(req.body?.pinned ?? false);
+    res.json(await addNote(content, pinned));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.patch("/api/dashboard/notes/:id", async (req, res) => {
+  try {
+    const note = await updateNote(req.params.id, {
+      content: req.body?.content,
+      pinned: req.body?.pinned,
+    });
+    if (!note) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(note);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete("/api/dashboard/notes/:id", async (req, res) => {
+  try {
+    const ok = await deleteNote(req.params.id);
+    if (!ok) { res.status(404).json({ error: "Not found" }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/dashboard/todos", async (req, res) => {
+  try {
+    const text = String(req.body?.text ?? "").trim();
+    if (!text) { res.status(400).json({ error: "text required" }); return; }
+    const priority = req.body?.priority ?? "medium";
+    res.json(await addTodo(text, priority));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.patch("/api/dashboard/todos/:id", async (req, res) => {
+  try {
+    const todo = await updateTodo(req.params.id, {
+      text: req.body?.text,
+      done: req.body?.done,
+      priority: req.body?.priority,
+    });
+    if (!todo) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(todo);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete("/api/dashboard/todos/:id", async (req, res) => {
+  try {
+    const ok = await deleteTodo(req.params.id);
+    if (!ok) { res.status(404).json({ error: "Not found" }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Scheduled tasks ----
+app.get("/api/schedules", async (_req, res) => {
+  try {
+    const list = await readSchedules();
+    res.json({ tasks: list.tasks });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/schedules", async (req, res) => {
+  try {
+    const task = await createTask({
+      label: String(req.body?.label ?? "").trim() || "Untitled task",
+      cronExpression: String(req.body?.cronExpression ?? ""),
+      prompt: String(req.body?.prompt ?? "").trim(),
+      repoPath: String(req.body?.repoPath ?? ""),
+      chatId: req.body?.chatId,
+      model: req.body?.model,
+      permissionMode: req.body?.permissionMode,
+      enabled: req.body?.enabled !== false,
+    });
+    res.json(task);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.patch("/api/schedules/:id", async (req, res) => {
+  try {
+    const task = await updateTask(req.params.id, req.body);
+    if (!task) { res.status(404).json({ error: "Not found" }); return; }
+    res.json(task);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete("/api/schedules/:id", async (req, res) => {
+  try {
+    const ok = await deleteTask(req.params.id);
+    if (!ok) { res.status(404).json({ error: "Not found" }); return; }
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ---- WebSocket multiplexer ----
 const httpServer = createServer(app);
-const wss = new WebSocketServer({ server: httpServer, path: "/agent" });
+// Both WS endpoints use noServer mode so we can route a single `upgrade`
+// event based on the URL path. Attaching multiple WebSocketServers to the
+// same httpServer with `server:` causes the non-matching one to abort the
+// handshake with a 400 on the already-upgraded socket, which kills the
+// connection from the browser's side.
+const wss = new WebSocketServer({ noServer: true });
 
 wss.on("connection", (ws: WebSocket) => {
   // A connection can subscribe to many chats. We hold the unsubscribe fn plus
@@ -263,7 +501,19 @@ wss.on("connection", (ws: WebSocket) => {
     if (existing && !withReplay) return; // already subscribed, no replay needed
     const session = getSession(repoPath, chatId);
     if (withReplay) {
-      const record = await readChat(repoPath, chatId);
+      // If the persisted record claims a turn is in flight but this session
+      // has nothing running (typical after the previous server died), heal
+      // the transcript before replaying so the client doesn't get a phantom
+      // "running" status it can never escape.
+      let record = await readChat(repoPath, chatId);
+      if (
+        record &&
+        !session.isRunning() &&
+        (record.status === "running" || record.status === "awaiting_input")
+      ) {
+        await recoverStaleChatsForRepo(repoPath).catch(() => {});
+        record = await readChat(repoPath, chatId);
+      }
       if (record) {
         send({
           type: "chat_replay",
@@ -337,6 +587,13 @@ wss.on("connection", (ws: WebSocket) => {
           session.interrupt();
           break;
         }
+        case "set_permission_mode": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const session = getSession(sub.repoPath, msg.chatId);
+          session.setPermissionMode(msg.permissionMode);
+          break;
+        }
       }
     } catch (err) {
       send({
@@ -355,8 +612,95 @@ wss.on("connection", (ws: WebSocket) => {
   });
 });
 
+// ---- Orchestrator WebSocket ----
+// Single global orchestrator session; many clients (typically just one tab)
+// can subscribe and all see the same event stream. Closing the WS does NOT
+// reset the session — refreshing the browser keeps the orchestrator's
+// memory of recent navigation.
+const orchWss = new WebSocketServer({ noServer: true });
+
+httpServer.on("upgrade", (req, socket, head) => {
+  const url = req.url ?? "";
+  const pathname = url.split("?")[0];
+  if (pathname === "/agent") {
+    wss.handleUpgrade(req, socket, head, (ws) => {
+      wss.emit("connection", ws, req);
+    });
+  } else if (pathname === "/orchestrator") {
+    orchWss.handleUpgrade(req, socket, head, (ws) => {
+      orchWss.emit("connection", ws, req);
+    });
+  } else {
+    socket.destroy();
+  }
+});
+
+orchWss.on("connection", (ws: WebSocket) => {
+  const orchestrator = getOrchestrator();
+
+  const send = (event: OrchestratorEvent) => {
+    if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
+  };
+
+  const unsubscribe = orchestrator.subscribe(send);
+
+  ws.on("message", (raw) => {
+    let msg: OrchestratorClientMessage;
+    try {
+      msg = JSON.parse(raw.toString()) as OrchestratorClientMessage;
+    } catch {
+      send({ type: "error", message: "Invalid JSON" });
+      return;
+    }
+    switch (msg.type) {
+      case "user_message":
+        orchestrator.enqueue(msg.text, msg.activeRepoPath ?? null);
+        break;
+      case "interrupt":
+        orchestrator.interrupt();
+        break;
+      case "reset":
+        orchestrator.reset();
+        break;
+    }
+  });
+
+  ws.on("close", () => {
+    unsubscribe();
+  });
+});
+
 httpServer.listen(PORT, () => {
   // eslint-disable-next-line no-console
   console.log(`[server] listening on http://localhost:${PORT}`);
   console.log(`[server] websocket at ws://localhost:${PORT}/agent`);
+  void recoverStaleChats();
+  void startScheduler();
 });
+
+// Walk every recent repo and patch chats whose persisted state is "running"
+// or has unresolved permission requests — leftovers from a previous server
+// process that died mid-turn. Without this, the sidebar shows them as live
+// when nothing is actually running.
+async function recoverStaleChats(): Promise<void> {
+  try {
+    const recents = await listRecents();
+    let total = 0;
+    for (const r of recents) {
+      try {
+        total += await recoverStaleChatsForRepo(r.path);
+      } catch (err) {
+        console.warn(
+          `[server] recovery skipped for ${r.path}:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (total > 0) console.log(`[server] recovered ${total} stale chat(s)`);
+  } catch (err) {
+    console.warn(
+      "[server] stale-chat recovery failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}

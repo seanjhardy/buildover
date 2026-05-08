@@ -7,8 +7,15 @@ import type {
   RepoInfo,
 } from "../types.js";
 
+// In Electron production, the page is served from file:// so there is no
+// implicit base URL for relative fetch() paths. Detect this and prefix all
+// API calls with the explicit Express server origin.
+function getApiBase(): string {
+  return window.location.protocol === "file:" ? "http://localhost:8787" : "";
+}
+
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(path);
+  const res = await fetch(getApiBase() + path);
   if (!res.ok) {
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status}: ${text || res.statusText}`);
@@ -21,7 +28,7 @@ async function send<T>(
   path: string,
   body?: unknown,
 ): Promise<T> {
-  const res = await fetch(path, {
+  const res = await fetch(getApiBase() + path, {
     method,
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
@@ -31,6 +38,46 @@ async function send<T>(
     throw new Error(`${res.status}: ${text || res.statusText}`);
   }
   return (await res.json()) as T;
+}
+
+// ── Dashboard & schedule types ─────────────────────────────────────────────
+
+export interface DashboardNote {
+  id: string;
+  content: string;
+  pinned: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface TodoItem {
+  id: string;
+  text: string;
+  done: boolean;
+  priority: "low" | "medium" | "high";
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Dashboard {
+  notes: DashboardNote[];
+  todos: TodoItem[];
+  updatedAt: string;
+}
+
+export interface ScheduledTask {
+  id: string;
+  label: string;
+  cronExpression: string;
+  prompt: string;
+  repoPath: string;
+  chatId?: string;
+  model: Model;
+  permissionMode: PermissionMode;
+  enabled: boolean;
+  lastRunAt?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export const api = {
@@ -82,4 +129,65 @@ export const api = {
       "DELETE",
       `/api/chats/${chatId}?repoPath=${encodeURIComponent(repoPath)}`,
     ),
+
+  // ── Dashboard ──────────────────────────────────────────────────────────
+  getDashboard: () => getJson<Dashboard>(`/api/dashboard`),
+
+  addNote: (content: string, pinned = false) =>
+    send<DashboardNote>("POST", `/api/dashboard/notes`, { content, pinned }),
+
+  updateNote: (id: string, patch: Partial<Pick<DashboardNote, "content" | "pinned">>) =>
+    send<DashboardNote>("PATCH", `/api/dashboard/notes/${id}`, patch),
+
+  deleteNote: (id: string) =>
+    send<{ ok: boolean }>("DELETE", `/api/dashboard/notes/${id}`),
+
+  addTodo: (text: string, priority: TodoItem["priority"] = "medium") =>
+    send<TodoItem>("POST", `/api/dashboard/todos`, { text, priority }),
+
+  updateTodo: (id: string, patch: Partial<Pick<TodoItem, "text" | "done" | "priority">>) =>
+    send<TodoItem>("PATCH", `/api/dashboard/todos/${id}`, patch),
+
+  deleteTodo: (id: string) =>
+    send<{ ok: boolean }>("DELETE", `/api/dashboard/todos/${id}`),
+
+  // ── Schedules ──────────────────────────────────────────────────────────
+  listSchedules: () =>
+    getJson<{ tasks: ScheduledTask[] }>(`/api/schedules`).then((r) => r.tasks),
+
+  createSchedule: (task: Omit<ScheduledTask, "id" | "createdAt" | "updatedAt" | "lastRunAt">) =>
+    send<ScheduledTask>("POST", `/api/schedules`, task),
+
+  updateSchedule: (id: string, patch: Partial<Omit<ScheduledTask, "id" | "createdAt">>) =>
+    send<ScheduledTask>("PATCH", `/api/schedules/${id}`, patch),
+
+  deleteSchedule: (id: string) =>
+    send<{ ok: boolean }>("DELETE", `/api/schedules/${id}`),
+};
+
+export interface GitStatus {
+  currentBranch: string;
+  branches: string[];
+  ahead: number;
+  behind: number;
+  isDirty: boolean;
+}
+
+export const gitApi = {
+  getStatus: (repoPath: string) =>
+    getJson<GitStatus>(
+      `/api/git/status?repoPath=${encodeURIComponent(repoPath)}`,
+    ),
+
+  checkout: (repoPath: string, branch: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/checkout`, { repoPath, branch }),
+
+  commit: (repoPath: string, message: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/commit`, { repoPath, message }),
+
+  push: (repoPath: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/push`, { repoPath }),
+
+  pull: (repoPath: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/pull`, { repoPath }),
 };

@@ -1,7 +1,11 @@
 node_modules
 dist
+dist-electron
+dist-server
+release
 .env
 .env.local
 *.log
 .DS_Store
 .vite
+chats

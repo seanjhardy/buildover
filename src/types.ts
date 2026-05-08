@@ -204,7 +204,15 @@ export type ClientMessage =
           }
         | { behavior: "deny"; message: string; interrupt?: boolean };
     }
-  | { type: "interrupt"; chatId: string };
+  | { type: "interrupt"; chatId: string }
+  | {
+      // Updates the permissionMode of an in-flight turn. The server applies
+      // this dynamically so toggling bypass mid-turn takes effect on the
+      // next (and any pending) permission decision.
+      type: "set_permission_mode";
+      chatId: string;
+      permissionMode: PermissionMode;
+    };
 
 export type AgentEvent =
   | {
@@ -280,3 +288,41 @@ export type AgentEvent =
       record: ChatRecord;
       pendingPermissions: { requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[] }[];
     };
+
+// ---- Orchestrator wire protocol ----
+
+// Navigation actions the orchestrator's tools emit back to the client. The
+// client applies these to its workspace state (open/active repo, active chat).
+export type OrchestratorNav =
+  | { action: "open_repo"; path: string }
+  | { action: "switch_chat"; repoPath: string; chatId: string }
+  | { action: "create_chat"; repoPath: string; chatId: string };
+
+export type OrchestratorClientMessage =
+  | { type: "user_message"; text: string; activeRepoPath?: string | null }
+  | { type: "interrupt" }
+  | { type: "reset" };
+
+export type OrchestratorEvent =
+  | { type: "turn_start" }
+  | { type: "turn_end" }
+  | { type: "assistant_text"; text: string }
+  | { type: "tool_call"; name: string; input: Record<string, unknown> }
+  | { type: "tool_result"; name: string; ok: boolean; summary?: string }
+  | { type: "nav"; nav: OrchestratorNav }
+  | { type: "error"; message: string };
+
+export interface OrchestratorRepoSnapshot {
+  path: string;
+  name: string;
+  open: boolean;
+  recent: boolean;
+}
+
+export interface OrchestratorChatSnapshot {
+  id: string;
+  title: string;
+  status: ChatStatus;
+  preview: string;
+  updatedAt: string;
+}

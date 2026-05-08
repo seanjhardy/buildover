@@ -36,6 +36,10 @@ interface RunArgs {
   sessionId?: string;
   cwd?: string;
   permissionMode: PermissionMode;
+  // Read at every canUseTool invocation so toggling bypass mid-turn takes
+  // effect immediately. Falls back to the static `permissionMode` above if
+  // the caller doesn't supply this.
+  getPermissionMode?: () => PermissionMode;
   attachments?: Attachment[];
   emit: (event: RawAgentEvent) => void;
   // Awaits the user's decision for a tool permission request. The server
@@ -53,7 +57,7 @@ interface RunArgs {
       }
     | { behavior: "deny"; message: string; interrupt?: boolean }
   >;
-  signal?: AbortSignal;
+  abortController?: AbortController;
 }
 
 // Runs one user-turn through the SDK, normalizing messages into our wire
@@ -65,15 +69,23 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     sessionId,
     cwd,
     permissionMode,
+    getPermissionMode,
     attachments,
     emit,
     requestPermission,
-    signal,
+    abortController,
   } = args;
 
   const finalPrompt = renderPromptWithAttachments(prompt, attachments);
 
   const canUseTool: CanUseTool = async (toolName, input) => {
+    // In bypassPermissions mode, the SDK still calls canUseTool for every
+    // tool when the callback is supplied — so the mode alone won't suppress
+    // prompts. Short-circuit here to honor the user's choice.
+    const currentMode = getPermissionMode?.() ?? permissionMode;
+    if (currentMode === "bypassPermissions") {
+      return { behavior: "allow", updatedInput: input };
+    }
     const decision = await requestPermission({
       toolName,
       input,
@@ -112,17 +124,24 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       permissionMode,
       canUseTool,
       includePartialMessages: false,
+      // Pass the controller so the SDK terminates its CLI subprocess on
+      // abort; relying on stream.interrupt() alone left the turn running.
+      abortController,
     },
   });
 
   let currentSessionId = sessionId;
   emit({ type: "turn_start" });
 
-  if (signal) {
-    signal.addEventListener("abort", () => {
+  if (abortController) {
+    abortController.signal.addEventListener("abort", () => {
       try {
-        // The SDK's Query has interrupt(); fall back to closing if missing.
-        (stream as any).interrupt?.();
+        // Belt-and-braces: the SDK's Query exposes interrupt() too.
+        // interrupt() returns a Promise that rejects with AbortError once
+        // the controller is already aborted — swallow that to avoid an
+        // unhandled rejection crashing the process.
+        const p = (stream as any).interrupt?.();
+        if (p && typeof p.then === "function") p.catch(() => {});
       } catch {}
     });
   }

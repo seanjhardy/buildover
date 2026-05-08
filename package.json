@@ -3,16 +3,58 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "main": "dist-electron/main.js",
   "scripts": {
     "dev": "concurrently -n server,client -c yellow,cyan \"npm:dev:server\" \"npm:dev:client\"",
     "dev:client": "vite",
     "dev:server": "tsx watch --env-file-if-exists=.env server/index.ts",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "electron:compile": "tsc -p electron/tsconfig.json",
+    "electron:dev:only": "wait-on http://localhost:5173 && cross-env ELECTRON_IS_DEV=1 electron dist-electron/main.js",
+    "electron:dev": "concurrently -n server,client,electron -c yellow,cyan,magenta \"npm:dev:server\" \"npm:dev:client\" \"npm:electron:dev:only\"",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist-server/index.cjs --external:@anthropic-ai/claude-agent-sdk --external:ws --external:express --external:node-cron",
+    "electron:build": "npm run build && npm run build:server && npm run electron:compile && electron-builder --mac",
+    "electron:build:dir": "npm run build && npm run build:server && npm run electron:compile && electron-builder --mac --dir"
+  },
+  "build": {
+    "appId": "com.buildover.app",
+    "productName": "buildover",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "dist-electron/**/*",
+      "dist-server/**/*",
+      "node_modules/**/*",
+      "package.json"
+    ],
+    "mac": {
+      "category": "public.app-category.developer-tools",
+      "icon": "build/icon.icns",
+      "target": [
+        { "target": "dmg", "arch": ["arm64", "x64"] },
+        { "target": "zip", "arch": ["arm64", "x64"] }
+      ],
+      "hardenedRuntime": true,
+      "entitlements": "build/entitlements.mac.plist",
+      "entitlementsInherit": "build/entitlements.mac.plist"
+    },
+    "dmg": {
+      "title": "buildover ${version}",
+      "window": {
+        "width": 540,
+        "height": 380
+      }
+    }
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
+    "openwakeword-wasm-browser": "^0.1.1",
     "express": "^4.21.2",
+    "lucide-react": "^1.14.0",
+    "node-cron": "^4.2.1",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^9.0.1",
@@ -22,13 +64,19 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/node": "^22.10.0",
+    "@types/node-cron": "^3.0.11",
     "@types/react": "^18.3.12",
     "@types/react-dom": "^18.3.1",
     "@types/ws": "^8.5.13",
     "@vitejs/plugin-react": "^4.3.4",
     "concurrently": "^9.1.0",
+    "cross-env": "^7.0.3",
+    "esbuild": "^0.24.0",
+    "electron": "^33.0.0",
+    "electron-builder": "^25.0.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2",
-    "vite": "^6.0.0"
+    "vite": "^6.0.0",
+    "wait-on": "^8.0.0"
   }
 }

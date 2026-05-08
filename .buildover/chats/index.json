@@ -1,15 +1,191 @@
 {
   "chats": [
     {
-      "id": "ch_mow17uukp7aahh",
-      "title": "List All Current Files",
+      "id": "ch_mox9yb5fxmivj5",
+      "title": "Agent State Management And User Confirmation",
       "status": "running",
       "userMarkedFinished": false,
-      "sessionId": "34b822dd-6285-4336-be59-6f1f1072db48",
+      "sessionId": "d4c7ec69-9c3e-41c6-a5ea-64330800c81f",
       "model": "claude-sonnet-4-6",
-      "createdAt": "2026-05-07T22:02:29.996Z",
-      "updatedAt": "2026-05-07T22:02:44.159Z",
-      "preview": "Can you list all current files"
+      "createdAt": "2026-05-08T18:54:47.283Z",
+      "updatedAt": "2026-05-08T18:57:31.233Z",
+      "preview": "How do we currently define which state the agents are in in buildover, e.g. agents can be idle, running, awaiting user input, or completed. Occasionally if I've asked an AI to go off and research something, it will write its report but still show as complete, despite the fact that really its awaiting my aknowledgement/confirmation of the plan in plaintext. We need some way for the chat to register this state, e.g. the agent has to physically mark the task as finished in order to set the task as finished, and if not, it shows as awaiting user input"
+    },
+    {
+      "id": "ch_mox038bd1q745b",
+      "title": "Save And Restore Chat Composer Text",
+      "status": "agent_done",
+      "userMarkedFinished": false,
+      "sessionId": "0b7891df-2930-41a5-9dd3-d9fcb125a92d",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T14:18:40.729Z",
+      "updatedAt": "2026-05-08T18:47:18.063Z",
+      "preview": "In buildover, can you make sure my current text being typed into the composer is saved per-chat when I switch chats? And if I close the app and come back, it should save my text input on that chat. Also, it should show me the current text as a subtitle to the chat Now I have a solid understanding of the codebase. Let me read a few key files to understand the exact current state before planning. Now let me read the App.tsx to understand how Composer is wired up and how chat switching works: Now I have everything I need to write a solid plan. Let me write it out: Now let's implement the changes "
+    },
+    {
+      "id": "ch_mox00ao52lzot9",
+      "title": "Expand Composer Height For Long Messages",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "5c90150c-5fff-48a4-86a0-093d109fea41",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T14:16:23.813Z",
+      "updatedAt": "2026-05-08T14:34:13.900Z",
+      "preview": "Could you improve buildover so that if I type a really long message, the composer actually increases in height to show more of my lines, right now it just seems to scroll within this view Now I have a clear picture. The textarea uses a fixed `rows={2}` and CSS constraints with `max-height: 520px` but no auto-resize logic. I'll add JavaScript-based auto-resize to the textarea so it grows as you type. Now let me look at the top of the Composer component to understand the imports and refs already in use: I have everything I need. Now I'll make the two changes:\n1. Add a `useRef` for the textarea a"
+    },
+    {
+      "id": "ch_mox051z6jomf8z",
+      "title": "Persistent Chat-Level Permission Settings",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "37d53b5a-5e04-499b-8178-e932d3ac5663",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T14:20:05.826Z",
+      "updatedAt": "2026-05-08T14:34:10.895Z",
+      "preview": "Can you ensure buildover saves my current setting for asking to edit vs bypassing permissions persistently so its the same when I reload the app, also can you change the setting to per-chat and default it to bypass permissions Now I have a thorough understanding of the codebase. Let me look at a few key files to confirm the details before writing my plan. Now I have a thorough understanding. Let me look at the rest of App.tsx to see how permissionMode is loaded when switching chats, then write the plan. Now I have everything I need. Let me look at how the active chat is loaded to understand wh"
+    },
+    {
+      "id": "ch_mowlg1b1e7tv3f",
+      "title": "Buildover UI and Features Improvements",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "d8b8a049-b88e-45b9-8d8e-b443ffd005d5",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T07:28:43.933Z",
+      "updatedAt": "2026-05-08T14:29:37.165Z",
+      "preview": "I've had a few ideas about improvements to buildover. Can you prevent the chat from automatically scrolling down if claude sends a new message. It should only follow the latest message if I'm already scrolled down to the bottom of the chat.\n\nWe could also implement something like a wake word like \"Hey claude\" which starts the microphone. This should be an extremely cheap and extremely lightweight model like apple uses for siri, since I do not want to spend tonnes of money on voice recognition during 99% of the time that I am not talking to claude. If this is possible let me know and we can sta"
+    },
+    {
+      "id": "ch_mowr050yc52m48",
+      "title": "Replace Picovoice With OpenWakeWord Integration",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "a977da68-258c-4b78-814d-60aa7d26aafc",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T10:04:19.954Z",
+      "updatedAt": "2026-05-08T14:29:27.690Z",
+      "preview": "I'd like to swap our existing picovoice integration over to openWakeWord. I've added a model inside models/hey_jarvis_v0.1.tflite which should work with the wake word \"Hey jarvis\". I've heard people online saying that wake words are typically poor at picking up \"[wake word] [action]\" when said in quick succession immediately afterwards. Can we plan a refactor where we can store something like a buffer of audio input and as soon as the wake word is detected, we can use that audio buffer to feed into groq, so that we can seamlessly detect the wake word and start transcribing it Let me explore th"
+    },
+    {
+      "id": "ch_mowvrqiqqb2dpl",
+      "title": "Convert Website To Mac Taskbar App",
+      "status": "agent_done",
+      "userMarkedFinished": false,
+      "sessionId": "7f4f101f-5bd6-409d-8b57-609069384e4f",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T12:17:45.986Z",
+      "updatedAt": "2026-05-08T14:20:07.190Z",
+      "preview": "Can you turn this website into an app that I can run from my taskbar on my mac Got it! Let me explore the current project to understand what we're working with. Now I have a clear picture of the app. Let me plan the Electron integration to turn this into a Mac taskbar app. Excellent detailed plan. Let me now read the specific files I need to modify to finalize the implementation plan. Now I have everything I need. Let me write the final plan. Let's get started! Electron is a large download — let me check on it and continue creating the files in parallel. Now let me create all the new files whi"
+    },
+    {
+      "id": "ch_mowocxa03m8678",
+      "title": "Fix Chat Navigation And Composer",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "6e5e4418-f981-4ed8-ac0d-e3729e824296",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T08:50:17.592Z",
+      "updatedAt": "2026-05-08T09:55:23.649Z",
+      "preview": "There's an issue where jumping to an existing chat puts me at the very top of that chat, it should instead put me to the bottom of that chat so I can read live messages. Furthermore, there's a bug where when the UI brings up something that requires the user's attention, it removes the message currently being typed in the composer box. Can you please fix this? There was a server restart, can you continue? continue Let me explore the codebase to understand the current implementation and find the relevant code for both bugs. continue Let me read the key files identified in the exploration to get "
+    },
+    {
+      "id": "ch_mowq4nwvzs9b3i",
+      "title": "Fix Chat List Layout Issue",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "917b9027-0554-401a-8230-5abd1f019471",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T09:39:51.439Z",
+      "updatedAt": "2026-05-08T09:48:07.205Z",
+      "preview": "The chat list on the left of the app is currently broken. Its horizontally scrollable and the chats are extremely long, and aligned with the names of their groups whereas they should be underneath their groups, can you fix this? I can clearly see the issue now. There are **two conflicting `.chat-group` CSS rules**:\n\n1. **Line 1434** (main chat pane layout): `.chat-group { display: flex; flex-direction: row; flex: 1; ... max-width: 810px; }` — This is meant for the main content area's chat layout\n2. **Line 1692** (sidebar): `.chat-group { margin-bottom: var(--app-spacing-medium); }` — This is m"
+    },
+    {
+      "id": "ch_mowomo0d0t1zmr",
+      "title": "Add TODO Checklist Visualization Feature",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "da87a2d8-e790-4954-999b-94c8af7cdf8a",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T08:57:52.141Z",
+      "updatedAt": "2026-05-08T09:48:05.888Z",
+      "preview": "Can you add a new feature where the agent's TODOs are visualsed as a checklist on the right side of the chat window, right of the top right bar. This should show todos with checks on them or a star if they're currently being worked on. And if the window is too small, it should be represented as a button that I can hover over to reveal the todos below the message line pill box. The explore agent gave great context. However, I notice it found existing `TodoItem` API infrastructure on the backend, but the user is specifically asking about visualizing the **agent's TODOs** (the ones written via th"
+    },
+    {
+      "id": "ch_mowp07gi42lxuj",
+      "title": "Fix Message Queue Deletion Issue",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "fe0269ba-eb9f-476a-92f8-55e1c00ab40c",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T09:08:23.874Z",
+      "updatedAt": "2026-05-08T09:14:33.179Z",
+      "preview": "The message queue doesn't seem to work, it just seems to delete my queued message without sending it. Can you please investigate that and fix it? Good analysis. Now let me look at the specific files to understand the exact code before making fixes. Now I can see the root cause clearly. The `useEffect` on line 115–127 in `App.tsx` has a **stale closure bug** — it only lists `agent.isStreaming` as a dependency, but it reads `messageQueue`, `model`, `permissionMode`, and `agent` inside the effect body. This means when the effect fires, it uses stale captured values of those variables.\n\nThe most c"
+    },
+    {
+      "id": "ch_mowjcbptghsvus",
+      "title": "Brainstorm Buildover Feature Improvements",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "9828e8bc-2d47-48ec-8c5a-70b2239019e3",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T06:29:51.569Z",
+      "updatedAt": "2026-05-08T08:33:54.907Z",
+      "preview": "I want to brainstorm ideas to improve Buildover and add new functionality to make building features in repositories easier. Now I have a thorough understanding of Buildover! Let me brainstorm ideas across multiple dimensions.\n\nHere's a comprehensive brainstorm of ideas to improve Buildover and add new functionality:\n\n---\n\n## 🧠 Brainstormed Ideas for Buildover\n\n### 🔧 Core Agent Experience\n\n1. **Parallel Agent Lanes** — Run multiple agent turns simultaneously across different chats, with a global \"all agents\" activity view. Currently one chat is active at a time; unlocking true parallelism let"
+    },
+    {
+      "id": "ch_mowkznq5td8elj",
+      "title": "Replace Icons With Lucid Icons",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "1cf0d361-12d2-43dd-bbf5-3f5768fa6f29",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T07:15:59.837Z",
+      "updatedAt": "2026-05-08T08:33:28.129Z",
+      "preview": "Change the microphone and emoji icons throughout the app to Lucid icons. I'll start by exploring the codebase to find all microphone and emoji icon usages throughout the app. Can you continue? Let me explore the relevant files to get the exact code details before planning. Sorry it happened again, can you continue? Let me read the other relevant files and then proceed with the implementation. Now I have everything I need. The task is clear:\n1. Install `lucide-react`\n2. Replace the `🎤` emoji with the Lucide `Mic` icon in `Composer.tsx` and `OrchestratorBar.tsx`\n\nThe user mentioned \"microphone "
+    },
+    {
+      "id": "ch_mowkuzyazi8c8i",
+      "title": "Update README Documentation",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "e71d44f3-89e6-411b-a7cd-2f4b31b5a5ba",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T07:12:22.402Z",
+      "updatedAt": "2026-05-08T07:55:28.870Z",
+      "preview": "Update the README. I'd be happy to help update the README! However, I need a bit more context to do so effectively. Let me first explore the repository to understand the project structure and the current state of the README. Now let me read the current README to understand what's there: Now I have a clear picture of the current README (outdated, referring to \"v1\" and listing many things as \"not yet planned\") and the actual current state of the project (which has implemented everything and more). Let me write a comprehensive, up-to-date README:"
+    },
+    {
+      "id": "ch_mow1si11zwqbao",
+      "title": "Implement Queued Message System",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "0767480f-008a-4e09-8373-5e4384c0a733",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-07T22:18:33.157Z",
+      "updatedAt": "2026-05-08T07:55:28.773Z",
+      "preview": "Can you implement a system where I can queue messages to a chat and they show above the chatbox as \"Queued\" and I can remove them from the queue, and they get inserted into the chat when the agent is finished Now I have a thorough understanding of the codebase. Let me read a few key files to understand the exact implementation details before planning. Now let me look at the styles to understand what CSS patterns are used: I have everything I need to write a detailed implementation plan. Let me now write the plan: Let's start implementing! I'll work on all the pieces in parallel. Now update `Co"
+    },
+    {
+      "id": "ch_mow1r05wn1sica",
+      "title": "Fix Sidebar Chat Button Fade",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "aba86b17-3a3d-4110-acd6-ebe38cf13e04",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-07T22:17:23.348Z",
+      "updatedAt": "2026-05-07T22:27:53.963Z",
+      "preview": "The buttons on the chats in the sidebar aren't properly faded out at the edge, as the fade out only partially covers them, can you fix that? Now I have a clear picture of the issue. Let me look at the specific CSS to understand the exact problem. Now I can clearly see the issue. Let me check the `--app-spacing-medium` value and the exact button sizes to understand the full math: Now I have all the information I need. Let me analyze the problem:\n\n**The issue:** The `.chat-item-actions` container has:\n- `padding-right: 8px` (`var(--app-spacing-medium)`)\n- Two buttons, each `22px` wide with `2px`"
+    },
+    {
+      "id": "ch_mow1vn5rmr1gjt",
+      "title": "Improve Chat Display Format",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "5d62b82b-abb4-44ee-9cf1-d20f5751e014",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-07T22:20:59.775Z",
+      "updatedAt": "2026-05-07T22:27:46.107Z",
+      "preview": "The chat looks a little weird right now because before every single message or toolcall is the word \"Claude\" we should just show the chat uninterrupted when claude is speaking in the chat. Can you also show toolcalls as much more minified with just simplistic text such as \"Read file.tsx\" \"Bash call\" which I can then expand to see more details of Now I have a clear picture of the codebase. Let me look at the actual files to verify the details before writing my plan. Now let me read the CSS to understand the current styling: I have everything I need. Let me now write the plan. Now let me update "
     }
   ]
 }

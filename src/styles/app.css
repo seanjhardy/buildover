@@ -65,6 +65,50 @@ button {
   background: var(--app-claude-orange);
 }
 
+/* ---- Wake word toggle button ---- */
+.wake-word-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  background: transparent;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+  white-space: nowrap;
+}
+.wake-word-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.wake-word-btn.active {
+  border-color: var(--app-claude-orange);
+  color: var(--app-claude-orange);
+}
+.wake-word-btn.error {
+  border-color: var(--app-error);
+  color: var(--app-error);
+}
+.wake-word-label {
+  font-size: 11px;
+}
+/* Animated pulse dot shown while actively listening */
+.wake-word-pulse {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-claude-orange);
+  animation: wake-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wake-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}
+
 .connection-pill {
   font-size: 11px;
   color: var(--app-secondary-foreground);
@@ -131,13 +175,6 @@ button {
   gap: var(--app-spacing-medium);
 }
 
-.message-role {
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.05em;
-  color: var(--app-secondary-foreground);
-  font-weight: 600;
-}
 
 .message.user .bubble {
   align-self: flex-end;
@@ -215,7 +252,55 @@ button {
   transform: rotate(-90deg);
 }
 
-/* ---- Tool blocks ---- */
+/* ---- Tool blocks (inline / collapsed) ---- */
+.tool-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms;
+  user-select: none;
+  padding: 1px 0;
+}
+.tool-inline:hover {
+  opacity: 1;
+}
+.tool-inline-chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.tool-inline-name {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.tool-inline-summary {
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 420px;
+}
+.tool-inline-status {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+.tool-inline-status.error {
+  color: var(--app-error);
+}
+.tool-inline-status.running {
+  color: var(--app-secondary-foreground);
+}
+.tool-inline.error .tool-inline-name {
+  color: var(--app-error);
+}
+
+/* ---- Tool blocks (expanded / card) ---- */
 .tool {
   border: 1px solid var(--app-tool-border);
   border-radius: var(--corner-radius-medium);
@@ -267,17 +352,14 @@ button {
   color: var(--app-secondary-foreground);
   border-bottom: 1px solid var(--app-tool-border);
 }
-.tool.collapsed .tool-body {
-  display: none;
-}
 
 /* ---- Composer ----
    Single rounded card with the textarea on top and a one-row action bar
    at the bottom: [+] left for the context/tools menu, mode pill + send
    button on the right. Mirrors the VS Code extension's composer layout. */
 .composer {
-  margin: var(--app-spacing-large) var(--app-spacing-xlarge);
-  background: var(--app-input-background);
+  margin: var(--app-spacing-large) auto;
+  background: #252525;
   border: 1px solid var(--app-input-border);
   border-radius: 12px;
   padding: var(--app-spacing-medium) var(--app-spacing-large);
@@ -285,6 +367,7 @@ button {
   flex-direction: column;
   gap: 6px;
   transition: border-color 120ms;
+  box-shadow: inset 0 2px 6px rgba(0, 0, 0, 0.3);
 }
 .composer:focus-within {
   border-color: var(--app-input-active-border);
@@ -292,8 +375,9 @@ button {
 .composer-input {
   width: 100%;
   resize: none;
-  min-height: 56px;
-  max-height: 280px;
+  min-height: 40px;
+  max-height: 520px;
+  overflow-y: auto;
   background: transparent;
   border: 0;
   padding: 4px 0;
@@ -309,6 +393,9 @@ button {
   align-items: center;
   justify-content: space-between;
   gap: var(--app-spacing-medium);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  padding-top: 6px;
+  margin-top: 2px;
 }
 .composer-bar-left,
 .composer-bar-right {
@@ -327,9 +414,9 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
+  font-size: 20px;
   line-height: 1;
-  padding: 0;
+  padding: 0 0 2px 0;
 }
 .round-btn:hover:not(:disabled) {
   background: var(--app-list-hover-background);
@@ -350,9 +437,6 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 16px;
-  font-weight: 700;
-  line-height: 1;
   padding: 0;
 }
 .send-btn:hover:not(:disabled) {
@@ -364,7 +448,80 @@ button {
 }
 .send-btn.stop {
   background: var(--app-error);
+}
+.send-btn.queue {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-primary-border-color);
+  color: var(--app-secondary-foreground);
+}
+.send-btn.queue:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* ---- Queued messages ---- */
+.queued-messages {
+  max-width: 920px;
+  width: 100%;
+  margin-left: auto;
+  margin-right: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0 var(--app-spacing-large) 6px;
+}
+
+.queued-item {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: 5px 10px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
   font-size: 12px;
+  color: var(--app-secondary-foreground);
+}
+
+.queued-badge {
+  background: var(--app-claude-orange);
+  color: white;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 99px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.queued-preview {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-primary-foreground);
+}
+
+.queued-remove,
+.queued-fast-forward {
+  background: none;
+  border: none;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+  line-height: 1;
+  flex-shrink: 0;
+  border-radius: var(--corner-radius-small);
+}
+.queued-remove:hover,
+.queued-fast-forward:hover {
+  color: var(--app-primary-foreground);
+  background: var(--app-list-hover-background);
+}
+.queued-fast-forward {
+  font-size: 13px;
 }
 
 /* ---- Mic / Whisper button ---- */
@@ -405,7 +562,7 @@ button {
   color: var(--app-error);
 }
 .mic-icon {
-  font-size: 14px;
+  display: block;
   filter: grayscale(1);
 }
 .mic-btn:hover .mic-icon,
@@ -443,7 +600,8 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  padding: 4px 8px;
+  height: 30px;
+  padding: 0 8px;
   border-radius: 6px;
   font-size: 12px;
   cursor: pointer;
@@ -453,9 +611,9 @@ button {
   background: var(--app-list-hover-background);
 }
 .mode-pill-icon {
-  font-size: 13px;
   display: inline-flex;
   width: 14px;
+  align-items: center;
   justify-content: center;
 }
 
@@ -511,7 +669,6 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
   flex-shrink: 0;
   color: var(--app-secondary-foreground);
 }
@@ -536,11 +693,8 @@ button {
 /* ---- Usage bar ---- */
 .usage-bar {
   position: relative;
-  display: flex;
-  justify-content: center;
-  padding: 6px var(--app-spacing-xlarge);
-  border-top: 1px solid var(--app-primary-border-color);
-  background: var(--app-primary-background);
+  display: inline-flex;
+  align-items: center;
 }
 .usage-trigger {
   background: transparent;
@@ -563,9 +717,8 @@ button {
 
 .usage-popover {
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  top: calc(100% + 6px);
+  right: 0;
   width: 360px;
   background: var(--app-secondary-background);
   border: 1px solid var(--app-primary-border-color);
@@ -1069,7 +1222,6 @@ button {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  font-size: 12px;
   flex-shrink: 0;
 }
 .mode-popup-item.active .mode-popup-icon {
@@ -1269,13 +1421,61 @@ button {
 /* Multi-repo / multi-chat layout                                */
 /* ============================================================ */
 
-/* Constrain the chat pane content for readability on wide screens. */
-.chat-pane .message-list,
-.chat-pane .composer {
-  max-width: 920px;
-  width: 100%;
+/* ---- Chat pane body: fills the pane and centres the chat-group ---- */
+.chat-pane-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* chat-group: centred flex row — [chat-column] [right-rail]
+   No min-width so it shrinks freely with the window. */
+.chat-pane-body .chat-group {
+  display: flex;
+  flex-direction: row;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  max-width: 810px; /* 760px chat + right-rail; expands when todo-panel visible */
   margin-left: auto;
   margin-right: auto;
+}
+
+.chat-pane-body .chat-group:has(.todo-panel) {
+  max-width: 1010px;
+}
+
+/* chat-column: flex col, no min-width — shrinks freely */
+.chat-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+}
+
+.chat-column .message-list {
+  flex: 1;
+  min-height: 0;
+}
+
+/* right-rail: sits to the right of chat-column, holds jump bar + todo.
+   Wide: row layout so jump bar and todo card are side by side.
+   Narrow: column layout so the icon strip sits below the jump bar. */
+.right-rail {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: flex-start;
+  padding: 12px 4px 12px 0;
+  gap: 8px;
+}
+
+.right-rail--narrow {
+  flex-direction: column;
+  align-items: center;
 }
 
 /* ---- Repo tabs ---- */
@@ -1350,10 +1550,8 @@ button {
   align-items: stretch;
 }
 .open-repo-popover {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 20;
+  position: fixed;
+  z-index: 1000;
   min-width: 320px;
   background: var(--app-secondary-background);
   border: 1px solid var(--app-primary-border-color);
@@ -1363,19 +1561,19 @@ button {
   display: flex;
   flex-direction: column;
   gap: 2px;
-  margin-top: 4px;
 }
 .open-repo-browse {
-  background: var(--app-claude-clay-button-orange);
-  color: white;
-  border: 0;
+  background: transparent;
+  color: var(--app-claude-orange);
+  border: 1px solid var(--app-primary-border-color);
   border-radius: var(--corner-radius-small);
   padding: 8px 12px;
   font-size: 12px;
   text-align: left;
 }
 .open-repo-browse:hover {
-  background: var(--app-claude-orange);
+  background: var(--app-list-hover-background);
+  border-color: var(--app-claude-orange);
 }
 .open-repo-section-label {
   font-size: 10px;
@@ -1521,78 +1719,90 @@ button {
   background: var(--app-list-hover-background);
 }
 .chat-item.active {
-  background: var(--app-list-active-background);
+  background: rgba(217, 119, 87, 0.12);
   border-left-color: var(--app-claude-orange);
+}
+.chat-item.active:hover {
+  background: rgba(217, 119, 87, 0.18);
+}
+.chat-item.active .chat-item-title {
+  color: var(--app-claude-orange);
 }
 .chat-item-body {
   flex: 1;
   min-width: 0;
 }
+.chat-item-title,
+.chat-item-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: -webkit-mask-image 120ms ease, mask-image 120ms ease;
+}
 .chat-item-title {
   font-size: 12px;
   font-weight: 500;
   color: var(--app-primary-foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
 }
 .chat-item-preview {
   font-size: 11px;
   color: var(--app-secondary-foreground);
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
   margin-top: 2px;
 }
-.chat-item-menu {
-  position: relative;
-  flex-shrink: 0;
+.chat-item-draft {
+  font-style: italic;
+  color: var(--app-accent, var(--app-secondary-foreground));
+  opacity: 0.85;
 }
-.chat-item-menu-trigger {
+.chat-item:hover .chat-item-title,
+.chat-item:hover .chat-item-preview {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 72px),
+    transparent calc(100% - 8px)
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 72px),
+    transparent calc(100% - 8px)
+  );
+}
+.chat-item-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: var(--app-spacing-medium);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.chat-item:hover .chat-item-actions,
+.chat-item-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-item-action {
   background: transparent;
   border: 0;
   color: var(--app-secondary-foreground);
-  font-size: 14px;
-  width: 20px;
-  height: 20px;
+  width: 22px;
+  height: 22px;
   border-radius: 4px;
-  opacity: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
 }
-.chat-item:hover .chat-item-menu-trigger,
-.chat-item-menu-trigger:focus {
-  opacity: 1;
-}
-.chat-item-menu-trigger:hover {
+.chat-item-action:hover {
   background: var(--app-input-background);
   color: var(--app-primary-foreground);
 }
-.chat-item-menu-popover {
-  position: absolute;
-  top: 100%;
-  right: 0;
-  z-index: 10;
-  background: var(--app-secondary-background);
-  border: 1px solid var(--app-primary-border-color);
-  border-radius: var(--corner-radius-small);
-  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
-  display: flex;
-  flex-direction: column;
-  min-width: 140px;
-  padding: 2px;
-}
-.chat-item-menu-popover button {
-  background: transparent;
-  border: 0;
-  color: var(--app-primary-foreground);
-  text-align: left;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: var(--corner-radius-small);
-}
-.chat-item-menu-popover button:hover {
-  background: var(--app-list-hover-background);
-}
-.chat-item-menu-popover button.danger {
+.chat-item-action.danger:hover {
   color: var(--app-error);
 }
 
@@ -1756,4 +1966,1358 @@ button {
   display: flex;
   align-items: center;
   gap: var(--app-spacing-large);
+}
+
+/* ---- Orchestrator bar ---- */
+/* The bar lives outside the .app column so it floats above whatever the
+   workspace is rendering. The orchestrator-stack publishes its rendered
+   height to --orch-stack-h via ResizeObserver so the workspace can reserve
+   exactly the right amount of bottom space — when a queue panel is shown
+   the chat content moves up rather than being covered. */
+.app-shell {
+  padding-bottom: var(--orch-stack-h, 44px);
+}
+
+.orchestrator-stack {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-secondary-background);
+  border-top: 1px solid var(--app-primary-border-color);
+}
+
+.orchestrator-queue {
+  display: flex;
+  flex-direction: column;
+  max-height: 200px;
+  overflow-y: auto;
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+
+.orch-queue-header {
+  padding: 4px var(--app-spacing-xlarge);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-secondary-foreground);
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: var(--app-primary-background);
+}
+
+.orch-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px var(--app-spacing-xlarge);
+  font-size: 12px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+.orch-queue-item:last-child {
+  border-bottom: 0;
+}
+
+.orch-queue-num {
+  flex: 0 0 auto;
+  width: 18px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+}
+
+.orch-queue-text {
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--app-primary-foreground);
+}
+
+.orchestrator-bar {
+  height: 44px;
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: 0 var(--app-spacing-xlarge);
+  font-size: 12px;
+}
+
+.orchestrator-bar-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.orch-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #6b6b6b;
+}
+.orch-dot.connected {
+  background: #4ade80;
+}
+.orch-dot.connecting {
+  background: #facc15;
+}
+.orch-dot.error,
+.orch-dot.closed {
+  background: #ef4444;
+}
+
+.orch-label {
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.orchestrator-bar-message {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-primary-foreground);
+}
+
+.orchestrator-bar.status-live .orchestrator-bar-message {
+  color: var(--app-claude-orange);
+  font-style: italic;
+}
+.orchestrator-bar.status-thinking .orchestrator-bar-message,
+.orchestrator-bar.status-classifying .orchestrator-bar-message {
+  color: var(--app-secondary-foreground);
+}
+
+.orchestrator-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.orch-error {
+  color: #ef4444;
+  font-size: 11px;
+}
+
+.orch-flush-btn,
+.orch-reset-btn {
+  background: transparent;
+  border: 1px solid var(--app-primary-border-color);
+  color: var(--app-secondary-foreground);
+  border-radius: var(--corner-radius-small, 4px);
+  padding: 3px 8px;
+  font-size: 11px;
+}
+.orch-flush-btn:hover:not(:disabled),
+.orch-reset-btn:hover {
+  color: var(--app-primary-foreground);
+  border-color: #4a4a4a;
+}
+.orch-flush-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.orch-reset-btn {
+  width: 26px;
+  padding: 3px 0;
+  text-align: center;
+}
+
+.orchestrator-bar .mic-btn {
+  /* Override default mic-btn margins so it sits flush in the bar. */
+  margin: 0;
+}
+
+/* Subtle pulse on the connection dot while a turn is running so the bar
+   reads as "alive" without being noisy. */
+@keyframes orch-thinking-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.85); }
+}
+
+.orchestrator-bar.status-thinking .orch-dot,
+.orchestrator-bar.status-classifying .orch-dot {
+  animation: orch-thinking-pulse 1.2s ease-in-out infinite;
+}
+
+/* When the queue panel is showing, soften the bar so the queue reads as the
+   primary surface and the bar is the affordance underneath. */
+.orchestrator-stack:has(.orchestrator-queue) .orchestrator-bar {
+  background: transparent;
+}
+
+/* (message-area removed — MessageJumpBar is now a direct sibling of chat-column) */
+
+/* ============================================================ */
+/* Message Jump Bar                                              */
+/* ============================================================ */
+
+/* Outer: sits in the flex row next to MessageList, pins the pill to the top */
+.message-jump-outer {
+  width: 36px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding: 16px 4px 0;
+}
+
+/* The pill itself — auto height, rounded, not full-height */
+.message-jump-pill {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 0;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  position: relative;
+  overflow: visible;
+  /* Subtle shadow so it floats over the message background */
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+/* SVG track — no extra sizing needed, it's driven by JS */
+.jump-track {
+  display: block;
+  overflow: visible;
+}
+
+.jump-nav-btn {
+  width: 20px;
+  height: 20px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-radius: 50%;
+  color: var(--app-secondary-foreground);
+  font-size: 8px;
+  padding: 0;
+  transition: color 100ms;
+}
+.jump-nav-btn:hover:not(:disabled) {
+  color: var(--app-primary-foreground);
+}
+.jump-nav-btn:disabled {
+  opacity: 0.25;
+  cursor: not-allowed;
+}
+
+.jump-tooltip {
+  position: absolute;
+  right: calc(100% + 10px);
+  width: 220px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: 8px 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
+  pointer-events: none;
+  z-index: 200;
+  transform: translateY(-50%);
+}
+.jump-tooltip-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--app-claude-orange);
+  margin-bottom: 5px;
+}
+.jump-tooltip-text {
+  font-size: 11px;
+  color: var(--app-primary-foreground);
+  line-height: 1.45;
+  word-break: break-word;
+}
+
+/* ============================================================ */
+/* Git Panel                                                     */
+/* ============================================================ */
+
+.git-panel {
+  flex-shrink: 0;
+  border-top: 1px solid var(--app-primary-border-color);
+}
+
+.git-panel-header {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px var(--app-spacing-medium);
+  background: transparent;
+  border: 0;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-weight: 600;
+  text-align: left;
+  transition: background 100ms, color 100ms;
+}
+.git-panel-header:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.git-panel-caret {
+  width: 10px;
+  display: inline-block;
+  font-style: normal;
+}
+
+.git-panel-label {
+  flex: 1;
+}
+
+.git-branch-badge {
+  background: rgba(217, 119, 87, 0.18);
+  color: var(--app-claude-orange);
+  font-size: 10px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  font-weight: 500;
+  text-transform: none;
+  letter-spacing: 0;
+  font-family: var(--app-monospace-font-family);
+  max-width: 110px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-panel-body {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px var(--app-spacing-medium) 12px;
+}
+
+.git-error {
+  font-size: 11px;
+  color: var(--app-error);
+  background: rgba(244, 135, 113, 0.08);
+  border: 1px solid rgba(244, 135, 113, 0.2);
+  border-radius: var(--corner-radius-small);
+  padding: 5px 8px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.git-muted {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  padding: 2px 0;
+}
+
+.git-branch-row {
+  position: relative;
+}
+
+.git-branch-btn {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  text-align: left;
+  transition: border-color 100ms;
+}
+.git-branch-btn:hover:not(:disabled) {
+  border-color: var(--app-input-active-border);
+}
+.git-branch-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.git-icon {
+  color: var(--app-claude-orange);
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
+.git-branch-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.git-chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+  flex-shrink: 0;
+}
+
+.git-branch-list {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(100% + 3px);
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: 3px;
+  max-height: 180px;
+  overflow-y: auto;
+  z-index: 50;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.4);
+}
+
+.git-branch-item {
+  width: 100%;
+  display: block;
+  background: transparent;
+  border: 0;
+  padding: 5px 8px;
+  text-align: left;
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-primary-foreground);
+  cursor: pointer;
+  transition: background 80ms;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.git-branch-item:hover {
+  background: var(--app-list-hover-background);
+}
+.git-branch-item.active {
+  color: var(--app-claude-orange);
+  background: rgba(217, 119, 87, 0.1);
+}
+
+.git-branch-check {
+  font-size: 10px;
+}
+
+.git-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.git-action-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 5px 8px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  transition: background 100ms, border-color 100ms;
+  white-space: nowrap;
+}
+.git-action-btn:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  border-color: var(--app-input-active-border);
+}
+.git-action-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.git-action-primary {
+  background: rgba(217, 119, 87, 0.15);
+  border-color: rgba(217, 119, 87, 0.4);
+  color: var(--app-claude-orange);
+}
+.git-action-primary:hover:not(:disabled) {
+  background: rgba(217, 119, 87, 0.25);
+  border-color: var(--app-claude-orange);
+}
+
+.git-dirty-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-warning);
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+.git-commit-form {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.git-commit-input {
+  width: 100%;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-input-foreground);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+  transition: border-color 100ms;
+}
+.git-commit-input:focus {
+  border-color: var(--app-input-active-border);
+}
+
+.git-commit-actions {
+  display: flex;
+  gap: 5px;
+}
+
+.git-sync-row {
+  display: flex;
+  gap: 5px;
+}
+
+.git-sync-btn {
+  flex: 1;
+  justify-content: center;
+}
+
+.git-badge {
+  background: var(--app-claude-orange);
+  color: white;
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 999px;
+  font-weight: 700;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ---- Todo Panel (sticky card to the right of the chat column) ---- */
+
+.todo-panel {
+  width: 190px;
+  flex-shrink: 0;
+  align-self: flex-start;   /* content-height only — don't stretch full height */
+  margin-top: 12px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.todo-panel-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+
+.todo-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 6px;
+}
+
+.todo-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font-size: 12px;
+  padding: 5px 6px;
+  border-radius: 5px;
+  line-height: 1.4;
+}
+
+.todo-item--in_progress {
+  background: color-mix(in srgb, var(--app-claude-orange) 10%, transparent);
+  color: var(--app-primary-foreground);
+}
+
+.todo-item--completed {
+  color: var(--app-secondary-foreground);
+  opacity: 0.5;
+}
+
+.todo-item--pending {
+  color: var(--app-secondary-foreground);
+}
+
+.todo-icon {
+  flex-shrink: 0;
+  line-height: 1.4;
+  font-size: 13px;
+}
+
+.todo-icon--in-progress {
+  color: var(--app-claude-orange);
+}
+
+.todo-icon--completed {
+  color: var(--app-secondary-foreground);
+}
+
+.todo-icon--pending {
+  color: var(--app-secondary-foreground);
+  opacity: 0.45;
+}
+
+.todo-item-text {
+  word-break: break-word;
+}
+
+/* Compact mode — pill button shown above the composer when pane is narrow */
+.todo-compact-btn {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-end;
+  gap: 5px;
+  margin: 0 var(--app-spacing-large) 6px auto;
+  padding: 4px 10px 4px 8px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  cursor: default;
+  white-space: nowrap;
+  position: relative;
+  transition: border-color 120ms, color 120ms;
+}
+
+.todo-compact-btn:hover {
+  border-color: var(--app-claude-orange);
+  color: var(--app-primary-foreground);
+}
+
+.todo-compact-icon {
+  color: var(--app-claude-orange);
+  font-size: 13px;
+  line-height: 1;
+}
+
+.todo-compact-label {
+  font-size: 12px;
+}
+
+.todo-compact-chevron {
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.todo-compact-dropdown {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 8px;
+  padding: 8px;
+  min-width: 220px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.25);
+  z-index: 200;
+  display: none;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.todo-compact-btn:hover .todo-compact-dropdown {
+  display: flex;
+}
+
+.todo-dropdown-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 2px 4px 6px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  margin-bottom: 2px;
+}
+
+.todo-compact-dropdown .todo-item {
+  border-radius: 5px;
+}
+
+/* ---- Icon strip — compact todo column shown in the right-rail when narrow ---- */
+.todo-icon-strip {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  padding: 8px 0;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+  width: 28px;
+}
+
+.todo-strip-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  cursor: default;
+}
+
+.todo-strip-item--in_progress .todo-strip-icon {
+  color: var(--app-claude-orange);
+}
+
+.todo-strip-item--completed .todo-strip-icon {
+  color: var(--app-secondary-foreground);
+  opacity: 0.5;
+}
+
+.todo-strip-item--pending .todo-strip-icon {
+  color: var(--app-secondary-foreground);
+  opacity: 0.45;
+}
+
+.todo-strip-icon {
+  font-size: 12px;
+  line-height: 1;
+}
+
+.todo-strip-tooltip {
+  display: none;
+  position: absolute;
+  right: calc(100% + 10px);
+  top: 50%;
+  transform: translateY(-50%);
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 6px;
+  padding: 5px 9px;
+  font-size: 12px;
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.25);
+  z-index: 200;
+  pointer-events: none;
+}
+
+.todo-strip-item:hover .todo-strip-tooltip {
+  display: block;
+}
+
+/* ============================================================ */
+/* Dashboard Panel                                               */
+/* ============================================================ */
+
+.dashboard-panel {
+  width: 320px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.dashboard-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  height: 40px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+
+.dashboard-tabs {
+  display: flex;
+  gap: 4px;
+}
+
+.dashboard-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--corner-radius-medium);
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms, color 100ms;
+}
+.dashboard-tab:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.dashboard-tab.active {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+  border-color: var(--app-primary-border-color);
+}
+
+.dashboard-tab-badge {
+  background: var(--app-claude-orange);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  border-radius: 999px;
+  padding: 1px 5px;
+  min-width: 16px;
+  text-align: center;
+}
+
+.dashboard-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+}
+.dashboard-close:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.dashboard-error {
+  padding: 8px 14px;
+  font-size: 11px;
+  color: var(--app-error);
+  background: rgba(244, 135, 113, 0.08);
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+
+.dashboard-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 12px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.dashboard-loading,
+.dashboard-empty {
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  text-align: center;
+  margin-top: 24px;
+  line-height: 1.6;
+}
+
+.dashboard-section-label {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--app-secondary-foreground);
+  margin-top: 8px;
+}
+
+.dashboard-add-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.dashboard-input {
+  flex: 1;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  color: var(--app-input-foreground);
+  font-size: 12px;
+  padding: 5px 8px;
+  font-family: var(--app-chat-font-family);
+  resize: vertical;
+  min-width: 0;
+}
+.dashboard-input:focus {
+  outline: none;
+  border-color: var(--app-input-active-border);
+}
+.dashboard-input::placeholder {
+  color: var(--app-input-placeholder-foreground);
+}
+
+.dashboard-priority-select {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  color: var(--app-input-foreground);
+  font-size: 11px;
+  padding: 4px 6px;
+  width: 52px;
+  flex-shrink: 0;
+}
+
+.dashboard-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+  flex-shrink: 0;
+  transition: background 100ms;
+}
+.dashboard-add-btn:hover:not(:disabled) {
+  background: var(--app-claude-clay-button-orange);
+}
+.dashboard-add-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+/* ── Todo list ── */
+.dashboard-todo-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.dashboard-todo-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 5px 6px;
+  border-radius: var(--corner-radius-medium);
+  transition: background 80ms;
+}
+.dashboard-todo-item:hover {
+  background: var(--app-list-hover-background);
+}
+.dashboard-todo-item.done .dashboard-todo-text {
+  text-decoration: line-through;
+  color: var(--app-secondary-foreground);
+}
+
+.dashboard-todo-check {
+  flex-shrink: 0;
+  accent-color: var(--app-claude-orange);
+  width: 14px;
+  height: 14px;
+  cursor: pointer;
+}
+
+.dashboard-todo-text {
+  flex: 1;
+  font-size: 12px;
+  color: var(--app-primary-foreground);
+  min-width: 0;
+  word-break: break-word;
+}
+
+.dashboard-priority-badge {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 999px;
+  border: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+  transition: opacity 100ms;
+}
+.dashboard-priority-badge:hover { opacity: 0.75; }
+.priority-high { background: rgba(244, 135, 113, 0.2); color: var(--app-error); }
+.priority-med  { background: rgba(204, 167, 0, 0.2);  color: var(--app-warning); }
+.priority-low  { background: rgba(137, 209, 133, 0.15); color: var(--app-success); }
+
+.dashboard-item-del {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 100ms, background 100ms;
+}
+.dashboard-todo-item:hover .dashboard-item-del,
+.dashboard-note-card:hover .dashboard-item-del {
+  opacity: 1;
+}
+.dashboard-item-del:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-error);
+}
+
+/* ── Notes ── */
+.dashboard-note-form {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.dashboard-note-input {
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.dashboard-note-form-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.dashboard-pin-toggle {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+}
+.dashboard-pin-toggle input { accent-color: var(--app-claude-orange); }
+
+.dashboard-notes-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.dashboard-note-card {
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  padding: 10px 10px 8px;
+  position: relative;
+  transition: border-color 100ms;
+}
+.dashboard-note-card.pinned {
+  border-color: rgba(217, 119, 87, 0.4);
+}
+.dashboard-note-card:hover {
+  border-color: var(--app-input-active-border);
+}
+
+.dashboard-note-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
+  margin-bottom: 4px;
+  opacity: 0;
+  transition: opacity 100ms;
+}
+.dashboard-note-card:hover .dashboard-note-actions { opacity: 1; }
+
+.dashboard-pin-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+}
+.dashboard-pin-btn:hover,
+.dashboard-pin-btn.active { color: var(--app-claude-orange); }
+
+.dashboard-note-content {
+  font-size: 12px;
+  color: var(--app-primary-foreground);
+  cursor: pointer;
+  line-height: 1.5;
+}
+.dashboard-note-content p { margin: 0 0 4px; }
+.dashboard-note-content p:last-child { margin-bottom: 0; }
+.dashboard-note-content code {
+  background: var(--app-tool-background);
+  border-radius: 3px;
+  padding: 1px 4px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+}
+
+.dashboard-note-edit { display: flex; flex-direction: column; gap: 6px; }
+.dashboard-note-edit-bar { display: flex; gap: 6px; }
+
+.dashboard-save-btn {
+  padding: 4px 10px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  font-size: 11px;
+  cursor: pointer;
+}
+.dashboard-save-btn:hover { background: var(--app-claude-clay-button-orange); }
+
+.dashboard-cancel-btn {
+  padding: 4px 10px;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  font-size: 11px;
+  cursor: pointer;
+}
+.dashboard-cancel-btn:hover { color: var(--app-primary-foreground); }
+
+/* ============================================================ */
+/* Schedule Panel                                                */
+/* ============================================================ */
+
+.schedule-panel {
+  width: 340px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.schedule-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  height: 40px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+
+.schedule-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.schedule-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.schedule-add-btn:hover { background: var(--app-claude-clay-button-orange); }
+
+.schedule-form {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--app-primary-background);
+}
+
+.schedule-form-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-secondary-foreground);
+  margin-bottom: 4px;
+}
+
+.schedule-form-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-cron-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-cron-input { flex: 1; }
+
+.schedule-cron-hint {
+  font-size: 10px;
+  color: var(--app-claude-orange);
+  white-space: nowrap;
+}
+
+.schedule-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.schedule-preset-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--app-tool-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+}
+.schedule-preset-chip:hover { background: var(--app-list-hover-background); color: var(--app-primary-foreground); }
+.schedule-preset-chip.active { border-color: var(--app-claude-orange); color: var(--app-claude-orange); }
+
+.schedule-form-selects {
+  flex-direction: row;
+  gap: 10px;
+}
+.schedule-form-selects > div { flex: 1; }
+
+.schedule-form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.schedule-save-btn {
+  padding: 6px 14px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.schedule-save-btn:hover:not(:disabled) { background: var(--app-claude-clay-button-orange); }
+.schedule-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.schedule-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schedule-task {
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  padding: 10px 12px 8px;
+  transition: border-color 100ms;
+}
+.schedule-task.enabled { border-left: 3px solid var(--app-success); }
+.schedule-task.disabled { opacity: 0.55; border-left: 3px solid var(--app-secondary-foreground); }
+
+.schedule-task-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.schedule-task-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.schedule-task-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.schedule-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  cursor: pointer;
+  transition: background 80ms;
+}
+.schedule-toggle-btn.on { color: var(--app-success); }
+.schedule-toggle-btn.off { color: var(--app-secondary-foreground); }
+.schedule-toggle-btn:hover { background: var(--app-list-hover-background); }
+
+.schedule-task-cron {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.schedule-task-expr {
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  background: var(--app-tool-background);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.schedule-task-desc {
+  font-size: 10px;
+  color: var(--app-claude-orange);
+}
+
+.schedule-task-prompt {
+  font-size: 11px;
+  color: var(--app-primary-foreground);
+  line-height: 1.45;
+  margin-bottom: 5px;
+}
+
+.schedule-task-meta {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
 }
