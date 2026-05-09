@@ -56,8 +56,11 @@ export function useWorkspace(): UseWorkspaceReturn {
   const [state, setState] = useState<PersistedState>(() => loadPersisted());
   const [recents, setRecents] = useState<RecentRepoInfo[]>([]);
 
+  // Defer persistence to avoid blocking the render that triggered the state
+  // change (e.g. switching repo tabs, which is latency-sensitive).
   useEffect(() => {
-    persist(state);
+    const id = setTimeout(() => persist(state), 0);
+    return () => clearTimeout(id);
   }, [state]);
 
   const reloadRecents = useCallback(async () => {

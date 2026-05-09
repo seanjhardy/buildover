@@ -57,36 +57,68 @@ export function useChats(repoPath: string | null): UseChatsReturn {
     void reload();
   }, [reload]);
 
-  // Subscribe to live status updates for each chat in the list. We re-run on
-  // every chats change so newly-created chats get wired up.
+  // When the socket reconnects after a server restart, re-fetch the chat list
+  // so the sidebar immediately reflects any status changes (e.g. "running" →
+  // "error") that were written to disk during stale recovery. Without this,
+  // chats the user isn't actively viewing never receive a chat_status event
+  // because they're subscribed with withReplay: false.
+  useEffect(() => {
+    return agentSocket.onReconnect(() => {
+      void reload();
+    });
+  }, [reload]);
+
+  // Subscribe to live status updates for each chat in the list.
+  // We use a ref for chats so we can subscribe to newly-created chats without
+  // re-running the effect on every status update (which would cause a
+  // subscribe/unsubscribe feedback loop on every incoming WS event).
+  const chatsRef = useRef(chats);
+  chatsRef.current = chats;
+
   useEffect(() => {
     if (!repoPath) return;
+
+    // Wire up any chats that aren't subscribed yet. Called on mount and
+    // whenever a new chat is added via the chats ref.
     const cleanups: (() => void)[] = [];
     const subscribed = subscribedRef.current;
-    for (const chat of chats) {
-      if (subscribed.has(chat.id)) continue;
-      subscribed.add(chat.id);
-      const handler = (event: AgentEvent) => {
-        if (repoPathRef.current !== repoPath) return;
-        applyEventToList(setChats, event);
-      };
-      const unsubscribeListener = agentSocket.onChatEvent(chat.id, handler);
-      agentSocket.send({
-        type: "subscribe",
-        chatId: chat.id,
-        repoPath,
-        withReplay: false,
-      });
-      cleanups.push(() => {
-        unsubscribeListener();
-        subscribed.delete(chat.id);
-        agentSocket.send({ type: "unsubscribe", chatId: chat.id });
-      });
+
+    function subscribeNewChats() {
+      for (const chat of chatsRef.current) {
+        if (subscribed.has(chat.id)) continue;
+        subscribed.add(chat.id);
+        const handler = (event: AgentEvent) => {
+          if (repoPathRef.current !== repoPath) return;
+          applyEventToList(setChats, event);
+        };
+        const unsubscribeListener = agentSocket.onChatEvent(chat.id, handler);
+        agentSocket.send({
+          type: "subscribe",
+          chatId: chat.id,
+          repoPath,
+          withReplay: false,
+        });
+        cleanups.push(() => {
+          unsubscribeListener();
+          subscribed.delete(chat.id);
+          // Defer the unsubscribe WS message so the cleanup loop doesn't
+          // block the React render that responds to the repo tab switch.
+          setTimeout(() => agentSocket.send({ type: "unsubscribe", chatId: chat.id }), 0);
+        });
+      }
     }
+
+    subscribeNewChats();
+
+    // Also subscribe any chats that arrive after initial load (e.g. newly
+    // created chats) by checking the ref on a short interval.
+    const interval = setInterval(subscribeNewChats, 2000);
+
     return () => {
+      clearInterval(interval);
       for (const fn of cleanups) fn();
     };
-  }, [chats, repoPath]);
+  }, [repoPath]);
 
   // Reset subscriptions on repo change.
   useEffect(() => {
@@ -191,7 +223,6 @@ function applyEventToList(
                 ...c,
                 status: event.status,
                 sessionId: event.sessionId ?? c.sessionId,
-                updatedAt: new Date().toISOString(),
               }
             : c,
         ),

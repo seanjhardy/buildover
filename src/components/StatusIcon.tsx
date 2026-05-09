@@ -55,6 +55,25 @@ export function StatusIcon({ status }: Props) {
           </svg>
         </span>
       );
+    case "error":
+      return (
+        <span className="chat-status-icon error" title="Interrupted — retrying">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M8 3v5" />
+            <circle cx="8" cy="11.5" r="0.75" fill="currentColor" stroke="none" />
+            <path d="M7.14 1.5a1 1 0 0 1 1.72 0l5.66 9.8A1 1 0 0 1 13.66 13H2.34a1 1 0 0 1-.86-1.5z" />
+          </svg>
+        </span>
+      );
     case "idle":
     default:
       return (

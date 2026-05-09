@@ -1,6 +1,94 @@
 {
   "chats": [
     {
+      "id": "ch_moy86cvad48yov",
+      "title": "Fix Chat List Ordering By Message",
+      "status": "agent_done",
+      "userMarkedFinished": false,
+      "sessionId": "8b0a732b-47f8-4a4e-a80c-e9b62f844557",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-09T10:52:49.702Z",
+      "updatedAt": "2026-05-09T10:56:05.396Z",
+      "preview": "Whenever I click on a chat in buildover it keeps putting it at the top of the list. Can you fix it so that it doens't do this and just orders them by last user message frequency, not last claude message frequency or last click Now I have a clear picture of the issue. Let me look at the specific files more closely to understand what's triggering the `updatedAt` update on a simple click. Now let me look at the server-side session handling to understand what triggers `chat_status` events when a chat is clicked/loaded: Now let me check the server index to see what happens when a chat is loaded/sub"
+    },
+    {
+      "id": "ch_mowvrqiqqb2dpl",
+      "title": "Convert Website To Mac Taskbar App",
+      "status": "agent_done",
+      "userMarkedFinished": false,
+      "sessionId": "7f4f101f-5bd6-409d-8b57-609069384e4f",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T12:17:45.986Z",
+      "updatedAt": "2026-05-09T10:48:34.546Z",
+      "preview": "Can you turn this website into an app that I can run from my taskbar on my mac Got it! Let me explore the current project to understand what we're working with. Now I have a clear picture of the app. Let me plan the Electron integration to turn this into a Mac taskbar app. Excellent detailed plan. Let me now read the specific files I need to modify to finalize the implementation plan. Now I have everything I need. Let me write the final plan. Let's get started! Electron is a large download — let me check on it and continue creating the files in parallel. Now let me create all the new files whi"
+    },
+    {
+      "id": "ch_moxz6ln91o5u18",
+      "title": "Agent Restart Retry With Error State",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "fb495938-2f82-4db6-9f2b-76b71382831a",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-09T06:41:04.533Z",
+      "updatedAt": "2026-05-09T09:07:51.935Z",
+      "preview": "Can you implement a feature where if the server restarts and the agent is still producing responses, we just automatically retry after a few seconds 3 times, before changing the chat to a new state where it has errored with a new icon in the chat sidebar I'll start exploring the codebase to understand the existing architecture, especially around chat state, agent responses, and the server connection handling. can you continue? Let me explore the codebase thoroughly to understand the architecture. Now I have a thorough understanding of the codebase. Let me explore a few more specific files befo"
+    },
+    {
+      "id": "ch_moy46w1wr8uw0t",
+      "title": "Debug Queued Message Insertion Issues",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "37b9a51f-4294-4ba0-9bef-1fc295110d44",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-09T09:01:16.100Z",
+      "updatedAt": "2026-05-09T09:07:46.769Z",
+      "preview": "I don't think my queued messages are getting inserted either in between claude's tool calls, or when I fast track. I'm going to send two queued messages right after this one, one automatic and one fast tracked and can you let me know if you see them, and if not, we should fix them I'm ready and waiting! Go ahead and send both queued messages — one automatic and one fast tracked. I'll report back exactly what I see (or don't see). This is a fast tracked queued message queue I can see this message! That appears to be one of your queued messages. \n\nNow let me wait to see if the fast-tracked one c"
+    },
+    {
+      "id": "ch_moy46iv6t8wjg1",
+      "title": "Investigate Text Input Lag",
+      "status": "agent_done",
+      "userMarkedFinished": false,
+      "sessionId": "ed5a4a59-0ea8-490b-b00d-75ef73342593",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-09T09:00:59.010Z",
+      "updatedAt": "2026-05-09T09:06:50.379Z",
+      "preview": "The text input gets pretty laggy on long chats, can you investigate that? Let me explore the codebase to understand the text input implementation and identify potential performance issues. Both agents found very consistent findings. Let me now read the key files to confirm the most impactful issues before designing the plan. Now I have a clear picture of the issues. Let me design the plan. Excellent plan! Let me also quickly verify one important assumption — that `useAgent` provides new turn object references only when content actually changes (relevant for the `AssistantMessage` memo comparat"
+    },
+    {
+      "id": "ch_moxhsbsh1pamz1",
+      "title": "Fix Bypass Permissions Agent Issue",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "42fe4711-e7f2-40f0-a6c8-f3f8f1c74187",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T22:34:05.105Z",
+      "updatedAt": "2026-05-09T08:19:15.359Z",
+      "preview": "Bypass permissions is preventing actual answers from surfacing from the agent in plan mode, please fix this urgently Can you please continue Let me investigate this issue with the plan mode agent being blocked by bypass permissions. Can you please continue Let me investigate the bypass permissions issue affecting plan mode agents. I now have a clear picture of the codebase. Let me read the relevant files to understand the exact issue and fix it. Now I can see the issue clearly. Let me also read the `customTools.ts` to confirm the full picture: I've found the bug. Here's the problem:\n\n**In `age"
+    },
+    {
+      "id": "ch_moy1ch8tniof74",
+      "title": "Fix MCP Acknowledgement Tool Display",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "b5b02fc7-d6f0-44a8-93a7-56f72a564624",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-09T07:41:37.997Z",
+      "updatedAt": "2026-05-09T08:19:13.295Z",
+      "preview": "The MCP tool to request acknowledgement doesn't print the text properly for me to read in the chat history, and it instantly says \"user accepted\" as soon as I click on the chat, even with \"ask before edit\" mode on. Can you please fix this Now let me read the key files to understand the details better before planning: Now let me look at where the PermissionPrompt is rendered in the chat and understand how \"ask before edit\" mode works: Now I have a very clear picture of both bugs. Let me look at how `permission_request` events are stored in chat history to understand bug #1 better: Now let me lo"
+    },
+    {
+      "id": "ch_mox038bd1q745b",
+      "title": "Save And Restore Chat Composer Text",
+      "status": "finished",
+      "userMarkedFinished": true,
+      "sessionId": "0b7891df-2930-41a5-9dd3-d9fcb125a92d",
+      "model": "claude-sonnet-4-6",
+      "createdAt": "2026-05-08T14:18:40.729Z",
+      "updatedAt": "2026-05-09T07:01:43.133Z",
+      "preview": "In buildover, can you make sure my current text being typed into the composer is saved per-chat when I switch chats? And if I close the app and come back, it should save my text input on that chat. Also, it should show me the current text as a subtitle to the chat Now I have a solid understanding of the codebase. Let me read a few key files to understand the exact current state before planning. Now let me read the App.tsx to understand how Composer is wired up and how chat switching works: Now I have everything I need to write a solid plan. Let me write it out: Now let's implement the changes "
+    },
+    {
       "id": "ch_mox9yb5fxmivj5",
       "title": "Agent State Management And User Confirmation",
       "status": "agent_done",
@@ -8,30 +96,19 @@
       "sessionId": "d4c7ec69-9c3e-41c6-a5ea-64330800c81f",
       "model": "claude-sonnet-4-6",
       "createdAt": "2026-05-08T18:54:47.283Z",
-      "updatedAt": "2026-05-08T21:51:14.270Z",
+      "updatedAt": "2026-05-09T06:41:30.175Z",
       "preview": "How do we currently define which state the agents are in in buildover, e.g. agents can be idle, running, awaiting user input, or completed. Occasionally if I've asked an AI to go off and research something, it will write its report but still show as complete, despite the fact that really its awaiting my aknowledgement/confirmation of the plan in plaintext. We need some way for the chat to register this state, e.g. the agent has to physically mark the task as finished in order to set the task as finished, and if not, it shows as awaiting user input Here's a thorough breakdown of the current sta"
     },
     {
       "id": "ch_moxa2pnom63ry9",
       "title": "Configure Buildover GitHub Private Repository",
-      "status": "agent_done",
-      "userMarkedFinished": false,
+      "status": "finished",
+      "userMarkedFinished": true,
       "sessionId": "9b667b4f-0376-412f-9583-030edd290c4d",
       "model": "claude-sonnet-4-6",
       "createdAt": "2026-05-08T18:58:12.708Z",
-      "updatedAt": "2026-05-08T21:50:31.159Z",
+      "updatedAt": "2026-05-08T22:27:03.481Z",
       "preview": "Can you set up buildover to push to a private remote repo for my personal github account Let me explore the codebase to understand the current setup before planning. Now I have a clear picture. Let me ask the key questions I need before planning. Can you continue? Let me check the SSH configuration and GitHub CLI setup first. I can see everything I need. You have:\n- An SSH key for your personal account (`id_ed25519_personal`) with the alias `personal` in `~/.ssh/config`\n- A `seanjhardy` GitHub account already authenticated via `gh`\n\nNow let me execute the plan:\n1. Switch `gh` to the `seanjhard"
-    },
-    {
-      "id": "ch_mox038bd1q745b",
-      "title": "Save And Restore Chat Composer Text",
-      "status": "agent_done",
-      "userMarkedFinished": false,
-      "sessionId": "0b7891df-2930-41a5-9dd3-d9fcb125a92d",
-      "model": "claude-sonnet-4-6",
-      "createdAt": "2026-05-08T14:18:40.729Z",
-      "updatedAt": "2026-05-08T18:47:18.063Z",
-      "preview": "In buildover, can you make sure my current text being typed into the composer is saved per-chat when I switch chats? And if I close the app and come back, it should save my text input on that chat. Also, it should show me the current text as a subtitle to the chat Now I have a solid understanding of the codebase. Let me read a few key files to understand the exact current state before planning. Now let me read the App.tsx to understand how Composer is wired up and how chat switching works: Now I have everything I need to write a solid plan. Let me write it out: Now let's implement the changes "
     },
     {
       "id": "ch_mox00ao52lzot9",
@@ -76,17 +153,6 @@
       "createdAt": "2026-05-08T10:04:19.954Z",
       "updatedAt": "2026-05-08T14:29:27.690Z",
       "preview": "I'd like to swap our existing picovoice integration over to openWakeWord. I've added a model inside models/hey_jarvis_v0.1.tflite which should work with the wake word \"Hey jarvis\". I've heard people online saying that wake words are typically poor at picking up \"[wake word] [action]\" when said in quick succession immediately afterwards. Can we plan a refactor where we can store something like a buffer of audio input and as soon as the wake word is detected, we can use that audio buffer to feed into groq, so that we can seamlessly detect the wake word and start transcribing it Let me explore th"
-    },
-    {
-      "id": "ch_mowvrqiqqb2dpl",
-      "title": "Convert Website To Mac Taskbar App",
-      "status": "agent_done",
-      "userMarkedFinished": false,
-      "sessionId": "7f4f101f-5bd6-409d-8b57-609069384e4f",
-      "model": "claude-sonnet-4-6",
-      "createdAt": "2026-05-08T12:17:45.986Z",
-      "updatedAt": "2026-05-08T14:20:07.190Z",
-      "preview": "Can you turn this website into an app that I can run from my taskbar on my mac Got it! Let me explore the current project to understand what we're working with. Now I have a clear picture of the app. Let me plan the Electron integration to turn this into a Mac taskbar app. Excellent detailed plan. Let me now read the specific files I need to modify to finalize the implementation plan. Now I have everything I need. Let me write the final plan. Let's get started! Electron is a large download — let me check on it and continue creating the files in parallel. Now let me create all the new files whi"
     },
     {
       "id": "ch_mowocxa03m8678",

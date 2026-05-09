@@ -1,64 +1,65 @@
-// Electron main process — compiled to CommonJS (see electron/tsconfig.json).
-// Uses require() / __dirname throughout; isolated from the root ESM project
-// by electron/package.json which sets "type": "commonjs".
-
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, shell, nativeImage } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
+const http = require("http");
 
-// ── Environment detection ────────────────────────────────────────────────────
-// ELECTRON_IS_DEV=1 is set by the electron:dev npm script.
-// In a packaged .app this env var is absent so isDev is false.
-const isDev = process.env.ELECTRON_IS_DEV === "1";
+const PROJECT_DIR = path.resolve(__dirname, "..");
+const NPM = "/opt/homebrew/bin/npm";
+const ENV = {
+  ...process.env,
+  PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  HOME: require("os").homedir(),
+};
 
-// ── Ports ────────────────────────────────────────────────────────────────────
-const CLIENT_PORT = 5173; // Vite dev server (dev mode only)
-const SERVER_PORT = 8787; // Express + WebSocket server
-
-// ── Express server child process (production only) ───────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let serverProcess: any = null;
-
-function startExpressServer(): void {
-  const appRoot = app.getAppPath();
-  // esbuild compiles server/index.ts → dist-server/index.cjs (CJS bundle).
-  // electron-builder copies dist-server/ into the .app bundle.
-  const serverEntry = path.join(appRoot, "dist-server", "index.cjs");
-  // Use the Node binary bundled with Electron.
-  const nodeBin = process.execPath;
-
-  serverProcess = spawn(nodeBin, [serverEntry], {
-    env: {
-      ...process.env,
-      PORT: String(SERVER_PORT),
-      NODE_ENV: "production",
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
-
-  serverProcess.stdout?.on("data", (d: Buffer) => {
-    console.log("[server]", d.toString().trim());
-  });
-  serverProcess.stderr?.on("data", (d: Buffer) => {
-    console.error("[server:err]", d.toString().trim());
-  });
-  serverProcess.on("exit", (code: number) => {
-    console.log("[server] exited with code", code);
-  });
-}
-
-function stopExpressServer(): void {
-  if (serverProcess) {
-    serverProcess.kill();
-    serverProcess = null;
-  }
-}
-
-// ── Window creation ──────────────────────────────────────────────────────────
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 let mainWindow: any = null;
+let serverProcess: any = null;
+let clientProcess: any = null;
+
+// Check if a port is already accepting connections
+function isPortUp(port: number): Promise<boolean> {
+  return new Promise(resolve => {
+    const req = http.get(`http://localhost:${port}`, (res: any) => {
+      res.destroy();
+      resolve(true);
+    });
+    req.on("error", () => resolve(false));
+    req.setTimeout(800, () => { req.destroy(); resolve(false); });
+  });
+}
+
+// Poll until port is up, then resolve
+function waitForPort(port: number): Promise<void> {
+  return new Promise(resolve => {
+    function check() {
+      isPortUp(port).then(up => up ? resolve() : setTimeout(check, 1000));
+    }
+    check();
+  });
+}
+
+async function startServers(): Promise<void> {
+  const [serverUp, clientUp] = await Promise.all([
+    isPortUp(8787),
+    isPortUp(5173),
+  ]);
+  if (!serverUp) {
+    serverProcess = spawn(NPM, ["run", "dev:server"], {
+      cwd: PROJECT_DIR, env: ENV, stdio: "ignore",
+    });
+  }
+  if (!clientUp) {
+    clientProcess = spawn(NPM, ["run", "dev:client"], {
+      cwd: PROJECT_DIR, env: ENV, stdio: "ignore",
+    });
+  }
+  await waitForPort(5173);
+}
 
 function createWindow(): void {
+  if (mainWindow) {
+    mainWindow.focus();
+    return;
+  }
   mainWindow = new BrowserWindow({
     width: 1280,
     height: 800,
@@ -66,71 +67,44 @@ function createWindow(): void {
     minHeight: 600,
     title: "buildover",
     resizable: true,
-    // show: false — render offscreen first to avoid a flash of white while
-    // React boots, then reveal once ready-to-show fires.
     show: false,
     webPreferences: {
-      preload: path.join(__dirname, "preload.js"),
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      backgroundThrottling: false,
+      webSecurity: false, // allows localhost API/WS calls without CORS overhead
     },
   });
-
-  // Reveal once the page has painted.
-  mainWindow.once("ready-to-show", () => {
-    mainWindow.show();
+  mainWindow.once("ready-to-show", () => mainWindow.show());
+  mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
+    shell.openExternal(url);
+    return { action: "deny" };
   });
-
-  // Open external links in the system browser instead of a new Electron window.
-  mainWindow.webContents.setWindowOpenHandler(
-    ({ url }: { url: string }) => {
-      if (url.startsWith("http://") || url.startsWith("https://")) {
-        shell.openExternal(url);
-      }
-      return { action: "deny" };
-    },
-  );
-
-  if (isDev) {
-    // Dev: load the Vite HMR dev server. wait-on in the npm script ensures
-    // it's ready before Electron is launched.
-    mainWindow.loadURL(`http://localhost:${CLIENT_PORT}`);
-    mainWindow.webContents.openDevTools();
-  } else {
-    // Production: load the compiled Vite output from inside the bundle.
-    const indexHtml = path.join(app.getAppPath(), "dist", "index.html");
-    mainWindow.loadFile(indexHtml);
-  }
-
-  mainWindow.on("closed", () => {
-    mainWindow = null;
-  });
+  mainWindow.loadURL("http://localhost:5173");
+  mainWindow.on("closed", () => { mainWindow = null; });
 }
 
-// ── App lifecycle ────────────────────────────────────────────────────────────
-app.whenReady().then(() => {
-  if (!isDev) {
-    startExpressServer();
-  }
+app.whenReady().then(async () => {
+  const icon = nativeImage.createFromPath(
+    path.join(PROJECT_DIR, "build", "icon_1024.png")
+  );
+  if (app.dock) app.dock.setIcon(icon);
+
+  await startServers();
   createWindow();
 });
 
-// macOS: re-create the window when the Dock icon is clicked and no windows exist.
 app.on("activate", () => {
-  if (BrowserWindow.getAllWindows().length === 0) {
-    createWindow();
-  }
+  if (BrowserWindow.getAllWindows().length === 0) createWindow();
+  else if (mainWindow) mainWindow.focus();
 });
 
-// macOS convention: keep the app alive in the Dock after the last window closes.
-// On other platforms, quit normally.
 app.on("window-all-closed", () => {
-  if (process.platform !== "darwin") {
-    app.quit();
-  }
+  if (process.platform !== "darwin") app.quit();
 });
 
-// Clean up the server process before quitting.
 app.on("before-quit", () => {
-  stopExpressServer();
+  serverProcess?.kill();
+  clientProcess?.kill();
 });

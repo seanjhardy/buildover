@@ -9,6 +9,7 @@ const WS_URL = `ws://${host}:8787/agent`;
 
 type ConnectionListener = (c: Connection) => void;
 type EventListener = (event: AgentEvent) => void;
+type ReconnectListener = () => void;
 
 // Single shared WebSocket connection for all chats. Multiplexes events to
 // per-chat subscribers based on the chatId field on each AgentEvent. Survives
@@ -18,6 +19,10 @@ class AgentSocket {
   private connection: Connection = "connecting";
   private connectionListeners = new Set<ConnectionListener>();
   private eventListeners = new Map<string, Set<EventListener>>();
+  // Fired once each time the socket successfully re-connects after having been
+  // closed/errored (i.e. not the very first connection).
+  private reconnectListeners = new Set<ReconnectListener>();
+  private hasConnectedBefore = false;
   // Pending sends queued while the socket is opening or reconnecting. Most
   // operations don't need this (we render based on REST state first), but
   // subscribe/unsubscribe messages do — they must reach the server eventually.
@@ -40,6 +45,8 @@ class AgentSocket {
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
     ws.addEventListener("open", () => {
+      const isReconnect = this.hasConnectedBefore;
+      this.hasConnectedBefore = true;
       this.setConnection("connected");
       this.retryDelayMs = 500;
       // Re-subscribe to anything that has a listener.
@@ -50,6 +57,14 @@ class AgentSocket {
       while (this.outbox.length > 0) {
         const msg = this.outbox.shift();
         if (msg) ws.send(JSON.stringify(msg));
+      }
+      // Notify reconnect listeners *after* re-subscriptions are flushed so
+      // the server has already received the subscribe messages before any
+      // retry turn is sent.
+      if (isReconnect) {
+        for (const fn of this.reconnectListeners) {
+          try { fn(); } catch { /* listener crash must not break socket */ }
+        }
       }
     });
     ws.addEventListener("error", () => this.setConnection("error"));
@@ -107,6 +122,13 @@ class AgentSocket {
     this.connectionListeners.add(fn);
     fn(this.connection);
     return () => this.connectionListeners.delete(fn);
+  }
+
+  /** Register a listener that fires each time the socket successfully
+   *  re-connects after a drop (not on the initial connection). */
+  onReconnect(fn: ReconnectListener): () => void {
+    this.reconnectListeners.add(fn);
+    return () => this.reconnectListeners.delete(fn);
   }
 
   onChatEvent(chatId: string, fn: EventListener): () => void {

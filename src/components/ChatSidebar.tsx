@@ -15,11 +15,12 @@ interface Props {
 }
 
 // Sidebar grouping order. Awaiting-input is most urgent (user has to click
-// something), running is next, then agent_done (assistant said it was done),
-// then idle. Finished/archived collapses below.
+// something), running is next, then error (needs attention), then agent_done
+// (assistant said it was done), then idle. Finished/archived collapses below.
 const GROUP_ORDER: ChatStatus[] = [
   "awaiting_input",
   "running",
+  "error",
   "agent_done",
   "idle",
 ];
@@ -27,6 +28,7 @@ const GROUP_ORDER: ChatStatus[] = [
 const GROUP_LABEL: Record<ChatStatus, string> = {
   awaiting_input: "Awaiting input",
   running: "Running",
+  error: "Interrupted",
   agent_done: "Agent finished",
   idle: "Idle",
   finished: "Archive",
@@ -107,11 +109,9 @@ export function ChatSidebar({
                   key={c.id}
                   chat={c}
                   active={c.id === activeChatId}
-                  onSelect={() => onSelect(c.id)}
-                  onToggleFinished={() =>
-                    onToggleFinished(c.id, !c.userMarkedFinished)
-                  }
-                  onDelete={() => onDelete(c.id)}
+                  onSelect={onSelect}
+                  onToggleFinished={onToggleFinished}
+                  onDelete={onDelete}
                   draftText={chatDrafts[c.id]}
                 />
               ))}
@@ -144,11 +144,9 @@ export function ChatSidebar({
                   key={c.id}
                   chat={c}
                   active={c.id === activeChatId}
-                  onSelect={() => onSelect(c.id)}
-                  onToggleFinished={() =>
-                    onToggleFinished(c.id, !c.userMarkedFinished)
-                  }
-                  onDelete={() => onDelete(c.id)}
+                  onSelect={onSelect}
+                  onToggleFinished={onToggleFinished}
+                  onDelete={onDelete}
                   draftText={chatDrafts[c.id]}
                 />
               ))}

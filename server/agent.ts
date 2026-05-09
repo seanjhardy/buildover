@@ -1,4 +1,5 @@
 import { query, type CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+import { customToolsServer } from "./customTools.js";
 import type {
   AgentEvent,
   Attachment,
@@ -78,12 +79,18 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
 
   const finalPrompt = renderPromptWithAttachments(prompt, attachments);
 
+  // Tools that must always surface a UI prompt regardless of permission mode,
+  // because they are user-interaction checkpoints, not dangerous operations.
+  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention"]);
+
   const canUseTool: CanUseTool = async (toolName, input) => {
     // In bypassPermissions mode, the SDK still calls canUseTool for every
     // tool when the callback is supplied — so the mode alone won't suppress
     // prompts. Short-circuit here to honor the user's choice.
+    // Exception: ExitPlanMode and RequestUserAttention must always go
+    // through the permission UI so their answers/plans are shown to the user.
     const currentMode = getPermissionMode?.() ?? permissionMode;
-    if (currentMode === "bypassPermissions") {
+    if (currentMode === "bypassPermissions" && !ALWAYS_PROMPT_TOOLS.has(toolName)) {
       return { behavior: "allow", updatedInput: input };
     }
     const decision = await requestPermission({
@@ -127,6 +134,11 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       // Pass the controller so the SDK terminates its CLI subprocess on
       // abort; relying on stream.interrupt() alone left the turn running.
       abortController,
+      // Register custom tools (e.g. RequestUserAttention) so the SDK
+      // knows about them and routes them through canUseTool → requestPermission.
+      mcpServers: {
+        "buildover-custom-tools": customToolsServer,
+      },
     },
   });
 

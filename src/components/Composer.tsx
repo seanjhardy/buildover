@@ -133,6 +133,7 @@ export function Composer(props: Props) {
   });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftNotifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modePopupOpen, setModePopupOpen] = useState(false);
@@ -157,7 +158,12 @@ export function Composer(props: Props) {
         // localStorage unavailable — silently ignore
       }
     }, 300);
-    onDraftChange?.(value);
+    // Debounce the parent notification to avoid a top-level App re-render (and
+    // cascading re-renders of all message components) on every keystroke.
+    if (draftNotifyTimerRef.current) clearTimeout(draftNotifyTimerRef.current);
+    draftNotifyTimerRef.current = setTimeout(() => {
+      onDraftChange?.(value);
+    }, 300);
   };
 
   const transcription = useTranscription({
@@ -214,11 +220,14 @@ export function Composer(props: Props) {
 
   const clearDraft = () => {
     if (draftTimerRef.current) clearTimeout(draftTimerRef.current);
+    if (draftNotifyTimerRef.current) clearTimeout(draftNotifyTimerRef.current);
     try {
       localStorage.removeItem(DRAFT_KEY);
     } catch {
       // ignore
     }
+    // Call immediately (not debounced) so the sidebar clears the draft preview
+    // right away when a message is sent.
     onDraftChange?.("");
   };
 

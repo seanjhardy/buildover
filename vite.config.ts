@@ -58,9 +58,6 @@ function ortWasmPlugin() {
 }
 
 export default defineConfig({
-  // Use relative paths so assets load correctly when Electron serves the
-  // production build from a file:// URL inside the .app bundle.
-  base: "./",
   plugins: [react(), ortWasmPlugin()],
   optimizeDeps: {
     // Exclude onnxruntime-web from pre-bundling so Vite doesn't try to
@@ -72,6 +69,7 @@ export default defineConfig({
     strictPort: true,
     proxy: {
       "/api": "http://localhost:8787",
+      "/focus": "http://localhost:8787",
     },
   },
 });

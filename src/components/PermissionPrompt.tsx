@@ -29,6 +29,17 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
   const containerRef = useRef<HTMLDivElement>(null);
   const branch = buildBranch(pending);
 
+  // Guard against "click-through" accidents: when the user clicks a chat in
+  // the sidebar the same pointer-up event can land on a button that renders
+  // into the same screen position. We keep buttons non-interactive for a
+  // short window after mount so that an in-flight click cannot fire them.
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(false);
+    const t = setTimeout(() => setReady(true), 350);
+    return () => clearTimeout(t);
+  }, [pending.requestId]);
+
   useEffect(() => {
     containerRef.current?.focus();
   }, [pending.requestId]);
@@ -41,6 +52,8 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
     });
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    // Block all keyboard shortcuts until the prompt is ready (mount-delay guard).
+    if (!ready) return;
     if (e.key === "Escape") {
       e.preventDefault();
       sendDeny(true);
@@ -81,7 +94,7 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
             key={action.label}
             className={`btn ${action.kind === "primary" ? "btn-primary" : ""} ${action.kind === "danger" ? "btn-danger" : ""}`}
             onClick={action.invoke}
-            disabled={action.disabled}
+            disabled={!ready || action.disabled}
           >
             <span className="shortcut-num">{i + 1}</span>
             {action.dynamicLabel?.(feedback) ?? action.label}
@@ -103,7 +116,7 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
     if (p.toolName === "ExitPlanMode") {
       return exitPlanBranch(p, respond, () => sendDeny(false));
     }
-    if (p.toolName === "RequestAcknowledgement") {
+    if (p.toolName === "RequestUserAttention") {
       return acknowledgementBranch(p, respond, (interrupt) => sendDeny(interrupt));
     }
 
@@ -303,7 +316,7 @@ function exitPlanBranch(
   };
 }
 
-// ---- RequestAcknowledgement ----
+// ---- RequestUserAttention ----
 
 function acknowledgementBranch(
   pending: PendingPermission,
@@ -313,12 +326,12 @@ function acknowledgementBranch(
   const input = pending.input as { message?: string; summary?: string };
   const message = String(
     input.message ??
-      "I've completed this step and am waiting for your confirmation.",
+      "Your attention is needed before continuing.",
   );
   const summary = input.summary ? String(input.summary) : undefined;
 
   return {
-    header: "Waiting for your acknowledgement",
+    header: "Attention needed",
     body: (
       <div className="plan-body assistant-text">
         <p style={{ margin: "0 0 8px" }}>{message}</p>
@@ -331,7 +344,7 @@ function acknowledgementBranch(
     defaultRejectMessage: "User provided feedback",
     actions: [
       {
-        label: "Acknowledged",
+        label: "Continue",
         kind: "primary",
         invoke: () => respond({ behavior: "allow" }),
       },

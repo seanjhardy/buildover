@@ -7,6 +7,7 @@ import {
   listChats,
   readChat,
   recoverStaleChatsForRepo,
+  recoverStaleChatsForRepoWithIds,
   setTitle,
   setUserFinished,
 } from "./chats.js";
@@ -59,6 +60,44 @@ const app = express();
 app.use(express.json({ limit: "10mb" }));
 
 app.get("/health", (_req, res) => res.json({ ok: true }));
+
+// Focus helper: opened by the Dock launcher instead of localhost:5173 directly.
+// Sends a BroadcastChannel message to any existing app tab telling it to focus,
+// then redirects to the app. If no tab is open yet, the redirect opens it fresh.
+app.get("/focus", (_req, res) => {
+  res.setHeader("Content-Type", "text/html");
+  res.send(`<!DOCTYPE html>
+<html>
+<head><title>buildover</title></head>
+<body>
+<script>
+  const ch = new BroadcastChannel('buildover-focus');
+  let acknowledged = false;
+
+  // If an existing app tab replies with 'ack' within 300ms, it's already
+  // open and focused — just close this helper tab silently.
+  ch.addEventListener('message', (e) => {
+    if (e.data === 'ack') {
+      acknowledged = true;
+      ch.close();
+      window.close();
+    }
+  });
+
+  // Ask any open app tab to focus itself and reply
+  ch.postMessage('focus');
+
+  // If no ack after 300ms, no app tab is open yet — navigate here to the app
+  setTimeout(() => {
+    if (!acknowledged) {
+      ch.close();
+      window.location.replace('http://localhost:5173');
+    }
+  }, 300);
+</script>
+</body>
+</html>`);
+});
 
 app.get("/api/usage", async (_req, res) => {
   try {
@@ -505,12 +544,17 @@ wss.on("connection", (ws: WebSocket) => {
       // has nothing running (typical after the previous server died), heal
       // the transcript before replaying so the client doesn't get a phantom
       // "running" status it can never escape.
+      // Also re-heal if the chat is in "error" state from a previous recovery
+      // and a new server restart happened during a retry — we need to append a
+      // fresh error+turn_end so the client knows to retry again.
       let record = await readChat(repoPath, chatId);
-      if (
+      const needsRecovery =
         record &&
         !session.isRunning() &&
-        (record.status === "running" || record.status === "awaiting_input")
-      ) {
+        (record.status === "running" ||
+          record.status === "awaiting_input" ||
+          record.status === "error");
+      if (needsRecovery) {
         await recoverStaleChatsForRepo(repoPath).catch(() => {});
         record = await readChat(repoPath, chatId);
       }
@@ -520,6 +564,16 @@ wss.on("connection", (ws: WebSocket) => {
           chatId,
           record,
           pendingPermissions: session.pendingPermissionList(),
+        });
+        // Always push chat_status after a replay so any sidebar subscriber
+        // on this same WS connection (withReplay: false) picks up the current
+        // status immediately — especially important after stale recovery where
+        // the status just changed from "running" or "error" to a new value.
+        send({
+          type: "chat_status",
+          chatId,
+          status: record.status,
+          sessionId: record.sessionId,
         });
       }
     }
@@ -563,6 +617,7 @@ wss.on("connection", (ws: WebSocket) => {
               model: msg.model,
               permissionMode: msg.permissionMode ?? "default",
               attachments: msg.attachments,
+              isRetry: msg.isRetry,
             })
             .catch((err) => {
               send({
@@ -680,15 +735,27 @@ httpServer.listen(PORT, () => {
 
 // Walk every recent repo and patch chats whose persisted state is "running"
 // or has unresolved permission requests — leftovers from a previous server
-// process that died mid-turn. Without this, the sidebar shows them as live
-// when nothing is actually running.
+// process that died mid-turn. After healing, automatically re-run each
+// interrupted turn so agents resume without the user having to click anything.
 async function recoverStaleChats(): Promise<void> {
   try {
     const recents = await listRecents();
     let total = 0;
     for (const r of recents) {
       try {
-        total += await recoverStaleChatsForRepo(r.path);
+        const healedIds = await recoverStaleChatsForRepoWithIds(r.path);
+        total += healedIds.length;
+        // Fire retries in the background — don't await so one slow agent
+        // doesn't block recovery of the remaining repos/chats.
+        for (const chatId of healedIds) {
+          const session = getSession(r.path, chatId);
+          session.retryAfterRestart().catch((err) => {
+            console.warn(
+              `[server] retry failed for ${chatId}:`,
+              err instanceof Error ? err.message : err,
+            );
+          });
+        }
       } catch (err) {
         console.warn(
           `[server] recovery skipped for ${r.path}:`,
@@ -696,7 +763,7 @@ async function recoverStaleChats(): Promise<void> {
         );
       }
     }
-    if (total > 0) console.log(`[server] recovered ${total} stale chat(s)`);
+    if (total > 0) console.log(`[server] recovered and retrying ${total} stale chat(s)`);
   } catch (err) {
     console.warn(
       "[server] stale-chat recovery failed:",

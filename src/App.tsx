@@ -64,8 +64,11 @@ export default function App() {
   // can show the draft as a subtitle even for non-active chats.
   const [chatDrafts, setChatDrafts] = useState<Record<string, string>>({});
 
-  // Seed chatDrafts from localStorage whenever the chat list changes so that
-  // chats loaded from disk (including on app restart) show their draft subtitles.
+  // Seed chatDrafts from localStorage when the set of chat IDs changes (new
+  // repo, new chat created, chat deleted) — NOT on every WS status update.
+  // Using a joined ID string as the dep is cheaper than a deep comparison and
+  // avoids localStorage reads on every incoming WebSocket event.
+  const chatIdsKey = chats.chats.map((c) => c.id).join(",");
   useEffect(() => {
     const drafts: Record<string, string> = {};
     for (const chat of chats.chats) {
@@ -75,7 +78,8 @@ export default function App() {
       } catch { /* ignore */ }
     }
     setChatDrafts(drafts);
-  }, [chats.chats]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [chatIdsKey]);
   const [todoNarrow, setTodoNarrow] = useState(false);
   const prevStreamingRef = useRef(false);
   // msgScrollRef points at .message-area (the scroll container).
@@ -192,10 +196,14 @@ export default function App() {
   // permission_request that slips through (for example, one already in flight
   // when the mode was toggled) is silently approved. The server-side guard in
   // canUseTool handles the steady state; this catches the race window.
+  // Exception: ExitPlanMode and RequestUserAttention must always show the
+  // permission UI — they are user-interaction checkpoints, not dangerous ops.
+  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention"]);
   useEffect(() => {
     if (permissionMode !== "bypassPermissions") return;
     const pending = agent.pendingPermission;
     if (!pending) return;
+    if (ALWAYS_PROMPT_TOOLS.has(pending.toolName)) return;
     agent.respondPermission(pending.requestId, { behavior: "allow" });
   }, [permissionMode, agent.pendingPermission, agent.respondPermission]);
 
@@ -242,16 +250,34 @@ export default function App() {
     agent.interrupt();
   };
 
-  const handleCreateChat = async () => {
+  const handleCreateChat = useCallback(async () => {
     if (!activeRepo) return;
     const record = await chats.createChat(model, permissionMode);
     workspace.setActiveChat(record.id);
-  };
+  }, [activeRepo, chats, model, permissionMode, workspace]);
 
-  const handleDeleteChat = async (chatId: string) => {
+  const handleDeleteChat = useCallback(async (chatId: string) => {
     await chats.deleteChat(chatId);
     if (activeChatId === chatId) workspace.setActiveChat(null);
-  };
+  }, [chats, activeChatId, workspace]);
+
+  const handleSelectChat = useCallback((id: string) => {
+    workspace.setActiveChat(id);
+  }, [workspace]);
+
+  const handleToggleFinished = useCallback((id: string, finished: boolean) => {
+    void chats.setUserFinished(id, finished);
+  }, [chats]);
+
+  // Stable callback so Composer receives the same function reference across
+  // renders and the debounced draft notification doesn't re-trigger unnecessarily.
+  const handleDraftChange = useCallback(
+    (draft: string) => {
+      if (!activeChatId) return;
+      setChatDrafts((prev) => ({ ...prev, [activeChatId]: draft }));
+    },
+    [activeChatId],
+  );
 
   const handleForgetRecent = async (path: string) => {
     await api.removeRecent(path);
@@ -423,11 +449,9 @@ export default function App() {
             <ChatSidebar
               chats={chats.chats}
               activeChatId={activeChatId}
-              onSelect={(id) => workspace.setActiveChat(id)}
+              onSelect={handleSelectChat}
               onCreate={handleCreateChat}
-              onToggleFinished={(id, finished) =>
-                chats.setUserFinished(id, finished)
-              }
+              onToggleFinished={handleToggleFinished}
               onDelete={handleDeleteChat}
               repoPath={activeRepo.path}
               chatDrafts={chatDrafts}
@@ -478,13 +502,7 @@ export default function App() {
                             }
                             onQueueMessage={addToQueue}
                             onInterrupt={agent.interrupt}
-                            onDraftChange={(draft) => {
-                              if (!activeChatId) return;
-                              setChatDrafts((prev) => ({
-                                ...prev,
-                                [activeChatId]: draft,
-                              }));
-                            }}
+                            onDraftChange={handleDraftChange}
                             disabled={
                               agent.isStreaming || agent.connection !== "connected"
                             }

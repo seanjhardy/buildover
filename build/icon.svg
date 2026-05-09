@@ -1,0 +1,90 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024">
+  <defs>
+    <!-- Background radial gradient for inner shadow effect -->
+    <radialGradient id="bgGradient" cx="50%" cy="40%" r="60%">
+      <stop offset="0%" stop-color="#2e2e2e"/>
+      <stop offset="100%" stop-color="#141414"/>
+    </radialGradient>
+
+    <!-- Orange glow filter for the border -->
+    <filter id="orangeGlow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="18" result="blur"/>
+      <feColorMatrix in="blur" type="matrix"
+        values="1 0.4 0 0 0
+                0 0.3 0 0 0
+                0 0   0 0 0
+                0 0   0 1 0" result="coloredBlur"/>
+      <feMerge>
+        <feMergeNode in="coloredBlur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Inner shadow for background -->
+    <filter id="innerShadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="40" result="blur"/>
+      <feOffset dx="0" dy="20" result="offsetBlur"/>
+      <feComposite in="offsetBlur" in2="SourceAlpha" operator="in" result="shadow"/>
+      <feColorMatrix in="shadow" type="matrix"
+        values="0 0 0 0 0
+                0 0 0 0 0
+                0 0 0 0 0
+                0 0 0 0.7 0" result="darkShadow"/>
+      <feMerge>
+        <feMergeNode in="darkShadow"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+
+    <!-- Hammer drop shadow -->
+    <filter id="hammerShadow" x="-20%" y="-20%" width="160%" height="160%">
+      <feDropShadow dx="0" dy="8" stdDeviation="16" flood-color="#d97757" flood-opacity="0.5"/>
+    </filter>
+
+    <clipPath id="roundedClip">
+      <rect width="1024" height="1024" rx="220" ry="220"/>
+    </clipPath>
+  </defs>
+
+  <!-- Everything scaled to 90% of canvas, centred (51.2px padding on each side) -->
+  <g transform="translate(512,512) scale(0.9) translate(-512,-512)">
+
+  <!-- Rounded background -->
+  <rect width="1024" height="1024" rx="220" ry="220" fill="url(#bgGradient)" filter="url(#innerShadow)"/>
+
+  <!-- Orange glowing border ring -->
+  <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
+        fill="none"
+        stroke="#d97757"
+        stroke-width="6"
+        filter="url(#orangeGlow)"
+        opacity="0.9"/>
+  <!-- Crisp inner border line -->
+  <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
+        fill="none"
+        stroke="#e8895c"
+        stroke-width="2.5"
+        opacity="0.7"/>
+
+  <!-- Hammer (centered, slightly rotated -35deg around its head) -->
+  <g transform="translate(512, 512) rotate(-35) scale(1.05)" filter="url(#hammerShadow)">
+
+    <!-- Hammer head -->
+    <rect x="-165" y="-230" width="330" height="200" rx="28" ry="28" fill="#d97757"/>
+    <!-- Hammer head face highlight -->
+    <rect x="-165" y="-230" width="330" height="48" rx="28" ry="0" fill="#e8a882" opacity="0.35"/>
+    <!-- Hammer head bottom edge shadow -->
+    <rect x="-165" y="-62" width="330" height="32" rx="0" ry="28" fill="#a0522d" opacity="0.45"/>
+    <!-- Claw notch on top -->
+    <rect x="-30" y="-238" width="60" height="38" rx="8" ry="8" fill="#141414" opacity="0.5"/>
+
+    <!-- Handle -->
+    <rect x="-38" y="-30" width="76" height="340" rx="22" ry="22" fill="#c46a40"/>
+    <!-- Handle highlight -->
+    <rect x="-18" y="-30" width="24" height="340" rx="12" ry="12" fill="#e8a882" opacity="0.25"/>
+    <!-- Handle bottom cap -->
+    <rect x="-38" y="280" width="76" height="30" rx="22" ry="22" fill="#a0522d" opacity="0.6"/>
+  </g>
+
+  </g><!-- end 90% scale wrapper -->
+</svg>

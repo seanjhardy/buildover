@@ -1,16 +1,21 @@
+import { memo } from "react";
 import { StatusIcon } from "./StatusIcon.js";
 import type { ChatSummary } from "../types.js";
 
 interface Props {
   chat: ChatSummary;
   active: boolean;
-  onSelect: () => void;
-  onToggleFinished: () => void;
-  onDelete: () => void;
+  // Stable shared handlers — accept chatId so the parent doesn't need to
+  // create a new closure per item on every render.
+  onSelect: (chatId: string) => void;
+  onToggleFinished: (chatId: string, finished: boolean) => void;
+  onDelete: (chatId: string) => void;
   draftText?: string;
 }
 
-export function ChatSidebarItem({
+// Memoized so that live WebSocket status updates (which update one chat at a
+// time) don't cause every item in the sidebar list to re-render.
+function ChatSidebarItemInner({
   chat,
   active,
   onSelect,
@@ -24,7 +29,7 @@ export function ChatSidebarItem({
   return (
     <div
       className={`chat-item ${active ? "active" : ""}`}
-      onClick={onSelect}
+      onClick={() => onSelect(chat.id)}
       title={chat.title}
     >
       <StatusIcon status={chat.status} />
@@ -45,7 +50,7 @@ export function ChatSidebarItem({
         <button
           type="button"
           className="chat-item-action"
-          onClick={onToggleFinished}
+          onClick={() => onToggleFinished(chat.id, chat.userMarkedFinished)}
           aria-label={finishedLabel}
           title={finishedLabel}
         >
@@ -83,7 +88,7 @@ export function ChatSidebarItem({
         <button
           type="button"
           className="chat-item-action danger"
-          onClick={onDelete}
+          onClick={() => onDelete(chat.id)}
           aria-label="Delete chat"
           title="Delete chat"
         >
@@ -108,3 +113,5 @@ export function ChatSidebarItem({
     </div>
   );
 }
+
+export const ChatSidebarItem = memo(ChatSidebarItemInner);

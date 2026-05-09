@@ -1,42 +1,47 @@
 # Buildover Agent Instructions
 
-## RequestAcknowledgement Tool
+## RequestUserAttention Tool
 
-Use `RequestAcknowledgement` when you have completed a significant step — research, analysis, planning, writing a report — and you want the user to review your output **before you continue or consider the task done**.
+Use `RequestUserAttention` **only when you need a response or decision from the user** — for example, when you have a question that requires their input, when you have finished research and need them to choose a direction, or when you are about to take an action and need explicit sign-off.
 
-This tool puts the chat into `awaiting_input` state so the user is clearly notified that a response is expected from them. It is **not** a tool for trivial steps; reserve it for meaningful checkpoints where user direction matters.
+**Do NOT use it simply to announce that you have completed a step.** If you have just read some files, finished some analysis, or produced a plan and intend to keep going, just continue — do not pause to ask for acknowledgement. The tool is for situations where you genuinely cannot proceed without the user's input.
+
+This tool puts the chat into `awaiting_input` state so the user is clearly notified that a response is expected from them.
 
 ### Parameters
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `message` | string | **Yes** | A plain-text sentence describing what you've done and why you're pausing. |
-| `summary` | string | No | Optional markdown-formatted summary of your work (findings, plan, decisions, etc.). |
+| `message` | string | **Yes** | A plain-text sentence stating what you need from the user. |
+| `summary` | string | No | Optional markdown-formatted context (findings, options, decisions, etc.) to help the user respond. |
 
 ### When to use it
 
-- You have finished researching multiple options and want the user to confirm direction before implementing.
-- You have written a detailed plan and want sign-off before executing it.
-- You have produced a report/analysis and the user needs to review it before you proceed.
-- You need a decision from the user at a fork in the road.
+- You have a question that you cannot answer yourself and need the user to decide.
+- You have finished researching multiple options and need the user to confirm which direction to take **before you implement anything**.
+- You have written a detailed plan and need explicit sign-off before executing it.
+- You are at a genuine fork in the road where proceeding without input would be risky.
 
 ### When NOT to use it
 
-- After every single turn — only use it at meaningful checkpoints.
-- For simple clarifying questions — use `AskUserQuestion` for those instead.
-- When the task is fully self-contained and requires no further input.
+- After reading files, exploring the codebase, or doing background research — just continue.
+- After completing a self-contained task that required no further decisions.
+- After every single turn — only use it when you genuinely need input.
+- For simple clarifying questions mid-turn — use `AskUserQuestion` for those instead.
+- When you have produced output (a report, analysis, plan) but are not yet blocked — present the output in the chat and keep going, or ask a specific follow-up question with `AskUserQuestion`.
 
-### Behaviour after calling this tool
+### What happens when you call it
 
-- The user sees a card titled **"Waiting for your acknowledgement"** with your message and optional summary rendered as markdown.
-- The user can click **Acknowledged** (the task continues), **Send feedback and continue** (you receive their feedback as the tool result), or **Stop** (your turn is interrupted).
-- If the user types in the feedback box before clicking "Send feedback and continue", that text is passed back to you as a `deny` result so you can incorporate it.
+- The user sees a card titled **"Attention needed"** with your `message` and optional `summary` rendered as markdown.
+- **Continue** — the user is happy to proceed; your turn continues normally.
+- **Send feedback and continue** — the user has typed a comment; your turn is interrupted with their feedback as the denial message so you can incorporate it in a follow-up.
+- **Stop** — the user wants to halt; your turn is aborted.
 
 ### Example usage
 
 ```
-RequestAcknowledgement({
-  message: "I've finished researching the three authentication libraries. Ready to share my recommendation.",
-  summary: "## Research Complete\n\n### Libraries Evaluated\n- **Auth0** — enterprise-grade, expensive\n- **Supabase Auth** — open-source, generous free tier\n- **Clerk** — developer-friendly, moderate cost\n\n### Next step\nI'll recommend Supabase Auth given your self-hosted requirements, unless you'd like me to dig deeper into any of these."
+RequestUserAttention({
+  message: "I've evaluated three authentication libraries. Which should I implement?",
+  summary: "## Options\n\n- **Auth0** — enterprise-grade, expensive\n- **Supabase Auth** — open-source, generous free tier\n- **Clerk** — developer-friendly, moderate cost\n\nI recommend Supabase Auth given your self-hosted requirements, but let me know if you'd like me to dig deeper into any of these before I start."
 })
 ```

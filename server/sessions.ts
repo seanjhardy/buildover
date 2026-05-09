@@ -173,13 +173,42 @@ class AgentSession {
     }
   }
 
+  // Called by the startup recovery path after a chat has been healed from a
+  // server-restart interruption. Re-runs the last user message as a retry so
+  // the agent continues without the user having to intervene. If there is no
+  // user message to replay (shouldn't happen in practice) this is a no-op.
+  async retryAfterRestart(): Promise<void> {
+    const record = await readChat(this.repoPath, this.chatId);
+    if (!record) return;
+
+    // Find the last user message in the transcript.
+    const lastUserMsg = [...record.events]
+      .reverse()
+      .find((e) => e.type === "user_message");
+    if (!lastUserMsg || lastUserMsg.type !== "user_message") return;
+
+    await this.runTurn({
+      text: lastUserMsg.text,
+      model: record.model,
+      permissionMode: record.permissionMode,
+      attachments: lastUserMsg.attachments,
+      isRetry: true,
+    });
+  }
+
   // Kicks off a turn in the background. Resolves immediately; the actual work
   // streams through emit/persistence/broadcast.
+  //
+  // When `isRetry` is true the caller is re-running the last user message
+  // after a server-restart interruption. In that case we skip persisting and
+  // echoing the user message (it's already in the transcript) and run the
+  // agent turn directly with the saved text.
   async runTurn(args: {
     text: string;
     model: Model;
     permissionMode: PermissionMode;
     attachments?: Attachment[];
+    isRetry?: boolean;
   }): Promise<void> {
     if (this.running) {
       throw new Error("Chat already running");
@@ -205,29 +234,31 @@ class AgentSession {
       (e) => e.type === "user_message",
     );
 
-    // Persist + echo the user message so subscribers see it immediately.
-    const userId = `u-${Date.now()}`;
-    const ts = new Date().toISOString();
-    const userEvent: ChatEvent = {
-      type: "user_message",
-      id: userId,
-      text: args.text,
-      attachments: args.attachments,
-      ts,
-    };
-    const afterUser = await this.record(userEvent);
-    this.broadcast({
-      type: "user_message_echo",
-      chatId: this.chatId,
-      id: userId,
-      text: args.text,
-      attachments: args.attachments,
-    });
-    await this.pushStatusFor(afterUser);
+    if (!args.isRetry) {
+      // Persist + echo the user message so subscribers see it immediately.
+      const userId = `u-${Date.now()}`;
+      const ts = new Date().toISOString();
+      const userEvent: ChatEvent = {
+        type: "user_message",
+        id: userId,
+        text: args.text,
+        attachments: args.attachments,
+        ts,
+      };
+      const afterUser = await this.record(userEvent);
+      this.broadcast({
+        type: "user_message_echo",
+        chatId: this.chatId,
+        id: userId,
+        text: args.text,
+        attachments: args.attachments,
+      });
+      await this.pushStatusFor(afterUser);
 
-    if (isFirstUserTurn) {
-      // Fire-and-forget title generation — never blocks the turn.
-      void this.generateAndApplyTitle(args.text);
+      if (isFirstUserTurn) {
+        // Fire-and-forget title generation — never blocks the turn.
+        void this.generateAndApplyTitle(args.text);
+      }
     }
 
     const emit = (event: RawAgentEvent) => {

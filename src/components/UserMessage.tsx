@@ -1,3 +1,4 @@
+import { memo } from "react";
 import type { Attachment } from "../types.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 
@@ -6,7 +7,7 @@ interface Props {
   attachments?: Attachment[];
 }
 
-export function UserMessage({ text, attachments }: Props) {
+export const UserMessage = memo(function UserMessage({ text, attachments }: Props) {
   return (
     <div className="message user">
       <div className="bubble">
@@ -21,4 +22,4 @@ export function UserMessage({ text, attachments }: Props) {
       </div>
     </div>
   );
-}
+});

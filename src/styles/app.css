@@ -154,10 +154,21 @@ button {
 .message-list {
   flex: 1;
   overflow-y: auto;
+  /* Virtualizer manages its own inner layout (position:relative + absolute
+     children), so we can't use flex/gap here. Padding and item spacing are
+     applied via .message-list > div (the Virtualizer wrapper) and per-item
+     margin instead. */
+}
+
+/* Virtualizer renders a single position:relative wrapper as a direct child.
+   Give it the same padding the old flex column had. */
+.message-list > div {
   padding: var(--app-spacing-xlarge);
-  display: flex;
-  flex-direction: column;
-  gap: var(--app-spacing-large);
+}
+
+/* Each virtualised item slot gets the same gap the old flex column had. */
+.message-list > div > div {
+  margin-bottom: var(--app-spacing-large);
 }
 
 .message-list-empty {
@@ -911,7 +922,7 @@ button {
   background: rgba(217, 119, 87, 0.04);
   pointer-events: none;
 }
-.permission[data-tool="RequestAcknowledgement"]::before {
+.permission[data-tool="RequestUserAttention"]::before {
   content: "";
   position: absolute;
   inset: 0;
@@ -1838,6 +1849,9 @@ button {
 .chat-status-icon.finished {
   color: var(--app-secondary-foreground);
 }
+.chat-status-icon.error {
+  color: var(--app-error);
+}
 .chat-status-icon .spin {
   animation: chat-spin 1s linear infinite;
   transform-origin: center;
@@ -1846,6 +1860,30 @@ button {
   to {
     transform: rotate(360deg);
   }
+}
+
+/* ---- Retry banner (shown when a turn was interrupted by a server restart) ---- */
+.retry-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: var(--app-spacing-medium) var(--app-spacing-xlarge);
+  background: color-mix(in srgb, var(--app-error) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--app-error) 30%, transparent);
+  color: var(--app-error);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.retry-banner svg {
+  flex-shrink: 0;
+}
+.retry-banner-text {
+  flex: 1;
+  line-height: 1.4;
+}
+.retry-banner-text strong {
+  display: block;
+  margin-bottom: 1px;
 }
 
 /* ---- Archive ---- */

@@ -53,7 +53,8 @@ export type ChatStatus =
   | "running"
   | "agent_done"
   | "idle"
-  | "finished";
+  | "finished"
+  | "error";
 
 export interface RepoInfo {
   id: string;
@@ -191,6 +192,9 @@ export type ClientMessage =
       model: Model;
       permissionMode?: PermissionMode;
       attachments?: Attachment[];
+      /** When true, this is a retry after a server-restart interruption.
+       *  The server re-runs the turn without re-persisting the user message. */
+      isRetry?: boolean;
     }
   | {
       type: "permission_response";
