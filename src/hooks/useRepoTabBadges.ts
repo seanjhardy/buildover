@@ -3,12 +3,13 @@ import type { ChatStatus, ChatSummary } from "../types.js";
 
 const SEEN_KEY = "buildover.repoTabSeen";
 
-// Priority order: highest priority first. Only these statuses trigger a badge.
-const BADGE_PRIORITY: ChatStatus[] = [
-  "awaiting_input",
-  "error",
-  "running",
-  "agent_done",
+// Priority order for the always-visible tab icon: highest priority first.
+// Only these statuses show an icon; idle/finished show nothing.
+const ICON_PRIORITY: ChatStatus[] = [
+  "running",        // Highest — always show spinner while anything is running
+  "awaiting_input", // Question/chat icon — agent needs user response
+  "error",          // Something went wrong
+  "agent_done",     // Agent finished, awaiting user follow-up
 ];
 
 // Shape persisted to localStorage:
@@ -34,12 +35,12 @@ function persistSeenState(state: SeenState): void {
 }
 
 /**
- * Computes which status badge (if any) to show on each repo tab.
+ * Computes which status icon to show on each repo tab.
  *
- * A badge appears on an inactive tab when one or more chats in that repo
- * have a notable status that changed since the user last viewed the tab.
- *
- * Priority: awaiting_input > error > running > agent_done
+ * The icon always reflects the most important active status across all chats
+ * in that repo, using the priority: running > awaiting_input > error > agent_done.
+ * This is shown on ALL tabs (active and inactive) so the user always knows
+ * what's happening at a glance.
  */
 export function useRepoTabBadges(
   openRepoPaths: string[],
@@ -91,31 +92,19 @@ export function useRepoTabBadges(
     prevActiveRepoPath.current = activeRepoPath;
   }, [activeRepoPath, markSeen]);
 
-  // Compute badges for each repo.
+  // Compute the most important status icon for each repo (all tabs, active or not).
   const badges: Record<string, ChatStatus | null> = {};
   for (const repoPath of openRepoPaths) {
-    // Active tab is never badged.
-    if (repoPath === activeRepoPath) {
-      badges[repoPath] = null;
-      continue;
-    }
-
     const chats = chatsByRepo[repoPath] ?? [];
-    const seen = seenState[repoPath] ?? {};
 
-    // Find the highest-priority status change since last view.
     let topBadge: ChatStatus | null = null;
     let topPriority = Infinity;
 
     for (const chat of chats) {
-      const priority = BADGE_PRIORITY.indexOf(chat.status);
-      if (priority === -1) continue; // not a notable status
+      const priority = ICON_PRIORITY.indexOf(chat.status);
+      if (priority === -1) continue; // idle/finished — no icon needed
 
-      const seenStatus = seen[chat.id];
-      const isNew = seenStatus === undefined;
-      const changed = seenStatus !== chat.status;
-
-      if ((isNew || changed) && priority < topPriority) {
+      if (priority < topPriority) {
         topPriority = priority;
         topBadge = chat.status;
       }

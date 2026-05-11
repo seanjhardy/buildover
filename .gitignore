@@ -9,3 +9,4 @@ release
 .DS_Store
 .vite
 chats
+.buildover

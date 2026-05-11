@@ -4,6 +4,7 @@ import {
   ArrowUp,
   ClipboardList,
   Hammer,
+  ListPlus,
   MessageCircleQuestion,
   Mic,
   Paperclip,
@@ -253,6 +254,17 @@ export function Composer(props: Props) {
     clearDraft();
   };
 
+  // Explicitly queue a message regardless of streaming state.
+  const queueSubmit = () => {
+    if (!onQueueMessage) return;
+    const trimmed = text.trim();
+    if (!trimmed && attachments.length === 0) return;
+    onQueueMessage(trimmed, attachments);
+    setText("");
+    setAttachments([]);
+    clearDraft();
+  };
+
   const addFiles = async (files: FileList | File[]) => {
     setError(null);
     const next: Attachment[] = [];
@@ -473,24 +485,24 @@ export function Composer(props: Props) {
             )}
           </div>
 
+          {onQueueMessage && (
+            <button
+              className="send-btn queue"
+              onClick={queueSubmit}
+              disabled={!text.trim() && attachments.length === 0}
+              title="Add to queue"
+            >
+              <ListPlus size={16} />
+            </button>
+          )}
           {isStreaming ? (
-            <>
-              <button
-                className="send-btn queue"
-                onClick={submit}
-                disabled={!text.trim() && attachments.length === 0}
-                title="Queue message"
-              >
-                <ArrowUp size={16} />
-              </button>
-              <button
-                className="send-btn stop"
-                onClick={onInterrupt}
-                title="Stop"
-              >
-                <Square size={12} />
-              </button>
-            </>
+            <button
+              className="send-btn stop"
+              onClick={onInterrupt}
+              title="Stop"
+            >
+              <Square size={12} />
+            </button>
           ) : (
             <button
               className="send-btn"

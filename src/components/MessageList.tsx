@@ -1,6 +1,6 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { Virtualizer, type VirtualizerHandle } from "virtua";
-import type { ChatTurn } from "../hooks/useAgent.js";
+import type { BranchInfo, ChatTurn } from "../hooks/useAgent.js";
 import type { ContentBlock } from "../types.js";
 import { AssistantMessage } from "./AssistantMessage.js";
 import { ToolGroup } from "./ToolGroup.js";
@@ -32,6 +32,9 @@ interface Props {
   scrollRef?: React.RefObject<HTMLDivElement>;
   jumpBarRef?: React.RefObject<JumpBarHandle | null>;
   chatId?: string;
+  branchInfo?: Map<string, BranchInfo>;
+  onForkMessage?: (userMessageId: string, newText: string) => void;
+  onSwitchBranch?: (parentMessageId: string, targetBranchId: string) => void;
 }
 
 // A single virtual row — either a real ChatTurn, the streaming indicator, or
@@ -103,7 +106,7 @@ function buildVirtualItems(turns: ChatTurn[]): VirtualItem[] {
   return out;
 }
 
-function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chatId }: Props) {
+function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chatId, branchInfo, onForkMessage, onSwitchBranch }: Props) {
   // The scroll container div. Also exposed via the external scrollRef so that
   // MessageJumpBar (which listens for scroll events and queries DOM nodes in
   // the container) continues to work after we add virtualisation.
@@ -246,7 +249,15 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
     if (item.kind === "user") {
       return (
         <div key={item.id} data-turn-id={item.id} data-turn-kind="user">
-          <UserMessage text={item.text} attachments={item.attachments} />
+          <UserMessage
+            text={item.text}
+            attachments={item.attachments}
+            messageId={item.id}
+            branchInfo={branchInfo?.get(item.id)}
+            isStreaming={isStreaming}
+            onFork={onForkMessage ?? (() => {})}
+            onSwitchBranch={onSwitchBranch ?? (() => {})}
+          />
         </div>
       );
     }

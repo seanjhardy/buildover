@@ -10,10 +10,12 @@ import { OrchestratorBar, type OrchestratorWakeTrigger } from "./components/Orch
 import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt.js";
 import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
+import { GitGraphView } from "./components/GitGraphView.js";
 import { RepoTabs } from "./components/RepoTabs.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
 import { TodoPanel } from "./components/TodoPanel.js";
 import { FilesPanel } from "./components/FilesPanel.js";
+import { FileViewer } from "./components/FileViewer.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { useAgent } from "./hooks/useAgent.js";
 import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
@@ -24,7 +26,9 @@ import { useTodos } from "./hooks/useTodos.js";
 import { useFilesChanged } from "./hooks/useFilesChanged.js";
 import { useWakeWord } from "./hooks/useWakeWord.js";
 import { useWorkspace } from "./hooks/useWorkspace.js";
-import { api } from "./lib/api.js";
+import { agentSocket } from "./lib/agentSocket.js";
+import { api, gitApi } from "./lib/api.js";
+import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
   MODELS,
   type Attachment,
@@ -73,7 +77,26 @@ export default function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [messageQueue, setMessageQueue] = useState<QueuedMessage[]>([]);
+  const [gitGraphOpen, setGitGraphOpen] = useState(false);
+  // File viewer: null = hidden, FileEntry = open
+  const [openFile, setOpenFile] = useState<FileEntry | null>(null);
+  // Per-chat message queues: chatId → queued messages for that chat.
+  // Stored as a map so navigating away from a chat doesn't lose its queue.
+  const [messageQueues, setMessageQueues] = useState<Record<string, QueuedMessage[]>>({});
+  // Derive the active chat's queue from the map.
+  const messageQueue = activeChatId ? (messageQueues[activeChatId] ?? []) : [];
+  // Scoped setter that always writes into the active chat's slot.
+  const setMessageQueue = useCallback(
+    (updater: QueuedMessage[] | ((prev: QueuedMessage[]) => QueuedMessage[])) => {
+      if (!activeChatId) return;
+      setMessageQueues((prev) => {
+        const current = prev[activeChatId] ?? [];
+        const next = typeof updater === "function" ? updater(current) : updater;
+        return { ...prev, [activeChatId]: next };
+      });
+    },
+    [activeChatId],
+  );
   // Per-chat draft text: chatId → current unsent composer text.
   // Populated live by the Composer's onDraftChange callback so the sidebar
   // can show the draft as a subtitle even for non-active chats.
@@ -107,6 +130,17 @@ export default function App() {
   // Keep refs to the latest values so the streaming effect never reads stale closures.
   const messageQueueRef = useRef(messageQueue);
   messageQueueRef.current = messageQueue;
+  // Full queues map ref — used by the background auto-send effect so it always
+  // reads the current queue for any chat without re-registering socket listeners.
+  const messageQueuesRef = useRef(messageQueues);
+  messageQueuesRef.current = messageQueues;
+  // Active chat id ref — used by the background effect to skip the active chat
+  // (which is already handled by the streaming effect below) to avoid double-sends.
+  const activeChatIdRef = useRef(activeChatId);
+  activeChatIdRef.current = activeChatId;
+  // Active repo path ref — needed when sending messages for background chats.
+  const activeRepoPathRef = useRef(activeRepo?.path ?? null);
+  activeRepoPathRef.current = activeRepo?.path ?? null;
   const modelRef = useRef(model);
   modelRef.current = model;
   const permissionModeRef = useRef(permissionMode);
@@ -205,18 +239,14 @@ export default function App() {
 
   // ── Message queue ──────────────────────────────────────────────────────────
 
-  // Clear queue when switching chats
-  useEffect(() => {
-    setMessageQueue([]);
-  }, [activeChatId]);
-
   // Belt-and-braces auto-allow: when the user is in bypassPermissions, any
   // permission_request that slips through (for example, one already in flight
   // when the mode was toggled) is silently approved. The server-side guard in
   // canUseTool handles the steady state; this catches the race window.
-  // Exception: ExitPlanMode and RequestUserAttention must always show the
-  // permission UI — they are user-interaction checkpoints, not dangerous ops.
-  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention"]);
+  // Exception: ExitPlanMode, RequestUserAttention, and AskUserQuestion must
+  // always show the permission UI — they are user-interaction checkpoints,
+  // not dangerous ops.
+  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention", "AskUserQuestion"]);
   useEffect(() => {
     if (permissionMode !== "bypassPermissions") return;
     const pending = agent.pendingPermission;
@@ -241,6 +271,79 @@ export default function App() {
       });
     }
   }, [agent.isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Background auto-send: fire queued messages for chats that are NOT currently
+  // active. The effect above handles the active chat; this one covers the case
+  // where the user navigated away while messages were queued. We subscribe
+  // directly to agentSocket so we receive events for any chat, not just the
+  // active one. The effect re-runs whenever messageQueues changes so listeners
+  // are registered/unregistered as chats gain or lose queued messages.
+  useEffect(() => {
+    // chatId → cleanup fn for the background listener on that chat.
+    const cleanups = new Map<string, () => void>();
+
+    // Register listeners for chats with a non-empty queue, and drop listeners
+    // for chats whose queue has been drained.
+    const syncListeners = () => {
+      const queues = messageQueuesRef.current;
+
+      // Drop listeners for chats that no longer have queued messages.
+      for (const [chatId, cleanup] of cleanups) {
+        if (!queues[chatId]?.length) {
+          cleanup();
+          cleanups.delete(chatId);
+        }
+      }
+
+      // Add listeners for chats that now have queued messages.
+      for (const [chatId, queue] of Object.entries(queues)) {
+        if (!queue.length) continue;
+        if (cleanups.has(chatId)) continue;
+
+        const prevWasStreaming = { value: false };
+        const unsub = agentSocket.onChatEvent(chatId, (event) => {
+          // The active chat is already handled by the streaming effect above;
+          // skip it here to avoid sending the same message twice.
+          if (chatId === activeChatIdRef.current) return;
+
+          if (event.type === "turn_start") {
+            prevWasStreaming.value = true;
+          }
+          const turnFinished =
+            event.type === "turn_end" ||
+            (event.type === "chat_status" &&
+              event.status !== "running" &&
+              prevWasStreaming.value);
+          if (!turnFinished) return;
+
+          prevWasStreaming.value = false;
+          const currentQueue = messageQueuesRef.current[chatId] ?? [];
+          if (!currentQueue.length) return;
+          const [next, ...rest] = currentQueue;
+          // Dequeue the message optimistically before the send.
+          setMessageQueues((prev) => ({ ...prev, [chatId]: rest }));
+          const repoPath = activeRepoPathRef.current;
+          if (!repoPath) return;
+          agentSocket.send({
+            type: "user_message",
+            chatId,
+            repoPath,
+            text: next.text,
+            model: modelRef.current,
+            permissionMode: permissionModeRef.current,
+            attachments: next.attachments,
+          });
+        });
+        cleanups.set(chatId, unsub);
+      }
+    };
+
+    syncListeners();
+
+    return () => {
+      for (const cleanup of cleanups.values()) cleanup();
+    };
+  }, [messageQueues]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const addToQueue = (text: string, attachments: Attachment[]) => {
     setMessageQueue((prev) => [
@@ -277,6 +380,13 @@ export default function App() {
   const handleDeleteChat = useCallback(async (chatId: string) => {
     await chats.deleteChat(chatId);
     if (activeChatId === chatId) workspace.setActiveChat(null);
+    // Drop any queued messages for the deleted chat so they don't linger in state.
+    setMessageQueues((prev) => {
+      if (!prev[chatId]) return prev;
+      const next = { ...prev };
+      delete next[chatId];
+      return next;
+    });
   }, [chats, activeChatId, workspace]);
 
   const handleSelectChat = useCallback((id: string) => {
@@ -301,6 +411,23 @@ export default function App() {
     await api.removeRecent(path);
     void workspace.reloadRecents();
   };
+
+  // Close the git graph when the active repo changes
+  useEffect(() => {
+    setGitGraphOpen(false);
+  }, [activeRepo?.path]);
+
+  const handleGitCheckout = useCallback(
+    async (branch: string) => {
+      if (!activeRepo) return;
+      try {
+        await gitApi.checkout(activeRepo.path, branch);
+      } catch {
+        // errors will be visible in the graph view itself
+      }
+    },
+    [activeRepo],
+  );
 
   // The orchestrator navigates the UI via WS-pushed nav actions. Each maps
   // straight onto existing workspace methods. open_repo issues a REST call,
@@ -467,7 +594,15 @@ export default function App() {
             onForgetRecent={handleForgetRecent}
           />
         ) : (
-          <div className="workspace">
+          <div className={`workspace${openFile ? " workspace--file-open" : ""}`}>
+            {/* File viewer slides in from the right, absolutely positioned */}
+            {openFile && (
+              <FileViewer
+                entry={openFile}
+                onClose={() => setOpenFile(null)}
+              />
+            )}
+            {/* Sidebar stays fixed — only workspace-panels (chat-pane) slides */}
             <ChatSidebar
               chats={chats.chats}
               activeChatId={activeChatId}
@@ -477,10 +612,31 @@ export default function App() {
               onDelete={handleDeleteChat}
               repoPath={activeRepo.path}
               chatDrafts={chatDrafts}
+              onOpenGraph={() => setGitGraphOpen(true)}
             />
+            {/* Chat-obscured click target — sits outside workspace-panels so it
+                isn't clipped by the panel's overflow:hidden or affected by the
+                slide transform. Positioned to cover only the exposed chat strip
+                so clicking it closes the file viewer. */}
+            {openFile && (
+              <div
+                className="chat-obscured-overlay"
+                onClick={() => setOpenFile(null)}
+                aria-label="Return to chat"
+              />
+            )}
+            {/* workspace-panels: wraps only the chat-pane so it slides left
+                when the file viewer opens, while the sidebar stays put */}
+            <div className="workspace-panels">
 
             <main className="chat-pane" ref={chatPaneRef}>
-              {!activeChat ? (
+              {gitGraphOpen ? (
+                <GitGraphView
+                  repoPath={activeRepo.path}
+                  onClose={() => setGitGraphOpen(false)}
+                  onCheckout={(branch) => void handleGitCheckout(branch)}
+                />
+              ) : !activeChat ? (
                 <EmptyChat onCreate={handleCreateChat} />
               ) : (
                 <>
@@ -492,6 +648,12 @@ export default function App() {
                   </div>
                   <div className="chat-pane-body">
                     <div className="chat-group">
+                      {/* left-rail: todo panel (wide mode only) */}
+                      {!todoNarrow && todos.length > 0 && (
+                        <div className="left-rail">
+                          <TodoPanel todos={todos} compact={false} />
+                        </div>
+                      )}
                       <div className="chat-column">
                         <MessageList
                           turns={agent.turns}
@@ -499,6 +661,11 @@ export default function App() {
                           cwd={agent.cwd ?? activeRepo.path}
                           scrollRef={msgScrollRef}
                           jumpBarRef={jumpBarRef}
+                          branchInfo={agent.branchInfo}
+                          onForkMessage={(userMessageId, newText) =>
+                            agent.forkMessage(userMessageId, newText, { model, permissionMode })
+                          }
+                          onSwitchBranch={agent.switchBranch}
                           chatId={activeChatId ?? undefined}
                         />
                         {agent.pendingAttention && (
@@ -550,23 +717,22 @@ export default function App() {
                           />
                         </div>
                       </div>
-                      {/* right-rail: jump bar + (todo + files stacked) */}
+                      {/* right-rail: jump bar always; files panel (wide); compact strips (narrow) */}
                       <div className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`}>
                         <MessageJumpBar
                           jumpBarRef={jumpBarRef}
                         />
-                        {!todoNarrow && (todos.length > 0 || filesChanged.length > 0) && (
-                          <div className="right-rail-panels">
-                            {todos.length > 0 && (
-                              <TodoPanel todos={todos} compact={false} />
-                            )}
-                            {filesChanged.length > 0 && (
-                              <FilesPanel files={filesChanged} />
-                            )}
-                          </div>
+                        {!todoNarrow && filesChanged.length > 0 && (
+                          <FilesPanel
+                            files={filesChanged}
+                            onFileOpen={setOpenFile}
+                            activeFilePath={openFile?.path ?? null}
+                          />
                         )}
                         {todoNarrow && todos.length > 0 && (
-                          <TodoPanel todos={todos} compact={true} />
+                          <div className="right-rail-panels">
+                            <TodoPanel todos={todos} compact={true} />
+                          </div>
                         )}
                       </div>
                     </div>
@@ -574,6 +740,7 @@ export default function App() {
                 </>
               )}
             </main>
+            </div>{/* end workspace-panels */}
           </div>
         )}
       </div>

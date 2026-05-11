@@ -1,5 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
+import { readFile as fsReadFile } from "node:fs/promises";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   createChat,
@@ -27,8 +28,11 @@ import {
   gitCheckout,
   gitCommit,
   gitPush,
+  gitForcePush,
   gitPull,
   gitDiffStat,
+  gitLog,
+  gitCreateBranch,
 } from "./git.js";
 import {
   readDashboard,
@@ -372,10 +376,50 @@ app.post("/api/git/push", async (req, res) => {
   }
 });
 
+app.post("/api/git/force-push", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    await gitForcePush(repoPath);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 app.post("/api/git/pull", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
     await gitPull(repoPath);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/git/log", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const limit = typeof req.query.limit === "string" ? parseInt(req.query.limit, 10) || 150 : 150;
+    const result = await gitLog(repoPath, limit);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/git/branch", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const name = String(req.body?.name ?? "").trim();
+    if (!name) throw new Error("name required");
+    const fromHash = typeof req.body?.fromHash === "string" ? req.body.fromHash : undefined;
+    await gitCreateBranch(repoPath, name, fromHash);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({
@@ -395,6 +439,23 @@ app.get("/api/git/diff-stat", async (req, res) => {
     res.json({ stats });
   } catch (err) {
     res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- File read ----
+app.get("/api/file/read", async (req, res) => {
+  try {
+    const filePath = String(req.query.path ?? "");
+    if (!filePath) throw new Error("path required");
+    // Basic safety: only allow absolute paths (no path traversal tricks)
+    const { resolve, isAbsolute } = await import("node:path");
+    if (!isAbsolute(filePath)) throw new Error("absolute path required");
+    const content = await fsReadFile(resolve(filePath), "utf8");
+    res.json({ content });
+  } catch (err) {
+    res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -674,6 +735,43 @@ wss.on("connection", (ws: WebSocket) => {
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
           session.setPermissionMode(msg.permissionMode);
+          break;
+        }
+        case "fork_message": {
+          await subscribe(msg.repoPath, msg.chatId, false);
+          const session = getSession(msg.repoPath, msg.chatId);
+          session
+            .runFork({
+              userMessageId: msg.userMessageId,
+              newText: msg.newText,
+              model: msg.model,
+              permissionMode: msg.permissionMode ?? "default",
+            })
+            .catch((err) => {
+              send({
+                type: "error",
+                chatId: msg.chatId,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            });
+          break;
+        }
+        case "switch_branch": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const session = getSession(sub.repoPath, msg.chatId);
+          session
+            .runSwitchBranch({
+              parentMessageId: msg.parentMessageId,
+              targetBranchId: msg.targetBranchId,
+            })
+            .catch((err) => {
+              send({
+                type: "error",
+                chatId: msg.chatId,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            });
           break;
         }
       }

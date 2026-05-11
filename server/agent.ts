@@ -92,7 +92,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
 
   // Tools that must always surface a UI prompt regardless of permission mode,
   // because they are user-interaction checkpoints, not dangerous operations.
-  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention"]);
+  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention", "AskUserQuestion"]);
 
   const canUseTool: CanUseTool = async (toolName, input) => {
     // In bypassPermissions mode, the SDK still calls canUseTool for every
@@ -243,11 +243,22 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
             const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
             const usedTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
-            // Prefer the actual model's context window size; fall back to 200k.
+            // Prefer the actual model's context window size reported by the SDK.
+            // Fall back to a static lookup table of known limits, then 200k.
+            const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+              "claude-opus-4-7": 1_000_000,
+              "claude-sonnet-4-6": 1_000_000,
+              "claude-haiku-4-5": 200_000,
+            };
             const modelEntry = modelUsageMap
               ? Object.values(modelUsageMap)[0]
               : undefined;
-            const contextWindowSize = modelEntry?.contextWindow ?? 200_000;
+            // modelEntry.contextWindow comes from the SDK; if absent, fall back
+            // to our static table keyed by the model used in this turn, then 200k.
+            const contextWindowSize =
+              modelEntry?.contextWindow ??
+              MODEL_CONTEXT_WINDOWS[args.model] ??
+              200_000;
             const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
             emit({
               type: "context_usage",

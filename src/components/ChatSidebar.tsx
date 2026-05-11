@@ -12,6 +12,7 @@ interface Props {
   onDelete: (chatId: string) => void;
   repoPath: string;
   chatDrafts?: Record<string, string>;
+  onOpenGraph?: () => void;
 }
 
 // Sidebar grouping order. Awaiting-input is most urgent (user has to click
@@ -43,6 +44,7 @@ export function ChatSidebar({
   onDelete,
   repoPath,
   chatDrafts = {},
+  onOpenGraph,
 }: Props) {
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -153,7 +155,7 @@ export function ChatSidebar({
           </div>
         )}
       </div>
-      <GitPanel repoPath={repoPath} />
+      <GitPanel repoPath={repoPath} onOpenGraph={onOpenGraph} />
     </aside>
   );
 }

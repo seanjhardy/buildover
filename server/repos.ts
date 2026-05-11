@@ -15,12 +15,15 @@ export interface RecentRepo {
   lastOpenedAt: string;
 }
 
-const RECENTS_DIR = join(homedir(), ".buildover");
+const BUILDOVER_HOME = join(homedir(), ".buildover");
+const RECENTS_DIR = BUILDOVER_HOME;
 const RECENTS_FILE = join(RECENTS_DIR, "recents.json");
 const RECENTS_LIMIT = 20;
+const REPOS_DATA_DIR = join(BUILDOVER_HOME, "repos");
 
 function repoBuildoverDir(repoPath: string): string {
-  return join(repoPath, ".buildover");
+  const name = basename(repoPath) || "unnamed";
+  return join(REPOS_DATA_DIR, name);
 }
 
 function repoMetaPath(repoPath: string): string {

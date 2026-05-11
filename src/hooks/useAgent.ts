@@ -3,6 +3,7 @@ import { agentSocket, type Connection } from "../lib/agentSocket.js";
 import type {
   AgentEvent,
   Attachment,
+  ChatBranch,
   ChatEvent,
   ChatRecord,
   ChatStatus,
@@ -35,6 +36,49 @@ interface CachedChat {
   cwd?: string;
   status: ChatStatus | null;
   chatPermissionMode?: PermissionMode;
+  branchInfo: Map<string, BranchInfo>;
+}
+
+// One entry per fork point (keyed by the parentMessageId — the user_message.id
+// where the fork was created). Variants[0] is always the currently active trunk.
+export interface BranchInfo {
+  parentMessageId: string;
+  // All available variants. variants[0] = trunk ("" id), rest = saved branches.
+  variants: Array<{ branchId: string; label: string }>;
+}
+
+// Derive branch navigation metadata from a ChatRecord.
+// For each unique parentMessageId across record.branches, we collect all the
+// stored alternative branches. The active trunk for that fork point is always
+// represented as variants[0] with branchId="" (sentinel for "current trunk").
+function computeBranchInfo(record: ChatRecord): Map<string, BranchInfo> {
+  const branches = record.branches;
+  if (!branches || branches.length === 0) return new Map();
+
+  // Group stored branches by parentMessageId.
+  const grouped = new Map<string, ChatBranch[]>();
+  for (const b of branches) {
+    const arr = grouped.get(b.parentMessageId) ?? [];
+    arr.push(b);
+    grouped.set(b.parentMessageId, arr);
+  }
+
+  const result = new Map<string, BranchInfo>();
+  for (const [parentMessageId, bList] of grouped) {
+    // Sort branches oldest-first so numbering is stable.
+    const sorted = [...bList].sort(
+      (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime(),
+    );
+    result.set(parentMessageId, {
+      parentMessageId,
+      // variants[0] = the currently active trunk (branchId="" sentinel).
+      variants: [
+        { branchId: "", label: "Current" },
+        ...sorted.map((b, i) => ({ branchId: b.id, label: `Version ${i + 1}` })),
+      ],
+    });
+  }
+  return result;
 }
 const chatCache = new Map<string, CachedChat>();
 const MAX_CACHE_SIZE = 20;
@@ -84,6 +128,7 @@ interface UseAgentReturn {
   pendingAttention: PendingAttention | undefined;
   chatPermissionMode: PermissionMode | undefined;
   contextUsage: ContextUsage | null;
+  branchInfo: Map<string, BranchInfo>;
   send: (text: string, opts: SendOptions) => void;
   respondPermission: (
     requestId: string,
@@ -98,6 +143,8 @@ interface UseAgentReturn {
   respondAttention: (attentionId: string, feedback?: string, interrupt?: boolean) => void;
   interrupt: () => void;
   setPermissionMode: (mode: PermissionMode) => void;
+  forkMessage: (userMessageId: string, newText: string, opts: SendOptions) => void;
+  switchBranch: (parentMessageId: string, targetBranchId: string) => void;
 }
 
 export function useAgent(
@@ -119,6 +166,7 @@ export function useAgent(
   const [chatPermissionMode, setChatPermissionMode] =
     useState<PermissionMode | undefined>();
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
+  const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
 
   // Mirror chatId in a ref so the event handler always reads the current value
   // without needing to be re-registered on every chatId change.
@@ -140,6 +188,7 @@ export function useAgent(
       setPendingAttention(undefined);
       setChatPermissionMode(undefined);
       setContextUsage(null);
+      setBranchInfo(new Map());
       return;
     }
 
@@ -149,6 +198,9 @@ export function useAgent(
     // render as interruptible — keeping the UI responsive during reconciliation.
     const cached = chatCache.get(chatId);
     startTransition(() => {
+      // Always reset contextUsage when switching chats — it is never cached
+      // because it's transient (re-emitted live each turn, not persisted).
+      setContextUsage(null);
       if (cached) {
         setTurns(cached.turns);
         setSessionId(cached.sessionId);
@@ -157,6 +209,7 @@ export function useAgent(
         setCwd(cached.cwd);
         setStatus(cached.status);
         setChatPermissionMode(cached.chatPermissionMode);
+        setBranchInfo(cached.branchInfo);
       } else {
         setTurns([]);
         setIsStreaming(false);
@@ -167,6 +220,7 @@ export function useAgent(
         setStatus(null);
         setPendingPermission(undefined);
         setChatPermissionMode(undefined);
+        setBranchInfo(new Map());
       }
     });
 
@@ -182,6 +236,7 @@ export function useAgent(
         tools: [],
         mcpServers: [],
         status: null,
+        branchInfo: new Map(),
       };
       chatCache.set(id, { ...prev, ...patch });
       // Evict oldest entries when the cache grows too large.
@@ -272,6 +327,11 @@ export function useAgent(
       });
     };
 
+    const cachedSetBranchInfo = (info: Map<string, BranchInfo>) => {
+      setBranchInfo(info);
+      updateCache({ branchInfo: info });
+    };
+
     const handler = (event: AgentEvent) => {
       // Defensive: events may arrive after we've switched chats. The
       // multiplexer routes by chatId so this should be impossible, but guard
@@ -289,6 +349,7 @@ export function useAgent(
         setPendingAttention,
         setChatPermissionMode: cachedSetChatPermissionMode,
         setContextUsage,
+        setBranchInfo: cachedSetBranchInfo,
       });
     };
 
@@ -375,6 +436,37 @@ export function useAgent(
     });
   }, []);
 
+  const forkMessage = useCallback(
+    (userMessageId: string, newText: string, opts: SendOptions) => {
+      if (!repoPath || !chatId) return;
+      agentSocket.send({
+        type: "fork_message",
+        chatId,
+        repoPath,
+        userMessageId,
+        newText,
+        model: opts.model,
+        permissionMode: opts.permissionMode,
+      });
+    },
+    [repoPath, chatId],
+  );
+
+  const switchBranch = useCallback(
+    (parentMessageId: string, targetBranchId: string) => {
+      const id = chatIdRef.current;
+      if (!id || !repoPath) return;
+      agentSocket.send({
+        type: "switch_branch",
+        chatId: id,
+        repoPath,
+        parentMessageId,
+        targetBranchId,
+      });
+    },
+    [repoPath],
+  );
+
   return {
     turns,
     connection,
@@ -388,11 +480,14 @@ export function useAgent(
     pendingAttention,
     chatPermissionMode,
     contextUsage,
+    branchInfo,
     send,
     respondPermission,
     respondAttention,
     interrupt,
     setPermissionMode,
+    forkMessage,
+    switchBranch,
   };
 }
 
@@ -414,6 +509,7 @@ interface Setters {
     React.SetStateAction<PermissionMode | undefined>
   >;
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
+  setBranchInfo: (info: Map<string, BranchInfo>) => void;
 }
 
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
@@ -440,9 +536,14 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         s.setIsStreaming(event.record.status === "running");
         // Expose this chat's saved permission mode so App.tsx can sync its UI.
         s.setChatPermissionMode(event.record.permissionMode);
+        // Compute branch navigation metadata from the replayed record.
+        s.setBranchInfo(computeBranchInfo(event.record));
       });
       break;
     }
+    case "chat_forked":
+      // A full chat_replay follows immediately — nothing to do here.
+      break;
     case "system_init":
       s.setSessionId(event.sessionId || undefined);
       s.setTools(event.tools);
@@ -583,6 +684,11 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   }
   s.setTurns(turns);
   if (record.sessionId) s.setSessionId(record.sessionId);
+  // Restore the last known context usage so the ring is visible immediately
+  // on load, without waiting for the next agent turn to emit a fresh value.
+  s.setContextUsage(record.lastContextUsage ?? null);
+  // Rebuild branch navigation metadata from the record's branches array.
+  s.setBranchInfo(computeBranchInfo(record));
 }
 
 function chatEventToTurn(ev: ChatEvent): ChatTurn | null {

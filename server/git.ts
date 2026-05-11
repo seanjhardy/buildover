@@ -78,8 +78,92 @@ export async function gitPush(repoPath: string): Promise<void> {
   await execFileAsync("git", ["push"], { cwd: repoPath });
 }
 
+export async function gitForcePush(repoPath: string): Promise<void> {
+  await execFileAsync("git", ["push", "--force-with-lease"], { cwd: repoPath });
+}
+
 export async function gitPull(repoPath: string): Promise<void> {
   await execFileAsync("git", ["pull"], { cwd: repoPath });
+}
+
+export interface GitCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  authorName: string;
+  authorDate: string; // ISO-ish date string
+  refs: string; // e.g. "HEAD -> main, origin/main"
+  parents: string[]; // full parent SHA hashes (empty for root commit)
+}
+
+export interface GitLogResult {
+  commits: GitCommit[];
+  currentBranch: string;
+}
+
+/**
+ * Fetches the full cross-branch commit graph using `git log --all --parents`.
+ * Returns every reachable commit so the frontend can render a proper DAG with
+ * parallel lanes, merge curves, and per-branch colouring — like VS Code Git Graph.
+ */
+export async function gitLog(
+  repoPath: string,
+  limit = 150,
+): Promise<GitLogResult> {
+  // Unit-separator (0x1f) is safe inside commit messages — never appears in git output
+  const SEP = "\x1f";
+  // %P = space-separated parent hashes; %D = ref decoration string
+  const format = [`%H`, `%h`, `%s`, `%an`, `%aI`, `%D`, `%P`].join(SEP);
+
+  const { stdout } = await execFileAsync(
+    "git",
+    ["log", "--all", "--parents", `--format=${format}`, "--decorate=full", `-n`, String(limit)],
+    { cwd: repoPath },
+  );
+
+  const commits: GitCommit[] = stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split(SEP);
+      const parentsRaw = (parts[6] ?? "").trim();
+      return {
+        hash: parts[0] ?? "",
+        shortHash: parts[1] ?? "",
+        subject: parts[2] ?? "",
+        authorName: parts[3] ?? "",
+        authorDate: parts[4] ?? "",
+        refs: parts[5] ?? "",
+        parents: parentsRaw ? parentsRaw.split(" ").filter(Boolean) : [],
+      };
+    });
+
+  // Resolve the currently checked-out branch name
+  let currentBranch = "HEAD";
+  try {
+    const { stdout: b } = await execFileAsync(
+      "git",
+      ["symbolic-ref", "--short", "HEAD"],
+      { cwd: repoPath },
+    );
+    currentBranch = b.trim();
+  } catch {
+    // detached HEAD — leave as "HEAD"
+  }
+
+  return { commits, currentBranch };
+}
+
+export async function gitCreateBranch(
+  repoPath: string,
+  name: string,
+  fromHash?: string,
+): Promise<void> {
+  const args = fromHash
+    ? ["checkout", "-b", name, fromHash]
+    : ["checkout", "-b", name];
+  await execFileAsync("git", args, { cwd: repoPath });
 }
 
 export interface FileDiffStat {
@@ -102,43 +186,40 @@ export async function gitDiffStat(
   const stats: Record<string, FileDiffStat> = {};
 
   // Helper: parse `git diff --numstat` output lines into the stats map.
+  // Binary files produce "-" for their counts — treat those as 0 explicitly.
   function parseNumstat(out: string) {
     for (const line of out.trim().split("\n")) {
       if (!line.trim()) continue;
       const parts = line.split("\t");
       if (parts.length < 3) continue;
-      const added = parseInt(parts[0] ?? "0", 10) || 0;
-      const removed = parseInt(parts[1] ?? "0", 10) || 0;
+      const added = parts[0] === "-" ? 0 : parseInt(parts[0] ?? "0", 10) || 0;
+      const removed = parts[1] === "-" ? 0 : parseInt(parts[1] ?? "0", 10) || 0;
       const file = parts[2]?.trim() ?? "";
       if (!file) continue;
-      if (stats[file]) {
-        stats[file]!.added += added;
-        stats[file]!.removed += removed;
-      } else {
-        stats[file] = { added, removed };
-      }
+      stats[file] = { added, removed };
     }
   }
 
-  // Unstaged changes (working tree vs index)
+  // Primary: compare working tree directly against HEAD — this covers both
+  // staged and unstaged changes as a single combined view (no double-counting).
   try {
     const { stdout } = await execFileAsync(
       "git",
-      ["diff", "--numstat", "--", ...relPaths],
+      ["diff", "HEAD", "--numstat", "--", ...relPaths],
       { cwd: repoPath },
     );
     parseNumstat(stdout);
-  } catch { /* not a git repo or other error — skip */ }
-
-  // Staged changes (index vs HEAD)
-  try {
-    const { stdout } = await execFileAsync(
-      "git",
-      ["diff", "--numstat", "--cached", "HEAD", "--", ...relPaths],
-      { cwd: repoPath },
-    );
-    parseNumstat(stdout);
-  } catch { /* no commits yet or other error — skip */ }
+  } catch {
+    // No commits yet (initial repo) — fall back to staged-only diff
+    try {
+      const { stdout } = await execFileAsync(
+        "git",
+        ["diff", "--numstat", "--cached", "--", ...relPaths],
+        { cwd: repoPath },
+      );
+      parseNumstat(stdout);
+    } catch { /* not a git repo or other error — skip */ }
+  }
 
   // For files that still have no entry, check if they are untracked (new files).
   // Count all their lines as "added".

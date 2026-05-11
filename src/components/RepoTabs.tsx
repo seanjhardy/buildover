@@ -39,11 +39,9 @@ export function RepoTabs({
               title={repo.path}
             >
               <span className="repo-tab-name">{repo.name}</span>
-              {badge && (
-                <span className="repo-tab-badge">
-                  <StatusIcon status={badge} />
-                </span>
-              )}
+              <span className="repo-tab-badge">
+                {badge && <StatusIcon status={badge} />}
+              </span>
               <span
                 className="repo-tab-close"
                 role="button"

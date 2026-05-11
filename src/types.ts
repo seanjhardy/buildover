@@ -151,6 +151,15 @@ export type ChatEvent =
   | { type: "turn_end"; ts: string }
   | ({ type: "context_usage"; ts: string } & ContextUsage);
 
+// A diverging branch at a fork point. Stores all events from the branching
+// user_message onwards (inclusive). Absent on linear (non-forked) chats.
+export interface ChatBranch {
+  id: string;               // e.g. "br_lx4k2abc"
+  parentMessageId: string;  // the user_message.id this branch diverged at
+  events: ChatEvent[];      // events from parentMessageId onwards (inclusive)
+  createdAt: string;
+}
+
 export interface ChatRecord {
   id: string;
   title: string;
@@ -163,6 +172,12 @@ export interface ChatRecord {
   createdAt: string;
   updatedAt: string;
   events: ChatEvent[];
+  /** Most recent context window usage — updated on every turn, used to
+   *  re-populate the context ring when replaying/loading a chat. */
+  lastContextUsage?: ContextUsage;
+  /** Diverging conversation branches created via message editing. Absent on
+   *  linear chats. record.events is always the currently active branch. */
+  branches?: ChatBranch[];
 }
 
 // ---- Wire protocol ----
@@ -230,6 +245,27 @@ export type ClientMessage =
       feedback?: string;
       // True when the user clicks "Stop" — aborts the turn.
       interrupt?: boolean;
+    }
+  | {
+      // Edit an existing user message, forking the conversation at that point.
+      // The server saves events from userMessageId onwards as a branch, then
+      // starts a fresh turn with the new text.
+      type: "fork_message";
+      chatId: string;
+      repoPath: string;
+      userMessageId: string;
+      newText: string;
+      model: Model;
+      permissionMode?: PermissionMode;
+    }
+  | {
+      // Navigate between branches at a given fork point. The server swaps the
+      // active trunk with the target branch so record.events is always current.
+      type: "switch_branch";
+      chatId: string;
+      repoPath: string;
+      parentMessageId: string;
+      targetBranchId: string;
     };
 
 export interface ContextUsage {
@@ -327,6 +363,13 @@ export type AgentEvent =
       chatId: string;
       record: ChatRecord;
       pendingPermissions: { requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[] }[];
+    }
+  // Emitted after a fork_message succeeds. A full chat_replay follows.
+  | {
+      type: "chat_forked";
+      chatId: string;
+      branchId: string;         // ID of the branch that now holds the old trunk
+      parentMessageId: string;  // which user_message was the fork point
     };
 
 // ---- Orchestrator wire protocol ----

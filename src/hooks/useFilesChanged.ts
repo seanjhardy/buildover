@@ -7,8 +7,8 @@ export interface FileEntry {
   path: string;
   /** Path relative to cwd, e.g. "src/foo.ts" */
   relPath: string;
-  /** write = Write tool, edit = Edit tool */
-  op: "write" | "edit";
+  /** write = Write tool, edit = Edit tool, delete = rm/unlink via Bash */
+  op: "write" | "edit" | "delete";
   added?: number;
   removed?: number;
 }
@@ -51,6 +51,32 @@ export function useFilesChanged(
         // Edit beats Write (more informative op label)
         if (!existing || (existing.op === "write" && op === "edit")) {
           map.set(absPath, { path: absPath, relPath, op });
+        }
+      }
+    }
+
+    // Second pass: detect deletions via Bash rm/unlink commands (best-effort).
+    // Only registers a delete if the path hasn't already been seen as write/edit.
+    const deletePattern =
+      /(?:^|\s)(?:rm\s+(?:-[rfvRFV]+\s+)*|unlink\s+)((?:\.{0,2}\/)?[\w.\-/]+\.\w+)/gm;
+    for (const turn of turns) {
+      if (turn.kind !== "assistant") continue;
+      for (const block of turn.content) {
+        if (block.type !== "tool_use" || block.name !== "Bash") continue;
+        const input = block.input as Record<string, unknown>;
+        const command = String(input.command ?? "");
+        if (!command) continue;
+        let match: RegExpExecArray | null;
+        deletePattern.lastIndex = 0;
+        while ((match = deletePattern.exec(command)) !== null) {
+          const rawPath = match[1]!.trim();
+          const absPath = rawPath.startsWith("/")
+            ? rawPath
+            : `${cwd}/${rawPath}`.replace(/\/\/+/g, "/");
+          if (!map.has(absPath)) {
+            const relPath = toRelPath(absPath, cwd);
+            map.set(absPath, { path: absPath, relPath, op: "delete" });
+          }
         }
       }
     }

@@ -20,11 +20,7 @@ export function QueuedMessages({ queue, onRemove, onFastForward }: Props) {
         <div key={msg.id} className="queued-item">
           <span className="queued-badge">Queued</span>
           <span className="queued-preview">
-            {msg.text
-              ? msg.text.length > 80
-                ? msg.text.slice(0, 80) + "…"
-                : msg.text
-              : "(attachment)"}
+            {msg.text ? msg.text : "(attachment)"}
           </span>
           <button
             className="queued-fast-forward"

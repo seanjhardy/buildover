@@ -173,10 +173,32 @@ export interface GitStatus {
   isDirty: boolean;
 }
 
+export interface GitCommit {
+  hash: string;
+  shortHash: string;
+  subject: string;
+  authorName: string;
+  authorDate: string;
+  refs: string;
+  parents: string[];
+}
+
+export interface GitLogResult {
+  commits: GitCommit[];
+  currentBranch: string;
+}
+
 export interface FileDiffStat {
   added: number;
   removed: number;
 }
+
+export const fileApi = {
+  readFile: (filePath: string) =>
+    getJson<{ content: string }>(
+      `/api/file/read?path=${encodeURIComponent(filePath)}`,
+    ).then((r) => r.content),
+};
 
 export const gitApi = {
   getStatus: (repoPath: string) =>
@@ -193,6 +215,9 @@ export const gitApi = {
   push: (repoPath: string) =>
     send<{ ok: boolean }>("POST", `/api/git/push`, { repoPath }),
 
+  forcePush: (repoPath: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/force-push`, { repoPath }),
+
   pull: (repoPath: string) =>
     send<{ ok: boolean }>("POST", `/api/git/pull`, { repoPath }),
 
@@ -200,4 +225,12 @@ export const gitApi = {
     getJson<{ stats: Record<string, FileDiffStat> }>(
       `/api/git/diff-stat?repoPath=${encodeURIComponent(repoPath)}&files=${encodeURIComponent(relPaths.join(","))}`,
     ).then((r) => r.stats),
+
+  getLog: (repoPath: string, limit = 150) =>
+    getJson<GitLogResult>(
+      `/api/git/log?repoPath=${encodeURIComponent(repoPath)}&limit=${limit}`,
+    ),
+
+  createBranch: (repoPath: string, name: string, fromHash?: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/branch`, { repoPath, name, fromHash }),
 };

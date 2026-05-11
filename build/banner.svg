@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 760 160">
+  <defs>
+    <!-- Card background: matches .composer #252525 with inset shadow feel -->
+    <linearGradient id="cardBg" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#282828"/>
+      <stop offset="100%" stop-color="#202020"/>
+    </linearGradient>
+
+    <!-- Logo bg: matches icon.svg radial gradient -->
+    <radialGradient id="logoBg" cx="50%" cy="38%" r="62%">
+      <stop offset="0%" stop-color="#2e2e2e"/>
+      <stop offset="100%" stop-color="#141414"/>
+    </radialGradient>
+
+    <!-- Dot-grid pattern background texture -->
+    <pattern id="dots" x="0" y="0" width="20" height="20" patternUnits="userSpaceOnUse">
+      <circle cx="1" cy="1" r="0.8" fill="#3c3c3c" opacity="0.5"/>
+    </pattern>
+
+    <!-- Hammer glow (mirrors icon.svg hammerShadow filter) -->
+    <filter id="hammerGlow" x="-40%" y="-40%" width="180%" height="180%">
+      <feDropShadow dx="0" dy="1.5" stdDeviation="2.5" flood-color="#d97757" flood-opacity="0.6"/>
+    </filter>
+
+    <!-- Outer card glow -->
+    <filter id="cardGlow" x="-2%" y="-5%" width="104%" height="120%">
+      <feGaussianBlur in="SourceAlpha" stdDeviation="6" result="blur"/>
+      <feColorMatrix in="blur" type="matrix"
+        values="0.85 0.47 0.34 0 0
+                0    0    0    0 0
+                0    0    0    0 0
+                0    0    0    0.25 0" result="glow"/>
+      <feMerge><feMergeNode in="glow"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
+
+    <!-- Logo clip -->
+    <clipPath id="logoClip">
+      <rect x="0" y="0" width="60" height="60" rx="14"/>
+    </clipPath>
+  </defs>
+
+  <!-- Outer card shadow glow -->
+  <rect x="3" y="3" width="754" height="154" rx="14" fill="none"
+        stroke="#d97757" stroke-width="1" opacity="0.18" filter="url(#cardGlow)"/>
+
+  <!-- Card body (mirrors .composer styles) -->
+  <rect x="1" y="1" width="758" height="158" rx="13" fill="url(#cardBg)"/>
+  <!-- Dot grid texture -->
+  <rect x="1" y="1" width="758" height="158" rx="13" fill="url(#dots)" opacity="0.6"/>
+  <!-- Inset top highlight -->
+  <rect x="1" y="1" width="758" height="50" rx="13" fill="white" opacity="0.018"/>
+  <!-- Border: 1px solid #3c3c3c -->
+  <rect x="1" y="1" width="758" height="158" rx="13" fill="none"
+        stroke="#3c3c3c" stroke-width="1.5"/>
+  <!-- Active-focus orange top accent line (mirrors :focus-within border-color #d97757) -->
+  <rect x="2" y="1.5" width="756" height="2.5" rx="1.5" fill="#d97757" opacity="0.9"/>
+
+  <!-- Logo (60x60) -->
+  <g transform="translate(28, 50)">
+    <rect x="0" y="0" width="60" height="60" rx="14" fill="url(#logoBg)" clip-path="url(#logoClip)"/>
+    <!-- Glow layers (scaled from icon.svg) -->
+    <rect x="1" y="1" width="58" height="58" rx="13" fill="none" stroke="#d97757" stroke-width="9"   opacity="0.08"/>
+    <rect x="1" y="1" width="58" height="58" rx="13" fill="none" stroke="#d97757" stroke-width="6"   opacity="0.13"/>
+    <rect x="1" y="1" width="58" height="58" rx="13" fill="none" stroke="#d97757" stroke-width="4"   opacity="0.22"/>
+    <rect x="1" y="1" width="58" height="58" rx="13" fill="none" stroke="#d97757" stroke-width="2.5" opacity="0.38"/>
+    <rect x="1" y="1" width="58" height="58" rx="13" fill="none" stroke="#d97757" stroke-width="1.5" opacity="0.78"/>
+    <!-- Crisp inner border -->
+    <rect x="1" y="1" width="58" height="58" rx="13" fill="none" stroke="#f0a080" stroke-width="0.75" opacity="0.92"/>
+    <!-- Hammer -->
+    <g transform="translate(30,30) rotate(-35) scale(0.058)" filter="url(#hammerGlow)">
+      <rect x="-165" y="-230" width="330" height="200" rx="28" fill="#d97757"/>
+      <rect x="-165" y="-230" width="330" height="48"  rx="14" fill="#e8a882" opacity="0.35"/>
+      <rect x="-165" y="-62"  width="330" height="32"  rx="14" fill="#a0522d" opacity="0.45"/>
+      <rect x="-30"  y="-238" width="60"  height="38"  rx="8"  fill="#141414" opacity="0.5"/>
+      <rect x="-38"  y="-30"  width="76"  height="340" rx="22" fill="#c46a40"/>
+      <rect x="-18"  y="-30"  width="24"  height="340" rx="12" fill="#e8a882" opacity="0.25"/>
+      <rect x="-38"  y="280"  width="76"  height="30"  rx="22" fill="#a0522d" opacity="0.6"/>
+    </g>
+  </g>
+
+  <!-- Brand text -->
+  <text x="106" y="90"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="40" font-weight="700" letter-spacing="-1.5" fill="#cccccc">build</text>
+  <text x="228" y="90"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="40" font-weight="700" letter-spacing="-1.5" fill="#d97757">over</text>
+
+  <!-- Tagline -->
+  <text x="108" y="113"
+        font-family="-apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif"
+        font-size="13" font-weight="400" fill="#969696" letter-spacing="0.15">
+    AI-powered developer assistant · built on Claude
+  </text>
+
+  <!-- Divider (mirrors .composer-bar top border) -->
+  <line x1="28" y1="136" x2="732" y2="136"
+        stroke="rgba(255,255,255,0.06)" stroke-width="1"/>
+
+  <!-- Tech chips (mirrors .attachment chip style) -->
+  <g transform="translate(28,144)">
+    <rect width="57" height="20" rx="5" fill="#1e1e1e" stroke="#3c3c3c" stroke-width="1"/>
+    <circle cx="10" cy="10" r="3.5" fill="#61dafb"/>
+    <text x="18" y="14.2" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="10" fill="#969696">React</text>
+  </g>
+  <g transform="translate(93,144)">
+    <rect width="66" height="20" rx="5" fill="#1e1e1e" stroke="#3c3c3c" stroke-width="1"/>
+    <circle cx="10" cy="10" r="3.5" fill="#9feaf9"/>
+    <text x="18" y="14.2" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="10" fill="#969696">Electron</text>
+  </g>
+  <g transform="translate(167,144)">
+    <rect width="80" height="20" rx="5" fill="#1e1e1e" stroke="#3c3c3c" stroke-width="1"/>
+    <circle cx="10" cy="10" r="3.5" fill="#3178c6"/>
+    <text x="18" y="14.2" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="10" fill="#969696">TypeScript</text>
+  </g>
+  <!-- Claude SDK chip — orange accent, mirrors mode-popup-item.active -->
+  <g transform="translate(255,144)">
+    <rect width="76" height="20" rx="5" fill="rgba(217,119,87,0.08)" stroke="rgba(217,119,87,0.32)" stroke-width="1"/>
+    <circle cx="10" cy="10" r="3.5" fill="#d97757"/>
+    <text x="18" y="14.2" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="10" fill="#d97757">Claude SDK</text>
+  </g>
+
+  <!-- Connection pill (mirrors .connection-pill) -->
+  <g transform="translate(620,144)">
+    <rect width="114" height="20" rx="10" fill="#1e1e1e" stroke="#2b2b2b" stroke-width="1"/>
+    <circle cx="11" cy="10" r="3" fill="#89d185"/>
+    <text x="19" y="14.2" font-family="-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif" font-size="10" fill="#969696">github.com/buildover</text>
+  </g>
+</svg>

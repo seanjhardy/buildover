@@ -64,6 +64,7 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "^0.1.0",
     "express": "^4.21.2",
+    "highlight.js": "^11.11.1",
     "lucide-react": "^1.14.0",
     "node-cron": "^4.2.1",
     "openwakeword-wasm-browser": "^0.1.1",

@@ -2,10 +2,12 @@ import { runAgentTurn, type RawAgentEvent } from "./agent.js";
 import {
   appendEvent,
   computeStatus,
+  forkAtMessage,
   readChat,
   rebuildIndex,
   recoverStaleChat,
   setTitle,
+  switchBranch,
   withChatLock,
   writeChat,
 } from "./chats.js";
@@ -245,12 +247,16 @@ class AgentSession {
   // after a server-restart interruption. In that case we skip persisting and
   // echoing the user message (it's already in the transcript) and run the
   // agent turn directly with the saved text.
+  //
+  // When `silent` is true (used for auto-compact) no assistant/result turns
+  // are broadcast to subscribers — the compact runs invisibly in the background.
   async runTurn(args: {
     text: string;
     model: Model;
     permissionMode: PermissionMode;
     attachments?: Attachment[];
     isRetry?: boolean;
+    silent?: boolean;
   }): Promise<void> {
     if (this.running) {
       throw new Error("Chat already running");
@@ -306,6 +312,18 @@ class AgentSession {
     // Track the latest model so we can use it for the auto-compact turn.
     this.lastModel = args.model;
 
+    // Events that should be hidden from subscribers during a silent (auto-compact) turn.
+    // We still persist assistant/result events so the session history is correct,
+    // but we don't broadcast them so they don't appear as visible chat turns.
+    const SILENT_SUPPRESS = new Set([
+      "assistant",
+      "user_tool_results",
+      "result",
+      "user_message_echo",
+      "turn_start",
+      "turn_end",
+    ]);
+
     const emit = (event: RawAgentEvent) => {
       // Tag with this session's chatId before broadcasting / persisting.
       const tagged = { ...event, chatId: this.chatId } as AgentEvent;
@@ -313,7 +331,11 @@ class AgentSession {
       if (tagged.type === "context_usage") {
         this.lastContextPct = tagged.pct;
       }
-      this.broadcast(tagged);
+      // During a silent turn (auto-compact), suppress turn-content events from
+      // reaching subscribers so nothing appears in the chat UI.
+      if (!args.silent || !SILENT_SUPPRESS.has(tagged.type)) {
+        this.broadcast(tagged);
+      }
       void this.persistAgentEvent(tagged);
     };
 
@@ -398,7 +420,8 @@ class AgentSession {
           text: "/compact",
           model: this.lastModel,
           permissionMode: args.permissionMode,
-          isRetry: false,
+          isRetry: true,  // don't echo "/compact" as a user message
+          silent: true,   // suppress assistant/result turns from reaching the UI
         });
       }
     }
@@ -414,9 +437,29 @@ class AgentSession {
       event.type === "chat_title" ||
       event.type === "chat_replay" ||
       event.type === "user_message_echo" ||
-      event.type === "pending_attention" ||
-      event.type === "context_usage"
+      event.type === "pending_attention"
     ) {
+      return;
+    }
+
+    // context_usage is not a turn event — persist it as a top-level field on
+    // the ChatRecord so it survives page reload and can be re-emitted on replay,
+    // without bloating the events array with a new entry every turn.
+    if (event.type === "context_usage") {
+      await withChatLock(this.repoPath, this.chatId, async () => {
+        const r = await readChat(this.repoPath, this.chatId);
+        if (!r) return;
+        r.lastContextUsage = {
+          usedTokens: event.usedTokens,
+          contextWindowSize: event.contextWindowSize,
+          pct: event.pct,
+          inputTokens: event.inputTokens,
+          outputTokens: event.outputTokens,
+          cacheReadTokens: event.cacheReadTokens,
+          cacheWriteTokens: event.cacheWriteTokens,
+        };
+        await writeChat(this.repoPath, r);
+      });
       return;
     }
     const ts = new Date().toISOString();
@@ -424,6 +467,82 @@ class AgentSession {
     const persisted = { ...rest, ts } as ChatEvent;
     const updated = await this.record(persisted);
     await this.pushStatusFor(updated);
+  }
+
+  // Fork the conversation at an existing user message. Saves the old trunk
+  // from that point as a branch, then starts a fresh agent turn with newText.
+  async runFork(args: {
+    userMessageId: string;
+    newText: string;
+    model: Model;
+    permissionMode: PermissionMode;
+  }): Promise<void> {
+    if (this.running) throw new Error("Chat already running");
+
+    const result = await forkAtMessage(
+      this.repoPath,
+      this.chatId,
+      args.userMessageId,
+      args.newText,
+    );
+    if (!result) throw new Error("Message not found or already branched away");
+
+    // Notify subscribers: fork happened, then send full replay with new state.
+    this.broadcast({
+      type: "chat_forked",
+      chatId: this.chatId,
+      branchId: result.branchId,
+      parentMessageId: args.userMessageId,
+    });
+    this.broadcast({
+      type: "chat_replay",
+      chatId: this.chatId,
+      record: result.record,
+      pendingPermissions: [],
+    });
+
+    await rebuildIndex(this.repoPath);
+
+    // Now run the new turn. The user_message is already persisted by
+    // forkAtMessage, so use isRetry=true to skip re-persisting it.
+    await this.runTurn({
+      text: args.newText,
+      model: args.model,
+      permissionMode: args.permissionMode,
+      isRetry: true,
+    });
+  }
+
+  // Switch the active branch at a fork point. Swaps trunk ↔ target branch
+  // on disk then broadcasts the updated replay to all subscribers.
+  async runSwitchBranch(args: {
+    parentMessageId: string;
+    targetBranchId: string;
+  }): Promise<void> {
+    if (this.running) throw new Error("Cannot switch branch while agent is running");
+
+    const record = await switchBranch(
+      this.repoPath,
+      this.chatId,
+      args.parentMessageId,
+      args.targetBranchId,
+    );
+    if (!record) throw new Error("Branch not found");
+
+    this.broadcast({
+      type: "chat_replay",
+      chatId: this.chatId,
+      record,
+      pendingPermissions: [],
+    });
+    this.broadcast({
+      type: "chat_status",
+      chatId: this.chatId,
+      status: record.status,
+      sessionId: record.sessionId,
+    });
+
+    await rebuildIndex(this.repoPath);
   }
 
   private async generateAndApplyTitle(firstPrompt: string): Promise<void> {

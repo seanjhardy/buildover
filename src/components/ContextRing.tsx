@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ContextUsage } from "../types.js";
 
 interface Props {
@@ -11,23 +11,36 @@ function formatTokens(n: number): string {
   return String(n);
 }
 
-// Returns a CSS colour based on usage percentage.
 function ringColor(pct: number): string {
   if (pct >= 80) return "var(--app-error, #e05252)";
   if (pct >= 60) return "#e8a838";
   return "var(--app-claude-orange, #d97757)";
 }
 
-// Returns the background track colour (always dimmed).
 const TRACK_COLOR = "rgba(255,255,255,0.10)";
-
 const SIZE = 26;
 const STROKE = 3;
 const RADIUS = (SIZE - STROKE) / 2;
 const CIRCUMFERENCE = 2 * Math.PI * RADIUS;
 
+// Tooltip width must match the CSS min-width so we can centre it correctly.
+const TOOLTIP_WIDTH = 230;
+
 export function ContextRing({ contextUsage }: Props) {
   const [hovered, setHovered] = useState(false);
+  // Position of the tooltip in viewport coords (fixed positioning).
+  const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
+  const ringRef = useRef<HTMLDivElement>(null);
+
+  // Recalculate tooltip position whenever hover state changes.
+  useEffect(() => {
+    if (!hovered || !ringRef.current) return;
+    const rect = ringRef.current.getBoundingClientRect();
+    // Centre the tooltip horizontally on the ring, place it above with 8px gap.
+    const x = rect.left + rect.width / 2 - TOOLTIP_WIDTH / 2;
+    const y = rect.top - 8; // tooltip bottom edge sits 8px above the ring top
+    setTooltipPos({ x, y });
+  }, [hovered]);
 
   if (!contextUsage) return null;
 
@@ -37,6 +50,7 @@ export function ContextRing({ contextUsage }: Props) {
 
   return (
     <div
+      ref={ringRef}
       className="context-ring"
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
@@ -78,7 +92,18 @@ export function ContextRing({ contextUsage }: Props) {
       </span>
 
       {hovered && (
-        <div className="context-ring-tooltip" role="tooltip">
+        <div
+          className="context-ring-tooltip"
+          role="tooltip"
+          style={{
+            // Use fixed positioning so the tooltip escapes any overflow:hidden
+            // or stacking-context parent (e.g. the sidebar or composer wrapper).
+            position: "fixed",
+            left: `${tooltipPos.x}px`,
+            top: `${tooltipPos.y}px`,
+            transform: "translateY(-100%)",
+          }}
+        >
           <div className="context-ring-tooltip-title">
             Context window
             <span className="context-ring-tooltip-pct" style={{ color }}>
