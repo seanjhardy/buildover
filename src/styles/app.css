@@ -143,6 +143,17 @@ button {
   display: flex;
   align-items: center;
   gap: 6px;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  cursor: default;
+}
+.connection-pill:not(.connected) {
+  cursor: pointer;
+}
+.connection-pill:not(.connected):hover {
+  background: var(--app-input-background);
 }
 .connection-pill .dot {
   width: 6px;
@@ -1934,15 +1945,17 @@ button {
 }
 
 /* right-rail: sits to the right of chat-column.
-   Wide: jump bar + files panel side by side.
+   Wide: jump bar + panels column (files + todo) side by side.
    Narrow: column layout so compact strips sit below the jump bar. */
 .right-rail {
   flex-shrink: 0;
   display: flex;
   flex-direction: row;
-  align-items: flex-start;
+  align-items: stretch;
   padding: 12px 4px 12px 0;
   gap: 8px;
+  position: relative;
+  z-index: 26; /* above chat-obscured-overlay (z-index: 25) so file clicks are not swallowed */
 }
 
 .right-rail--narrow {
@@ -1950,20 +1963,15 @@ button {
   align-items: center;
 }
 
-/* Column container that stacks compact todo + files strips vertically (narrow) */
+/* Column container that stacks files + todo panels vertically (wide & narrow) */
 .right-rail-panels {
   display: flex;
   flex-direction: column;
   align-items: stretch;
-  gap: 0;
-}
-
-.right-rail-panels .todo-panel {
-  margin-top: 12px;
-}
-
-.right-rail-panels .files-panel {
-  margin-top: 8px;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+  padding-top: 8px;
 }
 
 /* ---- Repo tabs ---- */
@@ -3709,8 +3717,8 @@ button {
 .todo-panel {
   width: 190px;
   flex-shrink: 0;
-  align-self: flex-start;   /* content-height only — don't stretch full height */
-  margin-top: 12px;
+  align-self: flex-start;
+  max-height: 50%;
   background: var(--app-secondary-background);
   border: 1px solid var(--app-primary-border-color);
   border-radius: 10px;
@@ -3737,6 +3745,9 @@ button {
   flex-direction: column;
   gap: 2px;
   padding: 8px 6px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .todo-item {
@@ -3931,8 +3942,7 @@ button {
 .files-panel {
   width: 340px;
   flex-shrink: 0;
-  align-self: flex-start;
-  margin-top: 8px;
+  max-height: 50%;
   background: var(--app-secondary-background);
   border: 1px solid var(--app-primary-border-color);
   border-radius: var(--corner-radius-medium);
@@ -3992,6 +4002,9 @@ button {
   display: flex;
   flex-direction: column;
   overflow-x: hidden;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
 }
 
 .files-tree-dir-group {
@@ -4759,32 +4772,39 @@ button {
 }
 
 .workspace--file-open .workspace-panels {
-  /* Slide left by the file-viewer width minus the exposed strip so that
-     200px of the chat peeks out from behind the sidebar on the left. */
   transform: translateX(calc(-50vw + 200px));
-  /* No mask here — the mask was erroneously making everything beyond 200px
-     of the panel transparent (including the chat content and files panel).
-     The file viewer sits above (z-index: 30) and covers the hidden area.
-     The fade on the exposed strip is handled by chat-obscured-overlay below. */
 }
 
-/* Click-catcher for the exposed chat strip. Lives directly inside .workspace
-   (a flex row) rather than inside workspace-panels, so it is unaffected by
-   the slide transform and overflow:hidden clipping on workspace-panels.
-   Left offset = sidebar width (280px); width = exposed strip (200px). */
-.chat-obscured-overlay {
+/* Gradient fade anchored to the sidebar's right wall.
+   left: 280px keeps it pinned to the sidebar edge — it never moves
+   even when workspace-panels slides. Fades from the chat background
+   colour (fully opaque) → transparent rightwards so the chat content
+   softly dissolves as it disappears behind the sidebar.
+   opacity transitions in/out with the same easing as the panel slide. */
+.chat-sidebar-fade {
   position: absolute;
   top: 0;
-  left: 280px;
+  left: 280px; /* sidebar width — anchored to sidebar's right edge */
   bottom: 0;
-  width: 200px;
-  z-index: 10;
+  width: 120px;
+  background: linear-gradient(
+    to right,
+    var(--app-primary-background) 0%,
+    transparent 100%
+  );
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.workspace--file-open .chat-sidebar-fade {
+  opacity: 1;
+}
+
+/* When a file is open, clicking the chat strip closes the viewer. */
+.workspace--file-open .workspace-panels {
   cursor: pointer;
-  /* Subtle right-edge fade so the strip blends into the file viewer.
-     Goes transparent-to-transparent for the first 140px, then fades in a
-     dark veil at the right edge only — purely cosmetic, not a mask. */
-  background: linear-gradient(to right, transparent 140px, rgba(0,0,0,0.18) 200px);
-  pointer-events: auto;
 }
 
 /* ============================================================ */
@@ -4886,10 +4906,19 @@ button {
   color: var(--app-primary-foreground);
 }
 
+/* --- Main area: editor body + minimap side by side --- */
+.file-viewer-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
 /* --- Body / editor area --- */
 .file-viewer-body {
   flex: 1;
-  min-height: 0;
+  min-width: 0;
   overflow: auto;
   position: relative;
 }
@@ -4924,50 +4953,106 @@ button {
   min-height: min-content;
 }
 
-/* Gutter: a sticky left column.
-   Line numbers are rendered as a single pre-formatted text node
-   (numbers joined by \n) so the browser only needs ONE DOM node
-   regardless of file length — dramatically faster than one div/line. */
+/* Gutter column — one div per display row (real + ghost deleted lines) */
 .file-viewer-gutter {
   flex-shrink: 0;
   width: 52px;
-  text-align: right;
-  padding: 14px 10px 14px 0;
+  padding: 14px 0;
   background: var(--app-primary-background);
   border-right: 1px solid var(--app-primary-border-color);
+  user-select: none;
   position: sticky;
   left: 0;
   z-index: 1;
-  user-select: none;
-  /* match the code's font metrics so lines align perfectly */
+}
+
+.file-viewer-gutter-row {
+  display: block;
+  height: 20px;
+  line-height: 20px;
+  text-align: right;
+  padding-right: 10px;
   font-family: var(--app-monospace-font-family);
   font-size: 12px;
-  line-height: 1.6;
   color: var(--app-secondary-foreground);
   opacity: 0.45;
-  /* preserve newline formatting so the single text node wraps per line */
   white-space: pre;
-  /* prevent the gutter from growing/shrinking with content */
-  overflow: hidden;
+}
+
+.file-viewer-gutter-row--deleted {
+  opacity: 1;
+  color: rgba(248, 81, 73, 0.80);
+  background: rgba(248, 81, 73, 0.10);
+}
+
+/* ── Code content column ─────────────────────────────────────────────── */
+.file-viewer-content-wrap {
+  flex: 1;
+  min-width: 0;
 }
 
 .file-viewer-pre {
   margin: 0;
-  padding: 14px 20px;
-  flex: 1;
+  padding: 14px 0;
   overflow: visible;
   background: transparent;
   tab-size: 2;
 }
 
-.file-viewer-code {
+/* Each display row — one div per line (real or ghost) */
+.file-viewer-row {
+  display: block;
+  height: 20px;
+  line-height: 20px;
+  padding: 0 20px;
+  white-space: pre;
   font-family: var(--app-monospace-font-family);
   font-size: 12.5px;
-  line-height: 1.6;
-  background: transparent !important;
-  white-space: pre;
-  display: block;
+  color: var(--app-foreground, #d4d4d4);
 }
+
+.file-viewer-row--added {
+  background: rgba(46, 160, 67, 0.13);
+  border-left: 3px solid rgba(46, 160, 67, 0.70);
+  padding-left: 17px; /* 20 - 3px border */
+}
+
+.file-viewer-row--deleted {
+  background: rgba(248, 81, 73, 0.13);
+  border-left: 3px solid rgba(248, 81, 73, 0.70);
+  padding-left: 17px;
+  color: rgba(248, 81, 73, 0.90);
+}
+
+/* ── Minimap sidebar ──────────────────────────────────────────────────── */
+/* Container sits outside the scrollable body — full height of .file-viewer-main */
+.file-viewer-minimap-wrap {
+  flex-shrink: 0;
+  width: 18px;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-secondary-background);
+  border-left: 1px solid var(--app-primary-border-color);
+  cursor: pointer;
+}
+
+/* Canvas fills the full height of the wrap */
+.file-viewer-minimap {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Status bar diff counts ───────────────────────────────────────────── */
+.file-viewer-diff-stat {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.file-viewer-diff-stat--add    { color: #9fefb4; font-weight: 600; }
+.file-viewer-diff-stat--remove { color: #ffb3a7; font-weight: 600; }
 
 /* --- Status bar --- */
 .file-viewer-statusbar {

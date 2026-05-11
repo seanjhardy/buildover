@@ -31,6 +31,7 @@ import {
   gitForcePush,
   gitPull,
   gitDiffStat,
+  gitFileDiff,
   gitLog,
   gitCreateBranch,
 } from "./git.js";
@@ -421,6 +422,20 @@ app.post("/api/git/branch", async (req, res) => {
     const fromHash = typeof req.body?.fromHash === "string" ? req.body.fromHash : undefined;
     await gitCreateBranch(repoPath, name, fromHash);
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/git/diff", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const relPath = String(req.query.file ?? "");
+    if (!relPath) throw new Error("file required");
+    const result = await gitFileDiff(repoPath, relPath);
+    res.json(result);
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),

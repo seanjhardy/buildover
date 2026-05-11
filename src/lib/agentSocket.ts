@@ -131,6 +131,20 @@ class AgentSocket {
     return () => this.reconnectListeners.delete(fn);
   }
 
+  /** Cancel any pending retry timer and immediately attempt a new connection.
+   *  Useful for a manual "reconnect" button in the UI. */
+  reconnectNow(): void {
+    if (this.retryTimer) {
+      clearTimeout(this.retryTimer);
+      this.retryTimer = null;
+    }
+    if (this.ws) {
+      this.ws.close();
+      this.ws = null;
+    }
+    this.connect();
+  }
+
   onChatEvent(chatId: string, fn: EventListener): () => void {
     let set = this.eventListeners.get(chatId);
     if (!set) {

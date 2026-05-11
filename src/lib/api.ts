@@ -226,6 +226,11 @@ export const gitApi = {
       `/api/git/diff-stat?repoPath=${encodeURIComponent(repoPath)}&files=${encodeURIComponent(relPaths.join(","))}`,
     ).then((r) => r.stats),
 
+  getDiff: (repoPath: string, relPath: string) =>
+    getJson<{ addedLines: number[]; removedGroups: { after: number; lines: string[] }[] }>(
+      `/api/git/diff?repoPath=${encodeURIComponent(repoPath)}&file=${encodeURIComponent(relPath)}`,
+    ),
+
   getLog: (repoPath: string, limit = 150) =>
     getJson<GitLogResult>(
       `/api/git/log?repoPath=${encodeURIComponent(repoPath)}&limit=${limit}`,

@@ -33,6 +33,9 @@ export function useChats(repoPath: string | null): UseChatsReturn {
   // Track which chatIds we've already wired live listeners for. Cleaned up
   // when the repoPath changes or the component unmounts.
   const subscribedRef = useRef<Set<string>>(new Set());
+  // Maps chatId → cleanup fn so we can tear down a single chat's subscription
+  // immediately when it is deleted (without waiting for the effect to re-run).
+  const cleanupMapRef = useRef<Map<string, () => void>>(new Map());
   const repoPathRef = useRef(repoPath);
   repoPathRef.current = repoPath;
 
@@ -80,8 +83,8 @@ export function useChats(repoPath: string | null): UseChatsReturn {
 
     // Wire up any chats that aren't subscribed yet. Called on mount and
     // whenever a new chat is added via the chats ref.
-    const cleanups: (() => void)[] = [];
     const subscribed = subscribedRef.current;
+    const cleanupMap = cleanupMapRef.current;
 
     function subscribeNewChats() {
       for (const chat of chatsRef.current) {
@@ -98,13 +101,15 @@ export function useChats(repoPath: string | null): UseChatsReturn {
           repoPath,
           withReplay: false,
         });
-        cleanups.push(() => {
+        const cleanup = () => {
           unsubscribeListener();
           subscribed.delete(chat.id);
+          cleanupMap.delete(chat.id);
           // Defer the unsubscribe WS message so the cleanup loop doesn't
           // block the React render that responds to the repo tab switch.
           setTimeout(() => agentSocket.send({ type: "unsubscribe", chatId: chat.id }), 0);
-        });
+        };
+        cleanupMap.set(chat.id, cleanup);
       }
     }
 
@@ -116,7 +121,7 @@ export function useChats(repoPath: string | null): UseChatsReturn {
 
     return () => {
       clearInterval(interval);
-      for (const fn of cleanups) fn();
+      for (const fn of cleanupMap.values()) fn();
     };
   }, [repoPath]);
 
@@ -168,6 +173,9 @@ export function useChats(repoPath: string | null): UseChatsReturn {
   const deleteChat = useCallback(
     async (chatId: string) => {
       if (!repoPath) return;
+      // Clean up the WS subscription for this chat immediately so the socket
+      // doesn't keep it in activeSubscriptions and re-subscribe on reconnect.
+      cleanupMapRef.current.get(chatId)?.();
       await api.deleteChat(repoPath, chatId);
       setChats((prev) => prev.filter((c) => c.id !== chatId));
     },

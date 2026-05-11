@@ -59,6 +59,10 @@ class AgentSession {
   private pendingAttentions = new Map<string, PendingAttention>();
   private abort?: AbortController;
   private running = false;
+  // True while a silent (auto-compact) turn is in progress. Used to suppress
+  // chat_status broadcasts for turn-content events so the client never sees
+  // the chat flicker to "running" and back during an invisible compact turn.
+  private currentTurnSilent = false;
   // Tracks the active turn's permissionMode so it can be updated mid-turn.
   // canUseTool reads this on every invocation via the getter passed to the
   // SDK, so toggling bypass takes effect on the next decision.
@@ -262,6 +266,7 @@ class AgentSession {
       throw new Error("Chat already running");
     }
     this.running = true;
+    this.currentTurnSilent = args.silent ?? false;
     this.abort = new AbortController();
     this.currentPermissionMode = args.permissionMode;
 
@@ -400,6 +405,7 @@ class AgentSession {
       });
     } finally {
       this.running = false;
+      this.currentTurnSilent = false;
       this.pendingPermissions.clear();
       const final = await withChatLock(this.repoPath, this.chatId, async () => {
         const r = await readChat(this.repoPath, this.chatId);
@@ -466,7 +472,23 @@ class AgentSession {
     const { chatId: _omit, ...rest } = event as AgentEvent & { chatId: string };
     const persisted = { ...rest, ts } as ChatEvent;
     const updated = await this.record(persisted);
-    await this.pushStatusFor(updated);
+    // During a silent (auto-compact) turn, skip broadcasting chat_status for
+    // turn-content events. Persisting turn_start would make computeStatus()
+    // return "running" and push that to clients, causing the chat to flicker
+    // to "running" and back — confusing the UI and the message-queue auto-send
+    // logic. The final pushStatusFor in runTurn's finally block broadcasts the
+    // correct terminal status once the compact turn is fully done.
+    const SILENT_SUPPRESS_TYPES = new Set([
+      "assistant",
+      "user_tool_results",
+      "result",
+      "user_message_echo",
+      "turn_start",
+      "turn_end",
+    ]);
+    if (!this.currentTurnSilent || !SILENT_SUPPRESS_TYPES.has(event.type)) {
+      await this.pushStatusFor(updated);
+    }
   }
 
   // Fork the conversation at an existing user message. Saves the old trunk

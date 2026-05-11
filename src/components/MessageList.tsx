@@ -23,6 +23,9 @@ export interface JumpBarHandle {
   // One entry per user message, in order. itemIndex is the index into the
   // Virtualizer's children array (accounting for the top-spacer at index 0).
   userItems: { id: string; text: string; itemIndex: number }[];
+  // Called by MessageList whenever userItems changes so the jump bar can
+  // refresh its state even when no scroll event fires (e.g. branch switch).
+  notifyUpdate?: () => void;
 }
 
 interface Props {
@@ -184,8 +187,16 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
       virtualizerRef,
       containerRef,
       userItems,
+      notifyUpdate: jumpBarRef.current?.notifyUpdate,
     };
   });
+
+  // Notify the jump bar whenever userItems changes (e.g. branch switch) so it
+  // can refresh its active dot and gradient without waiting for a scroll event.
+  useEffect(() => {
+    jumpBarRef?.current?.notifyUpdate?.();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userItems]);
 
   // On chat switch: arm the scroll-to-bottom flag and reset tool results.
   useEffect(() => {

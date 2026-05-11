@@ -26,6 +26,10 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
   // directly on every scroll event to avoid React re-render lag entirely.
   const gradRef = useRef<SVGLinearGradientElement>(null);
 
+  // Stable ref to the latest update() function so we can call it outside the
+  // scroll-listener effect (e.g. when userItems changes due to branch switch).
+  const updateRef = useRef<(() => void) | null>(null);
+
   // Attach a scroll listener to the virtualizer's scroll container.
   // The listener reads all position data from the VirtualizerHandle API
   // (scrollOffset, viewportSize, getItemOffset, getItemSize) rather than
@@ -145,9 +149,24 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
         }
       };
 
+      updateRef.current = update;
+
+      // Register as the notifyUpdate callback so MessageList can trigger a
+      // refresh when userItems changes (e.g. after a branch switch) without
+      // waiting for a scroll event.
+      if (jumpBarRef.current) {
+        jumpBarRef.current.notifyUpdate = update;
+      }
+
       el.addEventListener("scroll", update, { passive: true });
       update(); // run once immediately to set initial state
-      cleanup = () => el.removeEventListener("scroll", update);
+      cleanup = () => {
+        el.removeEventListener("scroll", update);
+        updateRef.current = null;
+        if (jumpBarRef.current) {
+          jumpBarRef.current.notifyUpdate = undefined;
+        }
+      };
     };
 
     let cleanup: (() => void) | null = null;
@@ -158,6 +177,7 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
       cleanup?.();
     };
   }, [jumpBarRef]);
+
 
   const jumpTo = useCallback(
     (id: string, itemIndex: number) => {

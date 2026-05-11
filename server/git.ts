@@ -1,5 +1,7 @@
 import { execFile } from "node:child_process";
+import { readFile } from "node:fs/promises";
 import { promisify } from "node:util";
+import { join } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -183,6 +185,12 @@ export async function gitDiffStat(
 ): Promise<Record<string, FileDiffStat>> {
   if (relPaths.length === 0) return {};
 
+  // Absolute paths are outside the repo (toRelPath fell back to the abs path
+  // when cwd didn't match). Git errors fatally if any out-of-repo absolute
+  // path is included — which causes the entire command to return nothing.
+  // Filter them out; they'll simply have no stats entry.
+  relPaths = relPaths.filter((p) => !p.startsWith("/"));
+
   const stats: Record<string, FileDiffStat> = {};
 
   // Helper: parse `git diff --numstat` output lines into the stats map.
@@ -246,4 +254,113 @@ export async function gitDiffStat(
   }
 
   return stats;
+}
+
+export interface FileDiffResult {
+  /** Sorted new-file line numbers that are additions */
+  addedLines: number[];
+  /**
+   * Removed line groups keyed by the new-file line number they appear *after*.
+   * e.g. after: 3 means the deleted lines should be shown between lines 3 and 4.
+   * after: 0 means they appear before line 1.
+   * Each entry is the text content of one deleted line.
+   */
+  removedGroups: { after: number; lines: string[] }[];
+}
+
+/**
+ * Returns per-line diff data for a single file relative to HEAD.
+ * - Tracks both added and removed line positions in the new file.
+ * - Falls back to staged diff if working-tree diff is empty.
+ * - Falls back to treating the whole file as new if the file is untracked.
+ * - Returns empty arrays for deleted files or binary files.
+ */
+export async function gitFileDiff(
+  repoPath: string,
+  relPath: string,
+): Promise<FileDiffResult> {
+  // Parse a unified diff into added line numbers and removed line groups.
+  // removedGroups: each group has `after` = the new-file line number it follows
+  // (0 = before line 1) and `lines` = the actual deleted text (without the leading "-").
+  function parseDiff(diffText: string): FileDiffResult {
+    const addedSet = new Set<number>();
+    // Map from `after` index → accumulated deleted lines
+    const removedMap = new Map<number, string[]>();
+
+    let newLine = 0;
+
+    for (const raw of diffText.split("\n")) {
+      // Hunk header: @@ -oldStart,oldCount +newStart,newCount @@
+      const hunkMatch = raw.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (hunkMatch) {
+        newLine = parseInt(hunkMatch[1]!, 10) - 1;
+        continue;
+      }
+
+      if (raw.startsWith("+") && !raw.startsWith("+++")) {
+        newLine++;
+        addedSet.add(newLine);
+      } else if (raw.startsWith("-") && !raw.startsWith("---")) {
+        // Collect the text of the deleted line (strip leading "-")
+        const text = raw.slice(1);
+        const after = newLine; // deleted after this new-file line (0 = before line 1)
+        if (!removedMap.has(after)) removedMap.set(after, []);
+        removedMap.get(after)!.push(text);
+      } else if (!raw.startsWith("\\")) {
+        if (!raw.startsWith("diff ") && !raw.startsWith("index ") &&
+            !raw.startsWith("--- ") && !raw.startsWith("+++ ")) {
+          newLine++;
+        }
+      }
+    }
+
+    const removedGroups = Array.from(removedMap.entries())
+      .sort(([a], [b]) => a - b)
+      .map(([after, lines]) => ({ after, lines }));
+
+    return {
+      addedLines: Array.from(addedSet).sort((a, b) => a - b),
+      removedGroups,
+    };
+  }
+
+  // Try: working-tree vs HEAD
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["diff", "HEAD", "--", relPath],
+      { cwd: repoPath, maxBuffer: 10 * 1024 * 1024 },
+    );
+    if (stdout.trim()) return parseDiff(stdout);
+  } catch { /* no HEAD yet */ }
+
+  // Try: staged vs HEAD (new repo with initial commit pending)
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["diff", "--cached", "--", relPath],
+      { cwd: repoPath, maxBuffer: 10 * 1024 * 1024 },
+    );
+    if (stdout.trim()) return parseDiff(stdout);
+  } catch { /* ignore */ }
+
+  // Try: untracked file — treat every line as added
+  try {
+    const { stdout: lsOut } = await execFileAsync(
+      "git",
+      ["ls-files", "--others", "--exclude-standard", "--", relPath],
+      { cwd: repoPath },
+    );
+    if (lsOut.trim()) {
+      const absPath = join(repoPath, relPath);
+      const content = await readFile(absPath, "utf8").catch(() => "");
+      const lineCount = content ? content.split("\n").length : 0;
+      return {
+        addedLines: Array.from({ length: lineCount }, (_, i) => i + 1),
+        removedGroups: [],
+      };
+    }
+  } catch { /* ignore */ }
+
+  return { addedLines: [], removedGroups: [] };
 }

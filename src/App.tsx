@@ -373,13 +373,30 @@ export default function App() {
 
   const handleCreateChat = useCallback(async () => {
     if (!activeRepo) return;
+    setOpenFile(null);
     const record = await chats.createChat(model, permissionMode);
     workspace.setActiveChat(record.id);
   }, [activeRepo, chats, model, permissionMode, workspace]);
 
   const handleDeleteChat = useCallback(async (chatId: string) => {
     await chats.deleteChat(chatId);
-    if (activeChatId === chatId) workspace.setActiveChat(null);
+    if (activeChatId === chatId) {
+      // Pick the top remaining chat using the same priority order as the sidebar:
+      // status group order first (awaiting_input > running > error > agent_done > idle > finished),
+      // then most recently updated within each group.
+      const GROUP_ORDER = ["awaiting_input", "running", "error", "agent_done", "idle", "finished"];
+      const remaining = chats.chats.filter((c) => c.id !== chatId);
+      const nextChat =
+        remaining
+          .slice()
+          .sort((a, b) => {
+            const ai = GROUP_ORDER.indexOf(a.status);
+            const bi = GROUP_ORDER.indexOf(b.status);
+            if (ai !== bi) return ai - bi;
+            return new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime();
+          })[0] ?? null;
+      workspace.setActiveChat(nextChat?.id ?? null);
+    }
     // Drop any queued messages for the deleted chat so they don't linger in state.
     setMessageQueues((prev) => {
       if (!prev[chatId]) return prev;
@@ -390,6 +407,7 @@ export default function App() {
   }, [chats, activeChatId, workspace]);
 
   const handleSelectChat = useCallback((id: string) => {
+    setOpenFile(null);
     workspace.setActiveChat(id);
   }, [workspace]);
 
@@ -554,7 +572,7 @@ export default function App() {
                 session {agent.sessionId.slice(0, 8)}
               </div>
             )}
-            <div
+            <button
               className={`connection-pill ${
                 agent.connection === "connected"
                   ? "connected"
@@ -562,10 +580,19 @@ export default function App() {
                     ? "error"
                     : ""
               }`}
+              onClick={
+                agent.connection !== "connected"
+                  ? () => agentSocket.reconnectNow()
+                  : undefined
+              }
+              disabled={agent.connection === "connected"}
+              title={
+                agent.connection !== "connected" ? "Click to reconnect" : undefined
+              }
             >
               <span className="dot" />
               {agent.connection}
-            </div>
+            </button>
           </div>
         </header>
 
@@ -599,6 +626,7 @@ export default function App() {
             {openFile && (
               <FileViewer
                 entry={openFile}
+                repoPath={activeRepo.path}
                 onClose={() => setOpenFile(null)}
               />
             )}
@@ -614,20 +642,16 @@ export default function App() {
               chatDrafts={chatDrafts}
               onOpenGraph={() => setGitGraphOpen(true)}
             />
-            {/* Chat-obscured click target — sits outside workspace-panels so it
-                isn't clipped by the panel's overflow:hidden or affected by the
-                slide transform. Positioned to cover only the exposed chat strip
-                so clicking it closes the file viewer. */}
-            {openFile && (
-              <div
-                className="chat-obscured-overlay"
-                onClick={() => setOpenFile(null)}
-                aria-label="Return to chat"
-              />
-            )}
+            {/* Gradient fade — anchored to the sidebar's right edge, always
+                in the DOM so the opacity transition plays on both open and close. */}
+            <div className="chat-sidebar-fade" />
             {/* workspace-panels: wraps only the chat-pane so it slides left
-                when the file viewer opens, while the sidebar stays put */}
-            <div className="workspace-panels">
+                when the file viewer opens, while the sidebar stays put.
+                When a file is open, clicking the exposed chat strip closes it. */}
+            <div
+              className="workspace-panels"
+              onClick={openFile ? () => setOpenFile(null) : undefined}
+            >
 
             <main className="chat-pane" ref={chatPaneRef}>
               {gitGraphOpen ? (
@@ -648,12 +672,6 @@ export default function App() {
                   </div>
                   <div className="chat-pane-body">
                     <div className="chat-group">
-                      {/* left-rail: todo panel (wide mode only) */}
-                      {!todoNarrow && todos.length > 0 && (
-                        <div className="left-rail">
-                          <TodoPanel todos={todos} compact={false} />
-                        </div>
-                      )}
                       <div className="chat-column">
                         <MessageList
                           turns={agent.turns}
@@ -717,17 +735,25 @@ export default function App() {
                           />
                         </div>
                       </div>
-                      {/* right-rail: jump bar always; files panel (wide); compact strips (narrow) */}
-                      <div className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`}>
+                      {/* right-rail: jump bar always; files panel + todo panel stacked (wide); compact todo strip (narrow) */}
+                      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+                      <div className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
                         <MessageJumpBar
                           jumpBarRef={jumpBarRef}
                         />
-                        {!todoNarrow && filesChanged.length > 0 && (
-                          <FilesPanel
-                            files={filesChanged}
-                            onFileOpen={setOpenFile}
-                            activeFilePath={openFile?.path ?? null}
-                          />
+                        {!todoNarrow && (filesChanged.length > 0 || todos.length > 0) && (
+                          <div className="right-rail-panels">
+                            {filesChanged.length > 0 && (
+                              <FilesPanel
+                                files={filesChanged}
+                                onFileOpen={setOpenFile}
+                                activeFilePath={openFile?.path ?? null}
+                              />
+                            )}
+                            {todos.length > 0 && (
+                              <TodoPanel todos={todos} compact={false} />
+                            )}
+                          </div>
                         )}
                         {todoNarrow && todos.length > 0 && (
                           <div className="right-rail-panels">

@@ -279,10 +279,19 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       }
     }
   } catch (err) {
-    emit({
-      type: "error",
-      message: err instanceof Error ? err.message : String(err),
-    });
+    // AbortErrors are intentional interruptions (user clicked stop, or force-forwarded
+    // a queued message). Don't emit them as visible error events in the chat.
+    const isAbort =
+      (err instanceof Error && err.name === "AbortError") ||
+      (typeof DOMException !== "undefined" &&
+        err instanceof DOMException &&
+        err.name === "AbortError");
+    if (!isAbort) {
+      emit({
+        type: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
+    }
   } finally {
     emit({ type: "turn_end" });
   }
