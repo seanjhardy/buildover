@@ -1,13 +1,13 @@
 <img src="build/banner.svg" alt="buildover" width="760"/>
 
-![example](example.png)
-
 A local browser chat that runs the **real Claude Code agent loop** under the hood — same harness as the VS Code extension. Built with Vite + React on the frontend and `@anthropic-ai/claude-agent-sdk` on a small Node server.
 
 ```
 Browser (Vite + React)  ←─ WebSocket ─→  Local Node server  ──→  Claude Code agent loop
                                                                   (via @anthropic-ai/claude-agent-sdk)
 ```
+
+![example](example.png)
 
 ## v1 features
 
