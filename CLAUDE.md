@@ -1,5 +1,12 @@
 # Buildover Agent Instructions
 
+## Search Tools
+
+Always use `rg` (ripgrep) instead of `grep` for searching file contents. Ripgrep is faster, respects `.gitignore` by default, and supports the same common flags (`-n`, `-i`, `-r`, etc.). For example:
+
+- Use `rg "pattern" path/` instead of `grep -r "pattern" path/`
+- Use `rg --type ts "pattern"` instead of `grep -r --include="*.ts" "pattern"`
+
 ## RequestUserAttention Tool
 
 Use `RequestUserAttention` **only when you need a response or decision from the user** — for example, when you have a question that requires their input, when you have finished research and need them to choose a direction, or when you are about to take an action and need explicit sign-off.

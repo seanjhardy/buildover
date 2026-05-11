@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import type { PendingPermission } from "../hooks/useAgent.js";
+import type { PendingAttention, PendingPermission } from "../hooks/useAgent.js";
 
 type AllowResult = {
   behavior: "allow";
@@ -575,6 +575,89 @@ function Indicator({
   return (
     <div className={`indicator radio ${selected ? "checked" : ""}`}>
       {selected && <div className="radio-dot" />}
+    </div>
+  );
+}
+
+// ---- AttentionPrompt -------------------------------------------------------
+// A standalone prompt for RequestUserAttention that bypasses the permission
+// system entirely. The tool handler blocks until respondAttention() is called,
+// so this cannot be auto-acknowledged by Claude Code's bypass mode.
+
+interface AttentionPromptProps {
+  pending: PendingAttention;
+  onRespond: (attentionId: string, feedback?: string, interrupt?: boolean) => void;
+}
+
+export function AttentionPrompt({ pending, onRespond }: AttentionPromptProps) {
+  const [feedback, setFeedback] = useState("");
+  const containerRef = useRef<HTMLDivElement>(null);
+
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    setReady(false);
+    const t = setTimeout(() => setReady(true), 350);
+    return () => clearTimeout(t);
+  }, [pending.attentionId]);
+
+  useEffect(() => {
+    containerRef.current?.focus();
+  }, [pending.attentionId]);
+
+  const handleContinue = () => onRespond(pending.attentionId, feedback.trim() || undefined, false);
+  const handleStop = () => onRespond(pending.attentionId, feedback.trim() || undefined, true);
+
+  const onKeyDown = (e: React.KeyboardEvent<HTMLDivElement>) => {
+    if (!ready) return;
+    if (e.key === "Escape") { e.preventDefault(); handleStop(); return; }
+    const tag = (e.target as HTMLElement).tagName;
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (e.key === "1") handleContinue();
+    else if (e.key === "2") handleStop();
+  };
+
+  return (
+    <div
+      ref={containerRef}
+      className="permission"
+      data-tool="RequestUserAttention"
+      tabIndex={0}
+      onKeyDown={onKeyDown}
+    >
+      <div className="permission-header">Attention needed</div>
+      <div className="permission-body">
+        <div className="plan-body assistant-text">
+          <p style={{ margin: "0 0 8px" }}>{pending.message}</p>
+          {pending.summary && (
+            <ReactMarkdown remarkPlugins={[remarkGfm]}>{pending.summary}</ReactMarkdown>
+          )}
+        </div>
+      </div>
+      <input
+        className="permission-reject-input"
+        placeholder="Optional feedback for Claude"
+        value={feedback}
+        onChange={(e) => setFeedback(e.target.value)}
+      />
+      <div className="permission-actions">
+        <button
+          className="btn btn-primary"
+          onClick={handleContinue}
+          disabled={!ready}
+        >
+          <span className="shortcut-num">1</span>
+          {feedback.trim() ? "Send feedback and continue" : "Continue"}
+        </button>
+        <button
+          className="btn"
+          onClick={handleStop}
+          disabled={!ready}
+        >
+          <span className="shortcut-num">2</span>
+          Stop
+        </button>
+      </div>
+      <div className="permission-hints">Esc to stop</div>
     </div>
   );
 }

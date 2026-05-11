@@ -51,5 +51,6 @@ function IconStrip({ todos }: { todos: AgentTodo[] }) {
 
 export function TodoPanel({ todos, compact }: Props) {
   if (todos.length === 0) return null;
+  if (todos.every((t) => t.status === "completed")) return null;
   return compact ? <IconStrip todos={todos} /> : <FullPanel todos={todos} />;
 }

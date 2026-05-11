@@ -28,6 +28,7 @@ import {
   gitCommit,
   gitPush,
   gitPull,
+  gitDiffStat,
 } from "./git.js";
 import {
   readDashboard,
@@ -383,6 +384,22 @@ app.post("/api/git/pull", async (req, res) => {
   }
 });
 
+app.get("/api/git/diff-stat", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const filesParam = String(req.query.files ?? "");
+    const relPaths = filesParam
+      ? filesParam.split(",").map((f) => f.trim()).filter(Boolean)
+      : [];
+    const stats = await gitDiffStat(repoPath, relPaths);
+    res.json({ stats });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 // ---- Dashboard ----
 app.get("/api/dashboard", async (_req, res) => {
   try {
@@ -633,6 +650,16 @@ wss.on("connection", (ws: WebSocket) => {
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
           session.resolvePermission(msg.requestId, msg.result);
+          break;
+        }
+        case "attention_ack": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const session = getSession(sub.repoPath, msg.chatId);
+          session.resolveAttentionAck(msg.attentionId, {
+            feedback: msg.feedback,
+            interrupt: msg.interrupt,
+          });
           break;
         }
         case "interrupt": {

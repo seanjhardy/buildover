@@ -37,6 +37,14 @@ interface PendingPermission {
   ) => void;
 }
 
+interface PendingAttention {
+  attentionId: string;
+  resolve: (result: { feedback?: string; interrupt?: boolean }) => void;
+}
+
+// Percentage of context window used that triggers automatic compaction.
+const AUTO_COMPACT_THRESHOLD = 80;
+
 // One AgentSession per chat. Lives independently of the WS connections that
 // happen to be subscribed at any given moment — closing the browser does not
 // stop the agent. Persistence is the source of truth; subscribers are pushed
@@ -46,12 +54,17 @@ class AgentSession {
   readonly repoPath: string;
   private subscribers = new Set<Subscriber>();
   private pendingPermissions = new Map<string, PendingPermission>();
+  private pendingAttentions = new Map<string, PendingAttention>();
   private abort?: AbortController;
   private running = false;
   // Tracks the active turn's permissionMode so it can be updated mid-turn.
   // canUseTool reads this on every invocation via the getter passed to the
   // SDK, so toggling bypass takes effect on the next decision.
   private currentPermissionMode: PermissionMode = "default";
+  // Latest context window usage percentage — updated each time a context_usage
+  // event arrives. Used to decide whether to auto-compact after a turn ends.
+  private lastContextPct = 0;
+  private lastModel: Model = "claude-sonnet-4-6";
 
   constructor(chatId: string, repoPath: string) {
     this.chatId = chatId;
@@ -130,16 +143,40 @@ class AgentSession {
     return true;
   }
 
+  // Tools that must always surface a UI prompt regardless of permission mode,
+  // because they are user-interaction checkpoints, not dangerous operations.
+  // Must stay in sync with the same set in agent.ts and App.tsx.
+  private static readonly ALWAYS_PROMPT_TOOLS = new Set([
+    "ExitPlanMode",
+    "RequestUserAttention",
+  ]);
+
   // Updates the in-flight turn's permissionMode. When switching to bypass we
   // also auto-resolve any outstanding permission prompts so the user doesn't
   // have to click each one individually after toggling the mode.
+  // Exception: tools in ALWAYS_PROMPT_TOOLS (e.g. RequestUserAttention) must
+  // never be auto-resolved — they are genuine user checkpoints.
   setPermissionMode(mode: PermissionMode): void {
     this.currentPermissionMode = mode;
     if (mode === "bypassPermissions" && this.pendingPermissions.size > 0) {
-      for (const [requestId] of this.pendingPermissions) {
+      for (const [requestId, pending] of this.pendingPermissions) {
+        if (AgentSession.ALWAYS_PROMPT_TOOLS.has(pending.toolName)) continue;
         this.resolvePermission(requestId, { behavior: "allow" });
       }
     }
+  }
+
+  // Resolves a pending RequestUserAttention ack. Called when the client sends
+  // an attention_ack message. Returns false if the attentionId is unknown.
+  resolveAttentionAck(
+    attentionId: string,
+    result: { feedback?: string; interrupt?: boolean },
+  ): boolean {
+    const pending = this.pendingAttentions.get(attentionId);
+    if (!pending) return false;
+    this.pendingAttentions.delete(attentionId);
+    pending.resolve(result);
+    return true;
   }
 
   interrupt(): void {
@@ -152,6 +189,11 @@ class AgentSession {
       });
     }
     this.pendingPermissions.clear();
+    // Also unblock any tool handlers waiting on an attention ack.
+    for (const [, pending] of this.pendingAttentions) {
+      pending.resolve({ interrupt: true });
+    }
+    this.pendingAttentions.clear();
     // If there's no live turn, the abort above was a no-op but the persisted
     // record may still claim "running" (e.g. a previous server died mid-turn
     // and this AgentSession was just spun up by getSession). Heal the record
@@ -261,9 +303,16 @@ class AgentSession {
       }
     }
 
+    // Track the latest model so we can use it for the auto-compact turn.
+    this.lastModel = args.model;
+
     const emit = (event: RawAgentEvent) => {
       // Tag with this session's chatId before broadcasting / persisting.
       const tagged = { ...event, chatId: this.chatId } as AgentEvent;
+      // Track context usage so we can auto-compact after the turn ends.
+      if (tagged.type === "context_usage") {
+        this.lastContextPct = tagged.pct;
+      }
       this.broadcast(tagged);
       void this.persistAgentEvent(tagged);
     };
@@ -301,6 +350,22 @@ class AgentSession {
             this.broadcast(ev);
             void this.persistAgentEvent(ev);
           }),
+        requestAttentionAck: (req) =>
+          new Promise((resolve) => {
+            this.pendingAttentions.set(req.attentionId, {
+              attentionId: req.attentionId,
+              resolve,
+            });
+            const ev: AgentEvent = {
+              type: "pending_attention",
+              chatId: this.chatId,
+              attentionId: req.attentionId,
+              message: req.message,
+              summary: req.summary,
+            };
+            this.broadcast(ev);
+            void this.persistAgentEvent(ev);
+          }),
         abortController: this.abort,
       });
     } catch (err) {
@@ -322,16 +387,35 @@ class AgentSession {
         return r;
       });
       if (final) await this.pushStatusFor(final);
+
+      // Auto-compact if the context window is getting full.
+      // Guard: don't re-trigger on the compact turn itself to avoid a loop.
+      if (
+        this.lastContextPct >= AUTO_COMPACT_THRESHOLD &&
+        !args.text.startsWith("/compact")
+      ) {
+        void this.runTurn({
+          text: "/compact",
+          model: this.lastModel,
+          permissionMode: args.permissionMode,
+          isRetry: false,
+        });
+      }
     }
   }
 
   private async persistAgentEvent(event: AgentEvent): Promise<void> {
     // Drop our own status/title/replay envelopes from the persisted log.
+    // pending_attention is also excluded: it's transient blocking state —
+    // the attentionId promise is gone after a restart so replaying it would
+    // deadlock. The client re-shows the message from the persistent chat turn.
     if (
       event.type === "chat_status" ||
       event.type === "chat_title" ||
       event.type === "chat_replay" ||
-      event.type === "user_message_echo"
+      event.type === "user_message_echo" ||
+      event.type === "pending_attention" ||
+      event.type === "context_usage"
     ) {
       return;
     }

@@ -4,6 +4,11 @@ import remarkGfm from "remark-gfm";
 import type { ContentBlock } from "../types.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolUseBlock } from "./ToolUseBlock.js";
+import { ToolGroup } from "./ToolGroup.js";
+
+// Runs of 3+ consecutive tool_use blocks are collapsed under a single
+// "N tools called" header. Smaller runs render inline as before.
+const TOOL_GROUP_THRESHOLD = 3;
 
 interface Props {
   content: ContentBlock[];
@@ -13,13 +18,83 @@ interface Props {
   cwd?: string;
 }
 
+// A virtual "row" produced by groupContent — either a single content block,
+// or a group of consecutive tool_use blocks meant to be rendered together.
+type Row =
+  | { kind: "block"; block: ContentBlock; key: string }
+  | {
+      kind: "tool-group";
+      tools: Extract<ContentBlock, { type: "tool_use" }>[];
+      key: string;
+    };
+
+// RenderSVG is a presentational tool — its "tool call" is just the transport
+// for SVG markup. It must always render inline as a graphic and never get
+// folded into a "N tools called" group.
+function isPresentationalTool(name: string): boolean {
+  return name === "RenderSVG" || name.endsWith("__RenderSVG");
+}
+
+// Walks the content array and packs consecutive tool_use blocks into groups.
+// Presentational tools (e.g. RenderSVG) break the run so they always render
+// as standalone blocks.
+function groupContent(content: ContentBlock[]): Row[] {
+  const rows: Row[] = [];
+  let i = 0;
+  while (i < content.length) {
+    const block = content[i];
+    if (
+      block.type === "tool_use" &&
+      !isPresentationalTool(block.name)
+    ) {
+      // Greedily consume the run of consecutive groupable tool_use blocks.
+      const run: Extract<ContentBlock, { type: "tool_use" }>[] = [];
+      let j = i;
+      while (
+        j < content.length &&
+        content[j].type === "tool_use" &&
+        !isPresentationalTool(
+          (content[j] as Extract<ContentBlock, { type: "tool_use" }>).name,
+        )
+      ) {
+        run.push(content[j] as Extract<ContentBlock, { type: "tool_use" }>);
+        j++;
+      }
+      if (run.length >= TOOL_GROUP_THRESHOLD) {
+        rows.push({ kind: "tool-group", tools: run, key: `tg-${run[0].id}` });
+      } else {
+        for (const t of run) {
+          rows.push({ kind: "block", block: t, key: t.id });
+        }
+      }
+      i = j;
+      continue;
+    }
+    rows.push({ kind: "block", block, key: `b-${i}` });
+    i++;
+  }
+  return rows;
+}
+
 function AssistantMessageInner({ content, toolResults, cwd }: Props) {
+  const rows = groupContent(content);
   return (
     <div className="message assistant">
-      {content.map((block, i) => {
+      {rows.map((row) => {
+        if (row.kind === "tool-group") {
+          return (
+            <ToolGroup
+              key={row.key}
+              tools={row.tools}
+              toolResults={toolResults}
+              cwd={cwd}
+            />
+          );
+        }
+        const block = row.block;
         if (block.type === "text") {
           return (
-            <div key={i} className="assistant-text">
+            <div key={row.key} className="assistant-text">
               <ReactMarkdown remarkPlugins={[remarkGfm]}>
                 {block.text}
               </ReactMarkdown>
@@ -27,12 +102,12 @@ function AssistantMessageInner({ content, toolResults, cwd }: Props) {
           );
         }
         if (block.type === "thinking") {
-          return <ThinkingBlock key={i} thinking={block.thinking} />;
+          return <ThinkingBlock key={row.key} thinking={block.thinking} />;
         }
         if (block.type === "tool_use") {
           return (
             <ToolUseBlock
-              key={block.id}
+              key={row.key}
               name={block.name}
               input={block.input}
               result={toolResults[block.id]}

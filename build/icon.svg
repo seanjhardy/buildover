@@ -50,21 +50,22 @@
   <g transform="translate(512,512) scale(0.9) translate(-512,-512)">
 
   <!-- Rounded background -->
-  <rect width="1024" height="1024" rx="220" ry="220" fill="url(#bgGradient)" filter="url(#innerShadow)"/>
+  <rect width="1024" height="1024" rx="220" ry="220" fill="url(#bgGradient)"/>
 
-  <!-- Orange glowing border ring -->
+  <!-- Glow layers: wide soft outer glow down to crisp inner line -->
   <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
-        fill="none"
-        stroke="#d97757"
-        stroke-width="6"
-        filter="url(#orangeGlow)"
-        opacity="0.9"/>
-  <!-- Crisp inner border line -->
+        fill="none" stroke="#d97757" stroke-width="80" opacity="0.08"/>
   <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
-        fill="none"
-        stroke="#e8895c"
-        stroke-width="2.5"
-        opacity="0.7"/>
+        fill="none" stroke="#d97757" stroke-width="55" opacity="0.13"/>
+  <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
+        fill="none" stroke="#d97757" stroke-width="38" opacity="0.20"/>
+  <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
+        fill="none" stroke="#d97757" stroke-width="24" opacity="0.35"/>
+  <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
+        fill="none" stroke="#d97757" stroke-width="14" opacity="0.75"/>
+  <!-- Crisp bright inner line -->
+  <rect x="8" y="8" width="1008" height="1008" rx="216" ry="216"
+        fill="none" stroke="#f0a080" stroke-width="6" opacity="0.95"/>
 
   <!-- Hammer (centered, slightly rotated -35deg around its head) -->
   <g transform="translate(512, 512) rotate(-35) scale(1.05)" filter="url(#hammerShadow)">

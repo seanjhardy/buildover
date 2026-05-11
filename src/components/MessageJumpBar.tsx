@@ -1,14 +1,8 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import type { ChatTurn } from "../hooks/useAgent.js";
+import { useCallback, useEffect, useRef, useState } from "react";
+import type { JumpBarHandle } from "./MessageList.js";
 
 interface Props {
-  turns: ChatTurn[];
-  scrollRef: React.RefObject<HTMLDivElement>;
-}
-
-interface UserMsg {
-  id: string;
-  text: string;
+  jumpBarRef: React.RefObject<JumpBarHandle | null>;
 }
 
 // Layout constants (SVG pixels)
@@ -20,124 +14,173 @@ const SVG_W        = 20;
 // Half-spread of the glow in SVG px (i.e. how tall the fade is either side)
 const GLOW_PX      = 50;
 
-export function MessageJumpBar({ turns, scrollRef }: Props) {
-  const barRef = useRef<HTMLDivElement>(null);
+export function MessageJumpBar({ jumpBarRef }: Props) {
   const [activeIdx, setActiveIdx]   = useState(0);
   const [hoveredIdx, setHoveredIdx] = useState<number | null>(null);
   const [tooltipY, setTooltipY]     = useState(0);
+  // Snapshot of user messages for rendering — updated on scroll so the bar
+  // always reflects the current turns without needing a prop.
+  const [userMsgs, setUserMsgs] = useState<{ id: string; text: string }[]>([]);
 
   // Direct ref to the SVG linearGradient element — we mutate its stops
   // directly on every scroll event to avoid React re-render lag entirely.
   const gradRef = useRef<SVGLinearGradientElement>(null);
 
-  const userMsgs = useMemo<UserMsg[]>(
-    () =>
-      turns
-        .filter((t): t is Extract<ChatTurn, { kind: "user" }> => t.kind === "user")
-        .map((t) => ({ id: t.id, text: t.text })),
-    [turns],
-  );
-
+  // Attach a scroll listener to the virtualizer's scroll container.
+  // The listener reads all position data from the VirtualizerHandle API
+  // (scrollOffset, viewportSize, getItemOffset, getItemSize) rather than
+  // querying the DOM, so it works correctly regardless of which items are
+  // currently rendered in the virtual window.
   useEffect(() => {
-    const container = scrollRef.current;
-    if (!container) return;
+    // Poll for the container: jumpBarRef.current is populated by MessageList's
+    // useEffect which runs after our own, so we retry with rAF until it's set.
+    let rafId: number;
 
-    const update = () => {
-      const els = Array.from(
-        container.querySelectorAll<HTMLElement>("[data-turn-kind='user']"),
-      );
-      if (els.length === 0) return;
+    const attach = () => {
+      const handle = jumpBarRef.current;
+      if (!handle) {
+        rafId = requestAnimationFrame(attach);
+        return;
+      }
+      const v = handle.virtualizerRef.current;
+      if (!v) {
+        rafId = requestAnimationFrame(attach);
+        return;
+      }
+      const el = handle.containerRef.current;
+      if (!el) {
+        rafId = requestAnimationFrame(attach);
+        return;
+      }
 
-      const containerRect = container.getBoundingClientRect();
-      const viewportMid   = containerRect.top + containerRect.height / 2;
+      const update = () => {
+        const jb = jumpBarRef.current;
+        if (!jb) return;
+        const virt = jb.virtualizerRef.current;
+        if (!virt) return;
+        const { userItems } = jb;
+        if (userItems.length === 0) return;
 
-      // Collect the centre-Y (in viewport px) of every user-message element
-      const msgCentres = els.map((el) => {
-        const r = el.getBoundingClientRect();
-        return r.top + r.height / 2;
-      });
+        // Sync userMsgs for rendering (only triggers re-render when turns change)
+        setUserMsgs((prev) => {
+          const next = userItems.map(({ id, text }) => ({ id, text }));
+          if (
+            prev.length === next.length &&
+            prev.every((m, i) => m.id === next[i].id)
+          ) {
+            return prev; // no change, bail to avoid re-render
+          }
+          return next;
+        });
 
-      // ── Snap: find the dot whose message is closest to viewport centre ──
-      let closest = 0;
-      let minDist = Infinity;
-      msgCentres.forEach((cy, i) => {
-        const d = Math.abs(cy - viewportMid);
-        if (d < minDist) { minDist = d; closest = i; }
-      });
-      setActiveIdx(closest);
+        // scrollOffset = pixels scrolled from the top of the virtual list
+        // viewportSize = visible height of the scroll container
+        const scrollOffset = virt.scrollOffset;
+        const viewportSize = virt.viewportSize;
+        const viewportMid  = scrollOffset + viewportSize / 2;
 
-      // ── Continuous: interpolate a fractional "dot index" ──────────────
-      const n = msgCentres.length;
-      let floatIdx: number;
+        // For each user message, get the offset of its top edge and compute
+        // its centre (top + half its size) in scroll-space.
+        const msgCentres = userItems.map(({ itemIndex }) => {
+          const top  = virt.getItemOffset(itemIndex);
+          const size = virt.getItemSize(itemIndex);
+          return top + size / 2;
+        });
 
-      if (viewportMid <= msgCentres[0]) {
-        floatIdx = 0;
-      } else if (viewportMid >= msgCentres[n - 1]) {
-        floatIdx = n - 1;
-      } else {
-        floatIdx = n - 1;
-        for (let i = 0; i < n - 1; i++) {
-          const a = msgCentres[i];
-          const b = msgCentres[i + 1];
-          if (viewportMid >= a && viewportMid <= b) {
-            floatIdx = i + (viewportMid - a) / (b - a);
-            break;
+        // ── Snap: find the dot whose message centre is closest to viewport mid ──
+        let closest = 0;
+        let minDist = Infinity;
+        msgCentres.forEach((cy, i) => {
+          const d = Math.abs(cy - viewportMid);
+          if (d < minDist) { minDist = d; closest = i; }
+        });
+        setActiveIdx(closest);
+
+        // ── Continuous: interpolate a fractional "dot index" ──────────────
+        const n = msgCentres.length;
+        let floatIdx: number;
+
+        if (viewportMid <= msgCentres[0]) {
+          floatIdx = 0;
+        } else if (viewportMid >= msgCentres[n - 1]) {
+          floatIdx = n - 1;
+        } else {
+          floatIdx = n - 1;
+          for (let i = 0; i < n - 1; i++) {
+            const a = msgCentres[i];
+            const b = msgCentres[i + 1];
+            if (viewportMid >= a && viewportMid <= b) {
+              floatIdx = i + (viewportMid - a) / (b - a);
+              break;
+            }
           }
         }
-      }
 
-      // Map float dot-index → SVG Y coordinate
-      const newGlowY = PAD_V + floatIdx * DOT_GAP;
+        // Map float dot-index → SVG Y coordinate
+        const newGlowY = PAD_V + floatIdx * DOT_GAP;
 
-      // ── Directly mutate gradient stops — no React re-render, zero lag ──
-      const grad = gradRef.current;
-      if (grad) {
-        const lineTop = PAD_V;
-        const lineBot = PAD_V + (n - 1) * DOT_GAP;
-        const lineLen = lineBot - lineTop;
-        const pct = (y: number) =>
-          lineLen > 0 ? `${(((y - lineTop) / lineLen) * 100).toFixed(2)}%` : "0%";
+        // ── Directly mutate gradient stops — no React re-render, zero lag ──
+        const grad = gradRef.current;
+        if (grad) {
+          const lineTop = PAD_V;
+          const lineBot = PAD_V + (n - 1) * DOT_GAP;
+          const lineLen = lineBot - lineTop;
+          const pct = (y: number) =>
+            lineLen > 0 ? `${(((y - lineTop) / lineLen) * 100).toFixed(2)}%` : "0%";
 
-        const g0px = Math.max(lineTop, newGlowY - GLOW_PX);
-        const g1px = Math.min(lineBot, newGlowY + GLOW_PX);
+          const g0px = Math.max(lineTop, newGlowY - GLOW_PX);
+          const g1px = Math.min(lineBot, newGlowY + GLOW_PX);
 
-        const stops = grad.querySelectorAll("stop");
-        // stops[0] = "0%"      always transparent (anchor)
-        // stops[1] = g0px      fade-in start
-        // stops[2] = newGlowY  bright centre
-        // stops[3] = g1px      fade-out end
-        // stops[4] = "100%"    always transparent (anchor)
-        if (stops.length >= 5) {
-          stops[1].setAttribute("offset", pct(g0px));
-          stops[2].setAttribute("offset", pct(newGlowY));
-          stops[3].setAttribute("offset", pct(g1px));
+          const stops = grad.querySelectorAll("stop");
+          // stops[0] = "0%"      always transparent (anchor)
+          // stops[1] = g0px      fade-in start
+          // stops[2] = newGlowY  bright centre
+          // stops[3] = g1px      fade-out end
+          // stops[4] = "100%"    always transparent (anchor)
+          if (stops.length >= 5) {
+            stops[1].setAttribute("offset", pct(g0px));
+            stops[2].setAttribute("offset", pct(newGlowY));
+            stops[3].setAttribute("offset", pct(g1px));
+          }
         }
-      }
+      };
+
+      el.addEventListener("scroll", update, { passive: true });
+      update(); // run once immediately to set initial state
+      cleanup = () => el.removeEventListener("scroll", update);
     };
 
-    container.addEventListener("scroll", update, { passive: true });
-    update();
-    return () => container.removeEventListener("scroll", update);
-  }, [scrollRef, userMsgs]);
+    let cleanup: (() => void) | null = null;
+    rafId = requestAnimationFrame(attach);
+
+    return () => {
+      cancelAnimationFrame(rafId);
+      cleanup?.();
+    };
+  }, [jumpBarRef]);
 
   const jumpTo = useCallback(
-    (id: string) => {
-      const el = scrollRef.current?.querySelector<HTMLElement>(
-        `[data-turn-id="${id}"]`,
-      );
-      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    (id: string, itemIndex: number) => {
+      const v = jumpBarRef.current?.virtualizerRef.current;
+      if (v) {
+        v.scrollToIndex(itemIndex, { align: "center" });
+      }
     },
-    [scrollRef],
+    [jumpBarRef],
   );
 
-  const navigate = (dir: "up" | "down") => {
-    const next =
-      dir === "up"
-        ? Math.max(0, activeIdx - 1)
-        : Math.min(userMsgs.length - 1, activeIdx + 1);
-    const msg = userMsgs[next];
-    if (msg) jumpTo(msg.id);
-  };
+  const navigate = useCallback(
+    (dir: "up" | "down") => {
+      const userItems = jumpBarRef.current?.userItems ?? [];
+      const next =
+        dir === "up"
+          ? Math.max(0, activeIdx - 1)
+          : Math.min(userItems.length - 1, activeIdx + 1);
+      const msg = userItems[next];
+      if (msg) jumpTo(msg.id, msg.itemIndex);
+    },
+    [jumpBarRef, activeIdx, jumpTo],
+  );
 
   const handleDotEnter = (idx: number) => {
     setTooltipY(PAD_V + idx * DOT_GAP);
@@ -163,7 +206,7 @@ export function MessageJumpBar({ turns, scrollRef }: Props) {
 
   return (
     <div className="message-jump-outer">
-      <div className="message-jump-pill" ref={barRef}>
+      <div className="message-jump-pill">
         {/* Up button */}
         <button
           type="button"
@@ -232,6 +275,7 @@ export function MessageJumpBar({ turns, scrollRef }: Props) {
             const cy        = PAD_V + idx * DOT_GAP;
             const isActive  = idx === activeIdx;
             const isHovered = idx === hoveredIdx;
+            const itemIndex = jumpBarRef.current?.userItems[idx]?.itemIndex ?? 0;
             return (
               <circle
                 key={msg.id}
@@ -242,7 +286,7 @@ export function MessageJumpBar({ turns, scrollRef }: Props) {
                 stroke={isActive ? "rgba(217,119,87,0.35)" : "none"}
                 strokeWidth={isActive ? 3 : 0}
                 style={{ cursor: "pointer", transition: "r 120ms ease, fill 120ms ease" }}
-                onClick={() => jumpTo(msg.id)}
+                onClick={() => jumpTo(msg.id, itemIndex)}
                 onMouseEnter={() => handleDotEnter(idx)}
                 onMouseLeave={() => setHoveredIdx(null)}
                 aria-label={`Jump to message ${idx + 1}`}

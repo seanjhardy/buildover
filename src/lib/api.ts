@@ -173,6 +173,11 @@ export interface GitStatus {
   isDirty: boolean;
 }
 
+export interface FileDiffStat {
+  added: number;
+  removed: number;
+}
+
 export const gitApi = {
   getStatus: (repoPath: string) =>
     getJson<GitStatus>(
@@ -190,4 +195,9 @@ export const gitApi = {
 
   pull: (repoPath: string) =>
     send<{ ok: boolean }>("POST", `/api/git/pull`, { repoPath }),
+
+  getDiffStat: (repoPath: string, relPaths: string[]) =>
+    getJson<{ stats: Record<string, FileDiffStat> }>(
+      `/api/git/diff-stat?repoPath=${encodeURIComponent(repoPath)}&files=${encodeURIComponent(relPaths.join(","))}`,
+    ).then((r) => r.stats),
 };

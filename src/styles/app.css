@@ -24,6 +24,33 @@ button {
   cursor: pointer;
 }
 
+/* ---- Scrollbars ---- */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3c3c3c;
+  border-radius: 6px;
+  /* Transparent border acts as inset padding, pushing the thumb away from the edge */
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #555555;
+  background-clip: padding-box;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
 /* ---- App shell ---- */
 .app-shell {
   display: flex;
@@ -166,9 +193,15 @@ button {
   padding: var(--app-spacing-xlarge);
 }
 
-/* Each virtualised item slot gets the same gap the old flex column had. */
-.message-list > div > div {
-  margin-bottom: var(--app-spacing-large);
+/* Each virtualised item slot is position:absolute (set inline by virtua), so
+   margin-bottom has no effect on stacking. Instead, give the slot's *content*
+   a padding-bottom so the measured height includes the inter-turn gap. */
+.message-list > div > div > .message,
+.message-list > div > div > [data-turn-kind="user"],
+.message-list > div > div > .result-line,
+.message-list > div > div > .thinking-pulse,
+.message-list > div > div > .tool-group {
+  padding-bottom: 20px;
 }
 
 .message-list-empty {
@@ -183,7 +216,51 @@ button {
 .message {
   display: flex;
   flex-direction: column;
-  gap: var(--app-spacing-medium);
+  /* No base gap — successive tool calls sit flush against each other.
+     Inter-block spacing is added explicitly below for non-tool combinations. */
+}
+
+/* Breathing room between text/thinking blocks within a message. */
+.message .assistant-text + .assistant-text,
+.message .thinking + .assistant-text,
+.message .assistant-text + .thinking,
+.message .thinking + .thinking {
+  margin-top: var(--app-spacing-large);
+}
+
+/* Space before a tool block that follows text/thinking (intro → first tool). */
+.message .assistant-text + .tool-inline,
+.message .assistant-text + .tool,
+.message .assistant-text + .tool-group,
+.message .assistant-text + .svg-block,
+.message .thinking + .tool-inline,
+.message .thinking + .tool,
+.message .thinking + .tool-group,
+.message .thinking + .svg-block {
+  margin-top: var(--app-spacing-medium);
+}
+
+/* Space before a text/thinking block that follows tool calls. */
+.message .tool-inline + .assistant-text,
+.message .tool + .assistant-text,
+.message .tool-group + .assistant-text,
+.message .svg-block + .assistant-text,
+.message .tool-inline + .thinking,
+.message .tool + .thinking,
+.message .tool-group + .thinking,
+.message .svg-block + .thinking {
+  margin-top: var(--app-spacing-large);
+}
+
+/* Space between an SVG and an adjacent tool block, in either direction. */
+.message .svg-block + .tool-inline,
+.message .svg-block + .tool,
+.message .svg-block + .tool-group,
+.message .svg-block + .svg-block,
+.message .tool-inline + .svg-block,
+.message .tool + .svg-block,
+.message .tool-group + .svg-block {
+  margin-top: var(--app-spacing-medium);
 }
 
 
@@ -364,6 +441,122 @@ button {
   border-bottom: 1px solid var(--app-tool-border);
 }
 
+/* ---- Tool group (collapses a long run of consecutive tool calls) ---- */
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms;
+  user-select: none;
+  padding: 1px 0;
+}
+.tool-group-header:hover {
+  opacity: 1;
+}
+.tool-group-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.tool-group.collapsed .tool-group-header .chevron {
+  transform: rotate(-90deg);
+}
+.tool-group-label {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.tool-group-status {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+.tool-group-status.error {
+  color: var(--app-error);
+}
+.tool-group-body {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--app-spacing-small);
+  padding-left: var(--app-spacing-large);
+  border-left: 2px solid var(--app-tool-border);
+}
+
+/* ---- SVG block (RenderSVG skill output) ----
+   The agent's RenderSVG tool produces a sanitized inline <svg>. We wrap
+   it in a card that mirrors the visual weight of a tool block but lets
+   the graphic itself dominate. The header is clickable to collapse so
+   long replays don't drown in big illustrations. */
+.svg-block {
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-tool-background);
+  overflow: hidden;
+}
+.svg-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-large);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--app-tool-border);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.svg-block.collapsed .svg-block-header {
+  border-bottom: none;
+}
+.svg-block-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.svg-block-title {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.svg-block-body {
+  padding: var(--app-spacing-large);
+  /* Center horizontally, give it room to breathe, allow scroll if the
+     SVG explicitly sets a fixed width larger than the chat column. */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow-x: auto;
+  /* Subtle checker so transparent SVGs are still visible against the
+     dark tool background. Falls back gracefully if the SVG fills its box. */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%) 0 0/16px 16px,
+    linear-gradient(225deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%) 0 0/16px 16px;
+}
+.svg-block-body > svg {
+  /* Force responsive sizing regardless of what the model emitted. */
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+.svg-block-caption {
+  padding: 0 var(--app-spacing-large) var(--app-spacing-medium);
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  font-style: italic;
+}
+.svg-block.error .svg-block-title {
+  color: var(--app-error);
+}
+.svg-block.error .svg-block-body {
+  color: var(--app-error);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  background: none;
+}
+
 /* ---- Composer ----
    Single rounded card with the textarea on top and a one-row action bar
    at the bottom: [+] left for the context/tools menu, mode pill + send
@@ -436,6 +629,108 @@ button {
 .round-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ---- Context window ring ---- */
+.context-ring {
+  position: relative;
+  width: 26px;
+  height: 26px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: default;
+}
+
+.context-ring-label {
+  position: absolute;
+  font-size: 7px;
+  font-weight: 600;
+  letter-spacing: -0.3px;
+  line-height: 1;
+  pointer-events: none;
+  /* nudge back to vertical centre since SVG rotates -90 */
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.context-ring-tooltip {
+  position: absolute;
+  bottom: calc(100% + 10px);
+  left: 50%;
+  transform: translateX(-50%);
+  min-width: 230px;
+  background: var(--app-secondary-background, #1e1e1e);
+  border: 1px solid var(--app-primary-border-color, rgba(255,255,255,0.12));
+  border-radius: var(--corner-radius-medium, 8px);
+  padding: 10px 12px 8px;
+  font-size: 11.5px;
+  z-index: 100;
+  pointer-events: none;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+
+.context-ring-tooltip-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+  font-size: 12px;
+  color: var(--app-primary-foreground);
+  margin-bottom: 7px;
+}
+
+.context-ring-tooltip-pct {
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.context-ring-tooltip-bar {
+  width: 100%;
+  height: 4px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.08);
+  overflow: hidden;
+  margin-bottom: 9px;
+}
+
+.context-ring-tooltip-bar-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.3s ease;
+}
+
+.context-ring-tooltip-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: var(--app-secondary-foreground);
+}
+
+.context-ring-tooltip-table td {
+  padding: 2px 0;
+}
+
+.context-ring-tooltip-table td:first-child {
+  color: var(--app-placeholder-foreground, rgba(255,255,255,0.4));
+  padding-right: 10px;
+}
+
+.context-ring-tooltip-table td:last-child {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  color: var(--app-primary-foreground);
+}
+
+.context-ring-tooltip-warn {
+  margin-top: 8px;
+  padding-top: 7px;
+  border-top: 1px solid rgba(255,255,255,0.08);
+  color: var(--app-error, #e05252);
+  font-size: 11px;
 }
 
 .send-btn {
@@ -1461,7 +1756,8 @@ button {
   margin-right: auto;
 }
 
-.chat-pane-body .chat-group:has(.todo-panel) {
+.chat-pane-body .chat-group:has(.todo-panel),
+.chat-pane-body .chat-group:has(.files-panel) {
   max-width: 1010px;
 }
 
@@ -1472,6 +1768,7 @@ button {
   flex-direction: column;
   min-width: 0;
   min-height: 0;
+  padding-inline: var(--app-spacing-large);
 }
 
 .chat-column .message-list {
@@ -1494,6 +1791,23 @@ button {
 .right-rail--narrow {
   flex-direction: column;
   align-items: center;
+}
+
+/* Column container that stacks todo + files panels vertically in the rail */
+.right-rail-panels {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+}
+
+/* Override todo-panel margin when it's inside the stacked column */
+.right-rail-panels .todo-panel {
+  margin-top: 12px;
+}
+
+.right-rail-panels .files-panel {
+  margin-top: 8px;
 }
 
 /* ---- Repo tabs ---- */
@@ -1555,6 +1869,19 @@ button {
 .repo-tab-close:hover {
   background: var(--app-input-background);
   color: var(--app-primary-foreground);
+}
+.repo-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+.repo-tab .chat-status-icon {
+  width: 10px;
+  height: 10px;
+}
+.repo-tab .chat-status-icon svg {
+  width: 10px;
+  height: 10px;
 }
 .open-repo-trigger {
   color: var(--app-claude-orange);
@@ -1705,6 +2032,10 @@ button {
   flex: 1;
   overflow-y: auto;
   padding: var(--app-spacing-small) 0;
+  /* Subtle checker matching the SVG viewer background */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%) 0 0/16px 16px,
+    linear-gradient(225deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%) 0 0/16px 16px;
 }
 .chat-sidebar-empty {
   padding: var(--app-spacing-large);
@@ -1732,6 +2063,7 @@ button {
   cursor: pointer;
   border-left: 2px solid transparent;
   position: relative;
+  background: var(--app-secondary-background);
 }
 .chat-item:hover {
   background: var(--app-list-hover-background);
@@ -1776,13 +2108,13 @@ button {
 .chat-item:hover .chat-item-preview {
   -webkit-mask-image: linear-gradient(
     to right,
-    #000 calc(100% - 72px),
-    transparent calc(100% - 8px)
+    #000 calc(100% - 88px),
+    transparent calc(100% - 56px)
   );
   mask-image: linear-gradient(
     to right,
-    #000 calc(100% - 72px),
-    transparent calc(100% - 8px)
+    #000 calc(100% - 88px),
+    transparent calc(100% - 56px)
   );
 }
 .chat-item-actions {
@@ -2772,6 +3104,159 @@ button {
 
 .todo-strip-item:hover .todo-strip-tooltip {
   display: block;
+}
+
+/* ---- Files Panel (sticky card below the todo panel in the right-rail) ---- */
+
+.files-panel {
+  width: 190px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  margin-top: 8px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.files-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.files-panel-header:hover {
+  color: var(--app-primary-foreground);
+}
+
+.files-panel-header-right {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.files-panel-chevron {
+  font-size: 9px;
+  opacity: 0.6;
+}
+
+.files-panel-count {
+  font-size: 10px;
+  background: var(--app-primary-border-color);
+  border-radius: 999px;
+  padding: 1px 5px;
+  font-weight: 700;
+  color: var(--app-secondary-foreground);
+}
+
+.files-tree {
+  padding: 6px 4px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  overflow-x: hidden;
+}
+
+.files-tree-dir-group {
+  display: flex;
+  flex-direction: column;
+}
+
+.files-tree-dir {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  cursor: default;
+  user-select: none;
+  color: var(--app-secondary-foreground);
+}
+
+.files-tree-dir:hover {
+  background: color-mix(in srgb, var(--app-primary-foreground) 5%, transparent);
+  color: var(--app-primary-foreground);
+}
+
+.files-tree-chevron {
+  font-size: 9px;
+  flex-shrink: 0;
+  width: 10px;
+  text-align: center;
+  opacity: 0.7;
+}
+
+.files-tree-dir-name {
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.files-tree-children {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.files-tree-file {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  min-width: 0;
+}
+
+.files-tree-icon {
+  flex-shrink: 0;
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.5;
+  line-height: 1;
+}
+
+.files-tree-name {
+  flex: 1;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--app-primary-foreground);
+  min-width: 0;
+}
+
+.files-stats {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.files-stat-added {
+  color: #3fb950; /* GitHub green */
+}
+
+.files-stat-removed {
+  color: #f85149; /* GitHub red */
 }
 
 /* ============================================================ */

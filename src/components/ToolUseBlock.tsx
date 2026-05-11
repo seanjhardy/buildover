@@ -1,4 +1,5 @@
 import { useState } from "react";
+import { SvgBlock } from "./SvgBlock.js";
 
 interface Props {
   name: string;
@@ -40,6 +41,9 @@ function summarize(name: string, input: unknown, cwd?: string): string {
     case "Task":
     case "Agent":
       return String(i.description ?? i.prompt ?? "");
+    case "RenderSVG":
+    case "mcp__buildover-custom-tools__RenderSVG":
+      return String(i.title ?? "inline SVG");
     default:
       try {
         return JSON.stringify(input).slice(0, 120);
@@ -49,8 +53,33 @@ function summarize(name: string, input: unknown, cwd?: string): string {
   }
 }
 
+// True for any tool name that should be rendered as a graphic instead of
+// the standard collapsed/expanded card. Includes the bare name and the
+// MCP-prefixed form the SDK emits (`mcp__<server>__<tool>`).
+function isRenderSvgTool(name: string): boolean {
+  return name === "RenderSVG" || name.endsWith("__RenderSVG");
+}
+
 export function ToolUseBlock({ name, input, result, cwd }: Props) {
   const [collapsed, setCollapsed] = useState(true);
+
+  // Special case: the RenderSVG skill renders inline as actual graphics
+  // instead of as a tool card. The "tool call" itself is just the transport
+  // for getting the SVG markup into the chat history.
+  if (isRenderSvgTool(name) && input && typeof input === "object") {
+    const i = input as Record<string, unknown>;
+    const svg = typeof i.svg === "string" ? i.svg : "";
+    if (svg) {
+      return (
+        <SvgBlock
+          svg={svg}
+          title={typeof i.title === "string" ? i.title : undefined}
+          caption={typeof i.caption === "string" ? i.caption : undefined}
+        />
+      );
+    }
+  }
+
   const summary = summarize(name, input, cwd);
   const status = result ? (result.isError ? "error" : "done") : "running";
 

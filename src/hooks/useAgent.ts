@@ -7,6 +7,7 @@ import type {
   ChatRecord,
   ChatStatus,
   ContentBlock,
+  ContextUsage,
   McpServerInfo,
   Model,
   PermissionMode,
@@ -58,6 +59,12 @@ export interface PendingPermission {
   suggestions: unknown[];
 }
 
+export interface PendingAttention {
+  attentionId: string;
+  message: string;
+  summary?: string;
+}
+
 interface SendOptions {
   model: Model;
   permissionMode: PermissionMode;
@@ -74,7 +81,9 @@ interface UseAgentReturn {
   cwd: string | undefined;
   status: ChatStatus | null;
   pendingPermission: PendingPermission | undefined;
+  pendingAttention: PendingAttention | undefined;
   chatPermissionMode: PermissionMode | undefined;
+  contextUsage: ContextUsage | null;
   send: (text: string, opts: SendOptions) => void;
   respondPermission: (
     requestId: string,
@@ -86,6 +95,7 @@ interface UseAgentReturn {
         }
       | { behavior: "deny"; message: string; interrupt?: boolean },
   ) => void;
+  respondAttention: (attentionId: string, feedback?: string, interrupt?: boolean) => void;
   interrupt: () => void;
   setPermissionMode: (mode: PermissionMode) => void;
 }
@@ -104,8 +114,11 @@ export function useAgent(
   const [status, setStatus] = useState<ChatStatus | null>(null);
   const [pendingPermission, setPendingPermission] =
     useState<PendingPermission | undefined>();
+  const [pendingAttention, setPendingAttention] =
+    useState<PendingAttention | undefined>();
   const [chatPermissionMode, setChatPermissionMode] =
     useState<PermissionMode | undefined>();
+  const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
 
   // Mirror chatId in a ref so the event handler always reads the current value
   // without needing to be re-registered on every chatId change.
@@ -124,7 +137,9 @@ export function useAgent(
       setCwd(undefined);
       setStatus(null);
       setPendingPermission(undefined);
+      setPendingAttention(undefined);
       setChatPermissionMode(undefined);
+      setContextUsage(null);
       return;
     }
 
@@ -271,7 +286,9 @@ export function useAgent(
         setCwd: cachedSetCwd,
         setStatus: cachedSetStatus,
         setPendingPermission,
+        setPendingAttention,
         setChatPermissionMode: cachedSetChatPermissionMode,
+        setContextUsage,
       });
     };
 
@@ -324,6 +341,24 @@ export function useAgent(
     [],
   );
 
+  const respondAttention = useCallback(
+    (attentionId: string, feedback?: string, interrupt?: boolean) => {
+      const id = chatIdRef.current;
+      if (!id) return;
+      agentSocket.send({
+        type: "attention_ack",
+        chatId: id,
+        attentionId,
+        feedback,
+        interrupt,
+      });
+      setPendingAttention((p) =>
+        p?.attentionId === attentionId ? undefined : p,
+      );
+    },
+    [],
+  );
+
   const interrupt = useCallback(() => {
     const id = chatIdRef.current;
     if (!id) return;
@@ -350,9 +385,12 @@ export function useAgent(
     cwd,
     status,
     pendingPermission,
+    pendingAttention,
     chatPermissionMode,
+    contextUsage,
     send,
     respondPermission,
+    respondAttention,
     interrupt,
     setPermissionMode,
   };
@@ -369,9 +407,13 @@ interface Setters {
   setPendingPermission: React.Dispatch<
     React.SetStateAction<PendingPermission | undefined>
   >;
+  setPendingAttention: React.Dispatch<
+    React.SetStateAction<PendingAttention | undefined>
+  >;
   setChatPermissionMode: React.Dispatch<
     React.SetStateAction<PermissionMode | undefined>
   >;
+  setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
 }
 
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
@@ -445,27 +487,17 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       ]);
       break;
     case "permission_request":
+      // RequestUserAttention is now handled via the pending_attention event —
+      // the tool handler blocks on attention_ack, not the permission system.
+      // Skip setting pendingPermission for it so the old permission UI doesn't
+      // also appear (it would be auto-resolved server-side anyway in bypass mode).
+      if (event.toolName === "RequestUserAttention") break;
       s.setPendingPermission({
         requestId: event.requestId,
         toolName: event.toolName,
         input: event.input,
         suggestions: event.suggestions ?? [],
       });
-      // RequestUserAttention prompts should also appear as a persistent
-      // turn in the chat history so the message is visible after dismissal.
-      if (event.toolName === "RequestUserAttention") {
-        const ackInput = event.input as { message?: string; summary?: string };
-        const ackMessage = String(ackInput.message ?? "Attention needed.");
-        const ackSummary = ackInput.summary ? `\n\n${ackInput.summary}` : "";
-        s.setTurns((prev) => [
-          ...prev,
-          {
-            kind: "assistant",
-            id: `ack-${event.requestId}`,
-            content: [{ type: "text", text: `**Attention needed:** ${ackMessage}${ackSummary}` }],
-          },
-        ]);
-      }
       break;
     case "error":
       // Server-restart interruptions are silently suppressed from the turn list
@@ -484,9 +516,42 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
     case "turn_start":
       s.setIsStreaming(true);
       break;
+    case "pending_attention":
+      s.setPendingAttention({
+        attentionId: event.attentionId,
+        message: event.message,
+        summary: event.summary,
+      });
+      // Also add a persistent turn so the message stays visible after dismissal.
+      s.setTurns((prev) => [
+        ...prev,
+        {
+          kind: "assistant",
+          id: `attn-${event.attentionId}`,
+          content: [
+            {
+              type: "text",
+              text: `**Attention needed:** ${event.message}${event.summary ? `\n\n${event.summary}` : ""}`,
+            },
+          ],
+        },
+      ]);
+      break;
     case "turn_end":
       s.setIsStreaming(false);
       s.setPendingPermission(undefined);
+      s.setPendingAttention(undefined);
+      break;
+    case "context_usage":
+      s.setContextUsage({
+        usedTokens: event.usedTokens,
+        contextWindowSize: event.contextWindowSize,
+        pct: event.pct,
+        inputTokens: event.inputTokens,
+        outputTokens: event.outputTokens,
+        cacheReadTokens: event.cacheReadTokens,
+        cacheWriteTokens: event.cacheWriteTokens,
+      });
       break;
     case "chat_status":
       s.setStatus(event.status);

@@ -1,5 +1,8 @@
 import { query, type CanUseTool } from "@anthropic-ai/claude-agent-sdk";
-import { customToolsServer } from "./customTools.js";
+import {
+  createCustomToolsServer,
+  type RequestAttentionAck,
+} from "./customTools.js";
 import type {
   AgentEvent,
   Attachment,
@@ -25,7 +28,8 @@ export type RawAgentEvent = DistOmit<
         | "error"
         | "turn_start"
         | "turn_end"
-        | "permission_request";
+        | "permission_request"
+        | "context_usage";
     }
   >,
   "chatId"
@@ -58,6 +62,10 @@ interface RunArgs {
       }
     | { behavior: "deny"; message: string; interrupt?: boolean }
   >;
+  // Called by the RequestUserAttention tool handler. Resolves only when the
+  // client sends an attention_ack — this is what makes the tool block
+  // regardless of permission-mode bypass.
+  requestAttentionAck: RequestAttentionAck;
   abortController?: AbortController;
 }
 
@@ -74,8 +82,11 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     attachments,
     emit,
     requestPermission,
+    requestAttentionAck,
     abortController,
   } = args;
+
+  const customToolsServer = createCustomToolsServer(requestAttentionAck);
 
   const finalPrompt = renderPromptWithAttachments(prompt, attachments);
 
@@ -213,6 +224,42 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             numTurns: message.num_turns ?? 0,
             result: message.result,
           });
+          // Emit context usage derived from the SDK's usage + modelUsage fields.
+          // modelUsage is keyed by model name and carries contextWindow size.
+          const usage = (message as any).usage as
+            | {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+                cache_creation_input_tokens?: number;
+              }
+            | undefined;
+          const modelUsageMap = (message as any).modelUsage as
+            | Record<string, { contextWindow?: number }>
+            | undefined;
+          if (usage) {
+            const inputTokens = usage.input_tokens ?? 0;
+            const outputTokens = usage.output_tokens ?? 0;
+            const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
+            const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
+            const usedTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+            // Prefer the actual model's context window size; fall back to 200k.
+            const modelEntry = modelUsageMap
+              ? Object.values(modelUsageMap)[0]
+              : undefined;
+            const contextWindowSize = modelEntry?.contextWindow ?? 200_000;
+            const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
+            emit({
+              type: "context_usage",
+              usedTokens,
+              contextWindowSize,
+              pct,
+              inputTokens,
+              outputTokens,
+              cacheReadTokens,
+              cacheWriteTokens,
+            });
+          }
           break;
         }
 

@@ -11,8 +11,9 @@ import {
   ShieldOff,
   Square,
 } from "lucide-react";
-import { type Attachment, type Model, type PermissionMode } from "../types.js";
+import { type Attachment, type ContextUsage, type Model, type PermissionMode } from "../types.js";
 import { AttachmentChip } from "./AttachmentChip.js";
+import { ContextRing } from "./ContextRing.js";
 import { useTranscription } from "../hooks/useTranscription.js";
 
 interface Props {
@@ -27,6 +28,7 @@ interface Props {
   permissionMode: PermissionMode;
   onPermissionModeChange: (m: PermissionMode) => void;
   onToggleMcp: () => void;
+  contextUsage?: ContextUsage | null;
 }
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -120,6 +122,7 @@ export function Composer(props: Props) {
     permissionMode,
     onPermissionModeChange,
     onToggleMcp,
+    contextUsage,
   } = props;
 
   const DRAFT_KEY = `buildover.draft.${chatId}`;
@@ -395,6 +398,7 @@ export function Composer(props: Props) {
               e.target.value = "";
             }}
           />
+          <ContextRing contextUsage={contextUsage ?? null} />
         </div>
 
         <div className="composer-bar-right">

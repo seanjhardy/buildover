@@ -5,19 +5,23 @@ import { EmptyChat, EmptyWorkspace } from "./components/EmptyStates.js";
 import { DashboardPanel } from "./components/Dashboard.js";
 import { McpPanel } from "./components/McpPanel.js";
 import { MessageJumpBar } from "./components/MessageJumpBar.js";
-import { MessageList } from "./components/MessageList.js";
+import { MessageList, type JumpBarHandle } from "./components/MessageList.js";
 import { OrchestratorBar, type OrchestratorWakeTrigger } from "./components/OrchestratorBar.js";
-import { PermissionPrompt } from "./components/PermissionPrompt.js";
+import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt.js";
 import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
 import { RepoTabs } from "./components/RepoTabs.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
 import { TodoPanel } from "./components/TodoPanel.js";
+import { FilesPanel } from "./components/FilesPanel.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { useAgent } from "./hooks/useAgent.js";
+import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
 import { useAudioRingBuffer } from "./hooks/useAudioRingBuffer.js";
 import { useChats } from "./hooks/useChats.js";
+import { useRepoTabBadges } from "./hooks/useRepoTabBadges.js";
 import { useTodos } from "./hooks/useTodos.js";
+import { useFilesChanged } from "./hooks/useFilesChanged.js";
 import { useWakeWord } from "./hooks/useWakeWord.js";
 import { useWorkspace } from "./hooks/useWorkspace.js";
 import { api } from "./lib/api.js";
@@ -39,6 +43,17 @@ export default function App() {
   const chats = useChats(activeRepo?.path ?? null);
   const agent = useAgent(activeRepo?.path ?? null, activeChatId);
   const todos = useTodos(agent.turns);
+  const filesChanged = useFilesChanged(
+    agent.turns,
+    agent.cwd ?? activeRepo?.path ?? "",
+    activeRepo?.path ?? "",
+  );
+
+  // Track chat statuses for all open repos so inactive tabs can show badges.
+  const openRepoPaths = workspace.openRepos.map((r) => r.path);
+  const allRepoChats = useAllRepoChats(openRepoPaths);
+  const { badges: repoTabBadges, markSeen: markRepoTabSeen } =
+    useRepoTabBadges(openRepoPaths, activeRepo?.path ?? null, allRepoChats);
 
   const [model, setModel] = useState<Model>("claude-sonnet-4-6");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
@@ -85,6 +100,9 @@ export default function App() {
   // msgScrollRef points at .message-area (the scroll container).
   // MessageList and MessageJumpBar both use it for scroll operations.
   const msgScrollRef = useRef<HTMLDivElement>(null);
+  // jumpBarRef is written by MessageList and read by MessageJumpBar so the
+  // jump bar can use the VirtualizerHandle API instead of DOM queries.
+  const jumpBarRef = useRef<JumpBarHandle | null>(null);
   const chatPaneRef = useRef<HTMLElement>(null);
   // Keep refs to the latest values so the streaming effect never reads stale closures.
   const messageQueueRef = useRef(messageQueue);
@@ -428,12 +446,16 @@ export default function App() {
           openRepos={workspace.openRepos}
           activeRepoPath={activeRepo?.path ?? null}
           recents={workspace.recents}
-          onSelect={workspace.setActiveRepo}
+          onSelect={(path) => {
+            markRepoTabSeen(path);
+            workspace.setActiveRepo(path);
+          }}
           onClose={workspace.closeRepo}
           onOpen={async (path) => {
             await workspace.openRepo(path);
           }}
           onForgetRecent={handleForgetRecent}
+          badges={repoTabBadges}
         />
 
         {!activeRepo ? (
@@ -476,15 +498,22 @@ export default function App() {
                           isStreaming={agent.isStreaming}
                           cwd={agent.cwd ?? activeRepo.path}
                           scrollRef={msgScrollRef}
+                          jumpBarRef={jumpBarRef}
                           chatId={activeChatId ?? undefined}
                         />
-                        {agent.pendingPermission && (
+                        {agent.pendingAttention && (
+                          <AttentionPrompt
+                            pending={agent.pendingAttention}
+                            onRespond={agent.respondAttention}
+                          />
+                        )}
+                        {agent.pendingPermission && !agent.pendingAttention && (
                           <PermissionPrompt
                             pending={agent.pendingPermission}
                             onRespond={agent.respondPermission}
                           />
                         )}
-                        <div style={{ display: agent.pendingPermission ? "none" : undefined }}>
+                        <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
                           <QueuedMessages
                             queue={messageQueue}
                             onRemove={removeFromQueue}
@@ -517,17 +546,27 @@ export default function App() {
                               agent.setPermissionMode(m);
                             }}
                             onToggleMcp={() => setMcpOpen((v) => !v)}
+                            contextUsage={agent.contextUsage}
                           />
                         </div>
                       </div>
-                      {/* right-rail: jump bar + todo (row when wide, column when narrow) */}
+                      {/* right-rail: jump bar + (todo + files stacked) */}
                       <div className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`}>
                         <MessageJumpBar
-                          turns={agent.turns}
-                          scrollRef={msgScrollRef}
+                          jumpBarRef={jumpBarRef}
                         />
-                        {todos.length > 0 && (
-                          <TodoPanel todos={todos} compact={todoNarrow} />
+                        {!todoNarrow && (todos.length > 0 || filesChanged.length > 0) && (
+                          <div className="right-rail-panels">
+                            {todos.length > 0 && (
+                              <TodoPanel todos={todos} compact={false} />
+                            )}
+                            {filesChanged.length > 0 && (
+                              <FilesPanel files={filesChanged} />
+                            )}
+                          </div>
+                        )}
+                        {todoNarrow && todos.length > 0 && (
+                          <TodoPanel todos={todos} compact={true} />
                         )}
                       </div>
                     </div>

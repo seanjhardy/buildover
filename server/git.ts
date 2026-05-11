@@ -81,3 +81,88 @@ export async function gitPush(repoPath: string): Promise<void> {
 export async function gitPull(repoPath: string): Promise<void> {
   await execFileAsync("git", ["pull"], { cwd: repoPath });
 }
+
+export interface FileDiffStat {
+  added: number;
+  removed: number;
+}
+
+/**
+ * Returns line-level diff stats for each requested file relative to HEAD.
+ * Combines unstaged and staged (--cached) changes so you see the full picture.
+ * Files that are brand-new (untracked) are counted by line number via wc -l.
+ * If a file is not in git at all the entry is omitted from the result.
+ */
+export async function gitDiffStat(
+  repoPath: string,
+  relPaths: string[],
+): Promise<Record<string, FileDiffStat>> {
+  if (relPaths.length === 0) return {};
+
+  const stats: Record<string, FileDiffStat> = {};
+
+  // Helper: parse `git diff --numstat` output lines into the stats map.
+  function parseNumstat(out: string) {
+    for (const line of out.trim().split("\n")) {
+      if (!line.trim()) continue;
+      const parts = line.split("\t");
+      if (parts.length < 3) continue;
+      const added = parseInt(parts[0] ?? "0", 10) || 0;
+      const removed = parseInt(parts[1] ?? "0", 10) || 0;
+      const file = parts[2]?.trim() ?? "";
+      if (!file) continue;
+      if (stats[file]) {
+        stats[file]!.added += added;
+        stats[file]!.removed += removed;
+      } else {
+        stats[file] = { added, removed };
+      }
+    }
+  }
+
+  // Unstaged changes (working tree vs index)
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["diff", "--numstat", "--", ...relPaths],
+      { cwd: repoPath },
+    );
+    parseNumstat(stdout);
+  } catch { /* not a git repo or other error — skip */ }
+
+  // Staged changes (index vs HEAD)
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["diff", "--numstat", "--cached", "HEAD", "--", ...relPaths],
+      { cwd: repoPath },
+    );
+    parseNumstat(stdout);
+  } catch { /* no commits yet or other error — skip */ }
+
+  // For files that still have no entry, check if they are untracked (new files).
+  // Count all their lines as "added".
+  const missing = relPaths.filter((p) => !stats[p]);
+  for (const rel of missing) {
+    try {
+      // Check if the file is untracked
+      const { stdout: lsOut } = await execFileAsync(
+        "git",
+        ["ls-files", "--others", "--exclude-standard", "--", rel],
+        { cwd: repoPath },
+      );
+      if (lsOut.trim()) {
+        // Untracked — count lines via wc -l
+        const { stdout: wcOut } = await execFileAsync(
+          "wc",
+          ["-l", rel],
+          { cwd: repoPath },
+        );
+        const lineCount = parseInt(wcOut.trim().split(/\s+/)[0] ?? "0", 10) || 0;
+        stats[rel] = { added: lineCount, removed: 0 };
+      }
+    } catch { /* ignore */ }
+  }
+
+  return stats;
+}

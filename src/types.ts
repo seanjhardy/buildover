@@ -148,7 +148,8 @@ export type ChatEvent =
     }
   | { type: "error"; message: string; ts: string }
   | { type: "turn_start"; ts: string }
-  | { type: "turn_end"; ts: string };
+  | { type: "turn_end"; ts: string }
+  | ({ type: "context_usage"; ts: string } & ContextUsage);
 
 export interface ChatRecord {
   id: string;
@@ -216,7 +217,30 @@ export type ClientMessage =
       type: "set_permission_mode";
       chatId: string;
       permissionMode: PermissionMode;
+    }
+  | {
+      // Sent by the client after the user responds to a RequestUserAttention
+      // prompt. This is separate from the permission system so it cannot be
+      // bypassed by Claude Code's dangerouslySkipPermissions flag — the tool
+      // handler itself blocks until this ack arrives.
+      type: "attention_ack";
+      chatId: string;
+      attentionId: string;
+      // Optional feedback typed by the user before clicking Continue/Stop.
+      feedback?: string;
+      // True when the user clicks "Stop" — aborts the turn.
+      interrupt?: boolean;
     };
+
+export interface ContextUsage {
+  usedTokens: number;
+  contextWindowSize: number;
+  pct: number; // 0–100
+  inputTokens: number;
+  outputTokens: number;
+  cacheReadTokens: number;
+  cacheWriteTokens: number;
+}
 
 export type AgentEvent =
   | {
@@ -265,6 +289,18 @@ export type AgentEvent =
   | { type: "error"; chatId: string; message: string }
   | { type: "turn_start"; chatId: string }
   | { type: "turn_end"; chatId: string }
+  | ({ type: "context_usage"; chatId: string } & ContextUsage)
+  | {
+      // Emitted when the tool handler for RequestUserAttention is blocking,
+      // waiting for an attention_ack from the client. Unlike permission_request
+      // this is NOT routed through the permission system, so it cannot be
+      // auto-approved by Claude Code's dangerouslySkipPermissions flag.
+      type: "pending_attention";
+      chatId: string;
+      attentionId: string;
+      message: string;
+      summary?: string;
+    }
   | {
       type: "user_message_echo";
       chatId: string;

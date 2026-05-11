@@ -1,25 +1,109 @@
-import { memo, useEffect, useRef } from "react";
+import { memo, useEffect, useMemo, useRef } from "react";
 import { Virtualizer, type VirtualizerHandle } from "virtua";
 import type { ChatTurn } from "../hooks/useAgent.js";
+import type { ContentBlock } from "../types.js";
 import { AssistantMessage } from "./AssistantMessage.js";
+import { ToolGroup } from "./ToolGroup.js";
 import { UserMessage } from "./UserMessage.js";
+
+// Runs of 3+ consecutive tool calls (across consecutive assistant turns) are
+// collapsed under a single "N tools called" header.
+const TOOL_GROUP_THRESHOLD = 3;
 
 // How many pixels from the bottom counts as "at the bottom". A small
 // threshold handles sub-pixel rounding and the streaming thinking pulse.
 const SCROLL_THRESHOLD = 120;
+
+// Data the MessageJumpBar needs to navigate without querying the DOM.
+// MessageList writes this on every render so the jump bar always has
+// up-to-date indices into the virtual list.
+export interface JumpBarHandle {
+  virtualizerRef: React.RefObject<VirtualizerHandle | null>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
+  // One entry per user message, in order. itemIndex is the index into the
+  // Virtualizer's children array (accounting for the top-spacer at index 0).
+  userItems: { id: string; text: string; itemIndex: number }[];
+}
 
 interface Props {
   turns: ChatTurn[];
   isStreaming: boolean;
   cwd?: string;
   scrollRef?: React.RefObject<HTMLDivElement>;
+  jumpBarRef?: React.RefObject<JumpBarHandle | null>;
   chatId?: string;
 }
 
-// A single virtual row — either a real ChatTurn or the streaming indicator.
-type VirtualItem = ChatTurn | { kind: "__streaming__" };
+// A single virtual row — either a real ChatTurn, the streaming indicator, or
+// a synthetic "tool group" that coalesces a run of tool-only assistant turns.
+type VirtualItem =
+  | ChatTurn
+  | { kind: "__streaming__" }
+  | {
+      kind: "__tool_group__";
+      id: string;
+      tools: Extract<ContentBlock, { type: "tool_use" }>[];
+    };
 
-function MessageListInner({ turns, isStreaming, cwd, scrollRef, chatId }: Props) {
+// Returns true if every block in the assistant turn's content is a tool_use.
+function isToolOnlyAssistant(turn: ChatTurn): turn is Extract<ChatTurn, { kind: "assistant" }> {
+  return (
+    turn.kind === "assistant" &&
+    turn.content.length > 0 &&
+    turn.content.every((b) => b.type === "tool_use")
+  );
+}
+
+// Walks the flat turns list and coalesces runs of consecutive tool-only
+// assistant turns (plus their interleaved invisible tool_results turns) into
+// a single tool-group virtual item when the run contains TOOL_GROUP_THRESHOLD
+// or more tool_use blocks. Smaller runs pass through unchanged.
+function buildVirtualItems(turns: ChatTurn[]): VirtualItem[] {
+  const out: VirtualItem[] = [];
+  let i = 0;
+  while (i < turns.length) {
+    const t = turns[i];
+    if (isToolOnlyAssistant(t)) {
+      // Greedily extend the run across consecutive tool-only assistant turns,
+      // tolerating interleaved tool_results turns (which are invisible anyway).
+      const tools: Extract<ContentBlock, { type: "tool_use" }>[] = [];
+      const consumed: ChatTurn[] = [];
+      let j = i;
+      while (j < turns.length) {
+        const tj = turns[j];
+        if (isToolOnlyAssistant(tj)) {
+          for (const b of tj.content) {
+            tools.push(b as Extract<ContentBlock, { type: "tool_use" }>);
+          }
+          consumed.push(tj);
+          j++;
+        } else if (tj.kind === "tool_results") {
+          consumed.push(tj);
+          j++;
+        } else {
+          break;
+        }
+      }
+      if (tools.length >= TOOL_GROUP_THRESHOLD) {
+        out.push({
+          kind: "__tool_group__",
+          id: `tg-${tools[0].id}`,
+          tools,
+        });
+      } else {
+        // Not enough tools to collapse — emit the consumed turns as-is.
+        for (const c of consumed) out.push(c);
+      }
+      i = j;
+      continue;
+    }
+    out.push(t);
+    i++;
+  }
+  return out;
+}
+
+function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chatId }: Props) {
   // The scroll container div. Also exposed via the external scrollRef so that
   // MessageJumpBar (which listens for scroll events and queries DOM nodes in
   // the container) continues to work after we add virtualisation.
@@ -62,11 +146,42 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, chatId }: Props)
   const toolResults = toolResultsRef.current;
 
   // Wire the external scrollRef to the same DOM element we control so that
-  // MessageJumpBar can attach its scroll listener and query user-turn nodes.
+  // MessageJumpBar can attach its scroll listener.
   useEffect(() => {
     if (!scrollRef) return;
     (scrollRef as React.MutableRefObject<HTMLDivElement | null>).current =
       containerRef.current;
+  });
+
+  // Build the virtual items list: grouped turns + optional streaming indicator.
+  // Index 0 is always the top spacer div, so actual item indices start at 1.
+  const grouped = buildVirtualItems(turns);
+  const items: VirtualItem[] = isStreaming
+    ? [...grouped, { kind: "__streaming__" }]
+    : grouped;
+
+  // Build the jump-bar data: for each user message, record which Virtualizer
+  // child index it occupies (+1 for the top-spacer at index 0).
+  const userItems = useMemo(() => {
+    const result: { id: string; text: string; itemIndex: number }[] = [];
+    items.forEach((item, i) => {
+      if (item.kind === "user") {
+        result.push({ id: item.id, text: item.text, itemIndex: i + 1 }); // +1 for spacer
+      }
+    });
+    return result;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [turns, isStreaming]);
+
+  // Keep jumpBarRef up to date every render so the scroll handler always
+  // reads the latest userItems and virtualizerRef without needing a re-mount.
+  useEffect(() => {
+    if (!jumpBarRef) return;
+    (jumpBarRef as React.MutableRefObject<JumpBarHandle | null>).current = {
+      virtualizerRef,
+      containerRef,
+      userItems,
+    };
   });
 
   // On chat switch: arm the scroll-to-bottom flag and reset tool results.
@@ -85,11 +200,6 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, chatId }: Props)
     wasAtBottomRef.current =
       el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD;
   });
-
-  // Build the virtual items list: real turns + optional streaming indicator.
-  const items: VirtualItem[] = isStreaming
-    ? [...turns, { kind: "__streaming__" }]
-    : turns;
 
   // Auto-scroll whenever turns change (streaming or new-chat load).
   useEffect(() => {
@@ -121,6 +231,16 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, chatId }: Props)
           <span />
           <span />
         </div>
+      );
+    }
+    if (item.kind === "__tool_group__") {
+      return (
+        <ToolGroup
+          key={item.id}
+          tools={item.tools}
+          toolResults={toolResults}
+          cwd={cwd}
+        />
       );
     }
     if (item.kind === "user") {
@@ -174,6 +294,7 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, chatId }: Props)
         scrollRef={containerRef}
         bufferSize={600}
       >
+        <div key="__top-spacer__" style={{ height: 40 }} />
         {items.map(renderItem)}
       </Virtualizer>
     </div>
