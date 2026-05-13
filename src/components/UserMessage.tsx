@@ -2,6 +2,7 @@ import { memo, useEffect, useRef, useState } from "react";
 import type { BranchInfo } from "../hooks/useAgent.js";
 import type { Attachment } from "../types.js";
 import { AttachmentChip } from "./AttachmentChip.js";
+import { AttachmentPreviewModal } from "./AttachmentPreviewModal.js";
 
 interface Props {
   text: string;
@@ -40,6 +41,7 @@ export const UserMessage = memo(function UserMessage({
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(text);
+  const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Reset draft if the underlying message text changes (e.g. branch switch).
@@ -104,7 +106,12 @@ export const UserMessage = memo(function UserMessage({
             {attachments && attachments.length > 0 && (
               <div className="bubble-attachments">
                 {attachments.map((a) => (
-                  <AttachmentChip key={a.id} attachment={a} compact />
+                  <AttachmentChip
+                    key={a.id}
+                    attachment={a}
+                    compact
+                    onClick={() => setPreviewAttachment(a)}
+                  />
                 ))}
               </div>
             )}
@@ -169,7 +176,12 @@ export const UserMessage = memo(function UserMessage({
             {attachments && attachments.length > 0 && (
               <div className="bubble-attachments">
                 {attachments.map((a) => (
-                  <AttachmentChip key={a.id} attachment={a} compact />
+                  <AttachmentChip
+                    key={a.id}
+                    attachment={a}
+                    compact
+                    onClick={() => setPreviewAttachment(a)}
+                  />
                 ))}
               </div>
             )}
@@ -189,6 +201,12 @@ export const UserMessage = memo(function UserMessage({
           </button>
         )}
       </div>
+      {previewAttachment && (
+        <AttachmentPreviewModal
+          attachment={previewAttachment}
+          onClose={() => setPreviewAttachment(null)}
+        />
+      )}
     </div>
   );
 });

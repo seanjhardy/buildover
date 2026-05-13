@@ -1349,6 +1349,117 @@ button {
   gap: var(--app-spacing-small);
   margin-bottom: var(--app-spacing-small);
 }
+.attachment--clickable {
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.attachment--clickable:hover {
+  border-color: var(--app-claude-orange);
+  background: rgba(217, 119, 87, 0.08);
+}
+.attachment--clickable:focus-visible {
+  outline: 2px solid var(--app-claude-orange);
+  outline-offset: 2px;
+}
+
+/* ---- Attachment preview modal ---- */
+.attachment-preview-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--app-spacing-large);
+}
+.attachment-preview-modal {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  display: flex;
+  flex-direction: column;
+  max-width: min(860px, 90vw);
+  max-height: 88vh;
+  width: 100%;
+  overflow: hidden;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.45);
+}
+.attachment-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-spacing-medium);
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+.attachment-preview-title {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.attachment-preview-name {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.attachment-preview-meta {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+}
+.attachment-preview-close {
+  background: transparent;
+  border: 0;
+  color: var(--app-secondary-foreground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: var(--corner-radius-small);
+  flex-shrink: 0;
+  cursor: pointer;
+}
+.attachment-preview-close:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.attachment-preview-body {
+  overflow: auto;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--app-spacing-medium);
+}
+.attachment-preview-image {
+  max-width: 100%;
+  max-height: 75vh;
+  object-fit: contain;
+  display: block;
+  border-radius: var(--corner-radius-small);
+}
+.attachment-preview-code {
+  margin: 0;
+  width: 100%;
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+  overflow: auto;
+  align-self: flex-start;
+}
+.attachment-preview-code code {
+  font-family: var(--app-font-mono, monospace);
+}
+.attachment-preview-empty {
+  color: var(--app-secondary-foreground);
+  font-size: 13px;
+}
 
 /* ---- Permission prompt shell ----
    Matches the extension's permissionRequestContainer: per-tool body up top,
@@ -2450,21 +2561,270 @@ button {
 }
 
 /* ---- Empty states ---- */
+
+/* === EmptyWorkspace — animated welcome screen === */
+
+@keyframes ew-glow-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.55; transform: scale(1.08); }
+}
+
+@keyframes ew-glow-pulse-slow {
+  0%, 100% { opacity: 0.7; transform: scale(1); }
+  50%       { opacity: 0.35; transform: scale(1.12); }
+}
+
+@keyframes ew-card-in {
+  from { opacity: 0; transform: translateY(22px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes ew-logo-float {
+  0%, 100% { transform: translateY(0px); }
+  50%       { transform: translateY(-5px); }
+}
+
+@keyframes ew-logo-glow-pulse {
+  0%, 100% { box-shadow: 0 6px 32px rgba(0,0,0,0.55), 0 0 36px rgba(217,119,87,0.18), 0 0 0 1px rgba(217,119,87,0.12); }
+  50%       { box-shadow: 0 6px 32px rgba(0,0,0,0.55), 0 0 56px rgba(217,119,87,0.35), 0 0 0 1px rgba(217,119,87,0.20); }
+}
+
+/* Container */
 .empty-workspace {
   flex: 1;
   display: flex;
   align-items: center;
   justify-content: center;
   padding: var(--app-spacing-xlarge);
+  position: relative;
+  overflow: hidden;
 }
+
+/* Ambient glow orbs */
+.ew-orb {
+  position: absolute;
+  border-radius: 50%;
+  pointer-events: none;
+  filter: blur(90px);
+}
+.ew-orb-primary {
+  width: 520px;
+  height: 520px;
+  top: 50%;
+  left: 50%;
+  transform: translate(-62%, -52%);
+  background: radial-gradient(circle, rgba(217,119,87,0.22) 0%, rgba(198,97,63,0.10) 45%, transparent 70%);
+  animation: ew-glow-pulse 5s ease-in-out infinite;
+}
+.ew-orb-secondary {
+  width: 380px;
+  height: 380px;
+  top: 50%;
+  left: 50%;
+  transform: translate(10%, -42%);
+  background: radial-gradient(circle, rgba(80,140,200,0.13) 0%, rgba(60,100,180,0.06) 45%, transparent 70%);
+  animation: ew-glow-pulse-slow 7s ease-in-out infinite;
+}
+
+/* Card */
 .empty-workspace-card {
-  max-width: 420px;
+  position: relative;
+  max-width: 460px;
+  width: 100%;
   text-align: center;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: var(--app-spacing-large);
+  gap: 22px;
+  padding: 40px 36px 32px;
+  background: rgba(30, 30, 30, 0.62);
+  border: 1px solid rgba(217, 119, 87, 0.14);
+  border-radius: 16px;
+  box-shadow:
+    0 0 0 1px rgba(217,119,87,0.06),
+    0 8px 48px rgba(0,0,0,0.45),
+    0 0 80px rgba(217,119,87,0.04) inset;
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  animation: ew-card-in 0.55s cubic-bezier(0.22, 1, 0.36, 1) both;
 }
+
+/* Icon cluster — static icons floating around the logo */
+.ew-icon-cluster {
+  position: relative;
+  width: 260px;
+  height: 260px;
+  flex-shrink: 0;
+}
+
+/* Each icon is pinned via CSS custom props --pin-x / --pin-y set inline */
+.ew-icon-pin {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 34px;
+  height: 34px;
+  margin: -17px 0 0 -17px;
+  transform: translate(var(--pin-x, 0px), var(--pin-y, 0px));
+}
+
+.ew-icon {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+  opacity: 0.65;
+  border-radius: 6px;
+  background: rgba(255,255,255,0.04);
+  padding: 3px;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Buildover logo — outer handles float, inner handles 3D tilt.
+   Separating them means the CSS float animation never fights JS transform. */
+.ew-logo-wrap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 100px;
+  height: 100px;
+  margin: -50px 0 0 -50px;
+  animation: ew-logo-float 4s ease-in-out infinite, ew-logo-glow-pulse 4s ease-in-out infinite;
+}
+
+/* Inner: receives perspective + rotateX/Y from JS */
+.ew-logo-tilt {
+  width: 100%;
+  height: 100%;
+  border-radius: 24px;
+  overflow: hidden;
+  position: relative;
+  will-change: transform;
+  transition: transform 0.5s cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.ew-logo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 24px;
+  display: block;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+
+/* Glisten — two solid white bars, hidden off-screen by default.
+   JS only places them on-screen during a tight ±5° rotateY window,
+   sweeping across exactly like a specular highlight on brushed metal.
+   Zero gradients. */
+.ew-logo-shine {
+  position: absolute;
+  inset: 0;
+  border-radius: 24px;
+  pointer-events: none;
+  overflow: hidden;
+  --s1: -120%;
+  --s2: -120%;
+}
+/* wide bar */
+.ew-logo-shine::before {
+  content: "";
+  position: absolute;
+  top: -10%;
+  left: var(--s1, -120%);
+  width: 12%;
+  height: 120%;
+  background: rgba(255, 255, 255, 0.22);
+  transform: skewX(-12deg);
+}
+/* narrow brighter bar */
+.ew-logo-shine::after {
+  content: "";
+  position: absolute;
+  top: -10%;
+  left: var(--s2, -120%);
+  width: 5%;
+  height: 120%;
+  background: rgba(255, 255, 255, 0.40);
+  transform: skewX(-12deg);
+}
+
+/* Text block */
+.ew-text-block {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+}
+
+.ew-headline {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+  color: var(--app-primary-foreground);
+}
+
+.ew-subtext {
+  margin: 0;
+  font-size: 13px;
+  line-height: 1.6;
+  color: var(--app-secondary-foreground);
+  max-width: 300px;
+}
+
+/* CTA wrapper — centre the open-repo-menu trigger */
+.ew-cta {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+/* Style the trigger button specifically in the welcome screen */
+.ew-cta .open-repo-trigger {
+  background: transparent;
+  color: var(--app-claude-orange);
+  border: 1px solid rgba(217, 119, 87, 0.45);
+  border-right: 1px solid rgba(217, 119, 87, 0.45);
+  border-radius: var(--corner-radius-medium);
+  padding: 8px 22px;
+  font-size: 13px;
+  font-weight: 500;
+  letter-spacing: 0.1px;
+  box-shadow: 0 0 16px rgba(217, 119, 87, 0.08);
+  transition: background 0.15s, border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+}
+.ew-cta .open-repo-trigger:hover:not(:disabled) {
+  background: rgba(217, 119, 87, 0.10);
+  border-color: rgba(217, 119, 87, 0.65);
+  box-shadow: 0 0 20px rgba(217, 119, 87, 0.15);
+  transform: translateY(-1px);
+}
+.ew-cta .open-repo-trigger:active:not(:disabled) {
+  background: rgba(217, 119, 87, 0.14);
+  transform: translateY(0);
+}
+
+/* Feature hint chips */
+.ew-chips {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: center;
+}
+.ew-chip {
+  font-size: 11px;
+  color: rgba(150, 150, 150, 0.7);
+  letter-spacing: 0.2px;
+}
+.ew-chip-dot {
+  font-size: 11px;
+  color: rgba(150, 150, 150, 0.35);
+  line-height: 1;
+}
+
+/* Legacy selectors kept for safety (nothing references them now) */
 .empty-workspace-card h2 {
   margin: 0;
   font-size: 18px;
@@ -3309,6 +3669,7 @@ button {
   flex-direction: column;
   flex: 1;
   min-width: 0;
+  max-width: 100%;
   overflow: hidden;
 }
 
@@ -3387,8 +3748,9 @@ button {
   display: flex;
   flex: 1;
   overflow-y: auto;
-  overflow-x: hidden;
+  overflow-x: auto;
   min-height: 0;
+  min-width: 0;
   position: relative;
 }
 
@@ -3396,12 +3758,13 @@ button {
   flex-shrink: 0;
   position: sticky;
   left: 0;
+  z-index: 1;
   pointer-events: none;
 }
 
 .git-graph-rows {
   flex: 1;
-  min-width: 0;
+  min-width: 600px;
 }
 
 /* Commit row */
@@ -3715,7 +4078,7 @@ button {
 /* ---- Todo Panel (sticky card to the right of the chat column) ---- */
 
 .todo-panel {
-  width: 190px;
+  width: 340px;
   flex-shrink: 0;
   align-self: flex-start;
   max-height: 50%;
@@ -5009,6 +5372,7 @@ button {
   font-family: var(--app-monospace-font-family);
   font-size: 12.5px;
   color: var(--app-foreground, #d4d4d4);
+  min-width: 100%;
 }
 
 .file-viewer-row--added {

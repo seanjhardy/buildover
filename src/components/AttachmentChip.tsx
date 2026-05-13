@@ -9,13 +9,28 @@ function formatBytes(n: number): string {
 interface Props {
   attachment: Attachment;
   onRemove?: () => void;
+  onClick?: () => void;
   compact?: boolean;
 }
 
-export function AttachmentChip({ attachment, onRemove, compact }: Props) {
+export function AttachmentChip({ attachment, onRemove, onClick, compact }: Props) {
   const isImage = attachment.mime.startsWith("image/");
+  const classes = [
+    "attachment",
+    compact ? "compact" : "",
+    onClick ? "attachment--clickable" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
-    <div className={`attachment ${compact ? "compact" : ""}`}>
+    <div
+      className={classes}
+      onClick={onClick}
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      onKeyDown={onClick ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onClick(); } } : undefined}
+    >
       {isImage && attachment.dataUrl ? (
         <img className="attachment-thumb" src={attachment.dataUrl} alt="" />
       ) : (
@@ -32,7 +47,7 @@ export function AttachmentChip({ attachment, onRemove, compact }: Props) {
       {onRemove && (
         <button
           className="attachment-remove"
-          onClick={onRemove}
+          onClick={(e) => { e.stopPropagation(); onRemove(); }}
           aria-label="Remove"
         >
           ×

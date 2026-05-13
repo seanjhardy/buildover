@@ -50,7 +50,7 @@ export function useFilesChanged(
       for (const block of turn.content) {
         if (block.type !== "tool_use") continue;
         const name = block.name;
-        if (name !== "Write" && name !== "Edit") continue;
+        if (name !== "Write" && name !== "Edit" && name !== "MultiEdit") continue;
 
         const input = block.input as Record<string, unknown>;
         const absPath = String(input.file_path ?? "");
@@ -66,6 +66,31 @@ export function useFilesChanged(
           } else {
             // Accumulate if the file was written multiple times
             existing.added += added;
+          }
+        } else if (name === "MultiEdit") {
+          // MultiEdit: edits is an array of { old_string, new_string } pairs
+          const edits = Array.isArray(input.edits)
+            ? (input.edits as { old_string?: string; new_string?: string }[])
+            : [];
+          let addedLines = 0;
+          let removedLines = 0;
+          for (const edit of edits) {
+            addedLines += countLines(String(edit.new_string ?? ""));
+            removedLines += countLines(String(edit.old_string ?? ""));
+          }
+          const existing = map.get(absPath);
+          if (!existing) {
+            map.set(absPath, {
+              path: absPath,
+              relPath,
+              op: "edit",
+              added: addedLines,
+              removed: removedLines,
+            });
+          } else {
+            if (existing.op === "write") existing.op = "edit";
+            existing.added += addedLines;
+            existing.removed += removedLines;
           }
         } else {
           // Edit — accumulate old_string (removed) and new_string (added) lines

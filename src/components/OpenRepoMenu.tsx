@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { api } from "../lib/api.js";
 import type { RecentRepoInfo } from "../types.js";
 
@@ -88,6 +89,55 @@ export function OpenRepoMenu({
 
   const filteredRecents = recents.filter((r) => !openPaths.includes(r.path));
 
+  const popover =
+    open && coords
+      ? createPortal(
+          <div
+            ref={popoverRef}
+            className="open-repo-popover"
+            role="menu"
+            style={{ top: coords.top, left: coords.left }}
+          >
+            <button
+              type="button"
+              className="open-repo-browse"
+              onClick={handleBrowse}
+              disabled={busy}
+            >
+              Browse for folder…
+            </button>
+            {filteredRecents.length > 0 && (
+              <div className="open-repo-section-label">Recent</div>
+            )}
+            {filteredRecents.map((r) => (
+              <div key={r.path} className="open-repo-recent-row">
+                <button
+                  type="button"
+                  className="open-repo-recent"
+                  onClick={() => handleRecent(r.path)}
+                  disabled={busy}
+                  title={r.path}
+                >
+                  <span className="open-repo-recent-name">{r.name}</span>
+                  <span className="open-repo-recent-path">{r.path}</span>
+                </button>
+                <button
+                  type="button"
+                  className="open-repo-forget"
+                  onClick={() => onForgetRecent(r.path)}
+                  title="Forget this recent"
+                  aria-label="Forget"
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+            {error && <div className="open-repo-error">{error}</div>}
+          </div>,
+          document.body,
+        )
+      : null;
+
   return (
     <div className="open-repo-menu" ref={ref}>
       <button
@@ -100,50 +150,7 @@ export function OpenRepoMenu({
       >
         + Open repo
       </button>
-      {open && coords && (
-        <div
-          ref={popoverRef}
-          className="open-repo-popover"
-          role="menu"
-          style={{ top: coords.top, left: coords.left }}
-        >
-          <button
-            type="button"
-            className="open-repo-browse"
-            onClick={handleBrowse}
-            disabled={busy}
-          >
-            Browse for folder…
-          </button>
-          {filteredRecents.length > 0 && (
-            <div className="open-repo-section-label">Recent</div>
-          )}
-          {filteredRecents.map((r) => (
-            <div key={r.path} className="open-repo-recent-row">
-              <button
-                type="button"
-                className="open-repo-recent"
-                onClick={() => handleRecent(r.path)}
-                disabled={busy}
-                title={r.path}
-              >
-                <span className="open-repo-recent-name">{r.name}</span>
-                <span className="open-repo-recent-path">{r.path}</span>
-              </button>
-              <button
-                type="button"
-                className="open-repo-forget"
-                onClick={() => onForgetRecent(r.path)}
-                title="Forget this recent"
-                aria-label="Forget"
-              >
-                ×
-              </button>
-            </div>
-          ))}
-          {error && <div className="open-repo-error">{error}</div>}
-        </div>
-      )}
+      {popover}
     </div>
   );
 }

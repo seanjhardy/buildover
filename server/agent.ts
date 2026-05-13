@@ -88,7 +88,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
 
   const customToolsServer = createCustomToolsServer(requestAttentionAck);
 
-  const finalPrompt = renderPromptWithAttachments(prompt, attachments);
+  const finalPromptContent = renderPromptWithAttachments(prompt, attachments);
 
   // Tools that must always surface a UI prompt regardless of permission mode,
   // because they are user-interaction checkpoints, not dangerous operations.
@@ -127,7 +127,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
   const promptIterable = (async function* () {
     yield {
       type: "user" as const,
-      message: { role: "user" as const, content: finalPrompt },
+      message: { role: "user" as const, content: finalPromptContent },
       parent_tool_use_id: null,
       session_id: sessionId ?? "",
     };
@@ -287,6 +287,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
         err instanceof DOMException &&
         err.name === "AbortError");
     if (!isAbort) {
+      console.error("[agent] runAgentTurn error:", err);
       emit({
         type: "error",
         message: err instanceof Error ? err.message : String(err),
@@ -346,32 +347,48 @@ function normalizeContent(blocks: any[]): ContentBlock[] {
   return out;
 }
 
-// Renders attachments into the prompt as fenced contents (text files) or
-// path references (binary). For v2 the agent loop sees them as part of the
-// user's message body, which is the same approach the VS Code extension
-// takes when you @-mention a workspace file.
+// Renders attachments into a content block array so the SDK can forward them
+// to Claude correctly. Text files become a fenced text block; images become a
+// proper base64 image block so Claude can actually see them.
+type PromptContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
+
 function renderPromptWithAttachments(
   text: string,
   attachments: Attachment[] | undefined,
-): string {
+): PromptContentBlock[] | string {
   if (!attachments || attachments.length === 0) return text;
-  const parts: string[] = [text];
+
+  const blocks: PromptContentBlock[] = [{ type: "text", text }];
+
   for (const a of attachments) {
-    parts.push("");
     if (a.contents != null) {
-      parts.push(`---`);
-      parts.push(`Attached file: ${a.name} (${a.mime})`);
-      parts.push("```");
-      parts.push(a.contents);
-      parts.push("```");
+      // Text file — append as a fenced code block in a text block.
+      blocks.push({
+        type: "text",
+        text: `---\nAttached file: ${a.name} (${a.mime})\n\`\`\`\n${a.contents}\n\`\`\``,
+      });
     } else if (a.dataUrl) {
-      parts.push(`---`);
-      parts.push(
-        `Attached image: ${a.name} (${a.mime}, ${formatBytes(a.size)}). Data URL omitted from prompt; use Read tool if you need contents.`,
-      );
+      // Image — strip the data URL prefix and send as a real image block.
+      const base64Data = a.dataUrl.replace(/^data:[^;]+;base64,/, "");
+      blocks.push({
+        type: "image",
+        source: {
+          type: "base64",
+          media_type: a.mime,
+          data: base64Data,
+        },
+      });
+      // Follow the image block with a text label so Claude knows the filename.
+      blocks.push({
+        type: "text",
+        text: `(Image above: ${a.name}, ${formatBytes(a.size)})`,
+      });
     }
   }
-  return parts.join("\n");
+
+  return blocks;
 }
 
 function formatBytes(n: number): string {

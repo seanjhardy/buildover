@@ -118,7 +118,7 @@ export default function App() {
     setChatDrafts(drafts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatIdsKey]);
-  const [todoNarrow, setTodoNarrow] = useState(false);
+  const todoNarrow = false;
   const prevStreamingRef = useRef(false);
   // msgScrollRef points at .message-area (the scroll container).
   // MessageList and MessageJumpBar both use it for scroll operations.
@@ -127,6 +127,7 @@ export default function App() {
   // jump bar can use the VirtualizerHandle API instead of DOM queries.
   const jumpBarRef = useRef<JumpBarHandle | null>(null);
   const chatPaneRef = useRef<HTMLElement>(null);
+  const rightRailRef = useRef<HTMLDivElement>(null);
   // Keep refs to the latest values so the streaming effect never reads stale closures.
   const messageQueueRef = useRef(messageQueue);
   messageQueueRef.current = messageQueue;
@@ -151,16 +152,6 @@ export default function App() {
   // Imperative handle so the wake word hook can activate the orchestrator mic.
   const wakeWordTriggerRef = useRef<OrchestratorWakeTrigger>(null);
 
-  // Collapse the todo side panel to a compact button when the chat pane is narrow.
-  useEffect(() => {
-    const el = chatPaneRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(([entry]) => {
-      setTodoNarrow(entry.contentRect.width < 700);
-    });
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
 
   // ── Wake word ──────────────────────────────────────────────────────────────
   const [wakeWordEnabled, setWakeWordEnabled] = useState<boolean>(() => {
@@ -503,28 +494,6 @@ export default function App() {
           <div className="app-header-right">
             <UsageBar />
 
-            {/* Dashboard toggle */}
-            <button
-              className={`wake-word-btn ${dashboardOpen ? "active" : ""}`}
-              onClick={() => { setDashboardOpen((v) => !v); setScheduleOpen(false); }}
-              title="Global dashboard — notes & todos"
-              aria-pressed={dashboardOpen}
-            >
-              <span style={{ fontSize: 13 }}>📋</span>
-              <span className="wake-word-label">Dashboard</span>
-            </button>
-
-            {/* Schedule toggle */}
-            <button
-              className={`wake-word-btn ${scheduleOpen ? "active" : ""}`}
-              onClick={() => { setScheduleOpen((v) => !v); setDashboardOpen(false); }}
-              title="Scheduled tasks"
-              aria-pressed={scheduleOpen}
-            >
-              <span style={{ fontSize: 13 }}>⏰</span>
-              <span className="wake-word-label">Schedules</span>
-            </button>
-
             {/* Wake word toggle */}
             {wakeWord.isSupported && (
               <button
@@ -596,21 +565,23 @@ export default function App() {
           </div>
         </header>
 
-        <RepoTabs
-          openRepos={workspace.openRepos}
-          activeRepoPath={activeRepo?.path ?? null}
-          recents={workspace.recents}
-          onSelect={(path) => {
-            markRepoTabSeen(path);
-            workspace.setActiveRepo(path);
-          }}
-          onClose={workspace.closeRepo}
-          onOpen={async (path) => {
-            await workspace.openRepo(path);
-          }}
-          onForgetRecent={handleForgetRecent}
-          badges={repoTabBadges}
-        />
+        {activeRepo && (
+          <RepoTabs
+            openRepos={workspace.openRepos}
+            activeRepoPath={activeRepo?.path ?? null}
+            recents={workspace.recents}
+            onSelect={(path) => {
+              markRepoTabSeen(path);
+              workspace.setActiveRepo(path);
+            }}
+            onClose={workspace.closeRepo}
+            onOpen={async (path) => {
+              await workspace.openRepo(path);
+            }}
+            onForgetRecent={handleForgetRecent}
+            badges={repoTabBadges}
+          />
+        )}
 
         {!activeRepo ? (
           <EmptyWorkspace
@@ -737,7 +708,7 @@ export default function App() {
                       </div>
                       {/* right-rail: jump bar always; files panel + todo panel stacked (wide); compact todo strip (narrow) */}
                       {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-                      <div className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
+                      <div ref={rightRailRef} className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
                         <MessageJumpBar
                           jumpBarRef={jumpBarRef}
                         />

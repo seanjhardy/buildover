@@ -49,11 +49,29 @@ export interface GraphNode {
   isHead: boolean;
 }
 
+/**
+ * A single drawable segment of a branch path.
+ * Vertical when fromX === toX (straight line), diagonal otherwise (bezier).
+ * Rows are ABSOLUTE indices into the full commits array; the renderer remaps
+ * them to visible indices after filtering.
+ */
+interface EdgeSegment {
+  fromRow: number;
+  fromX:   number;
+  toRow:   number;
+  toX:     number;
+}
+
+/**
+ * A routed edge from a commit to one of its parents, described as an ordered
+ * list of EdgeSegment values. Using segments instead of a single bezier means
+ * lines never visually pass through unrelated commit dots.
+ */
 interface ParentEdge {
-  toLane: number;       // lane of the parent node
-  toRow: number;        // row of the parent node
-  color: string;        // colour of this edge line
-  isMerge: boolean;     // true when this commit has >1 parent
+  segments:   EdgeSegment[];
+  color:      string;
+  isMerge:    boolean;
+  parentHash: string;   // for filter-window remapping
 }
 
 export interface RefLabel {
@@ -90,120 +108,273 @@ function parseRefs(refs: string): RefLabel[] {
 }
 
 /**
- * Core DAG lane-assignment algorithm.
+ * Improved DAG lane-assignment algorithm inspired by the VS Code git-graph
+ * extension's per-row slot-claiming approach.
  *
- * Walk commits top-to-bottom (newest first, as returned by git log --all).
- * Maintain an array `lanes` where each slot holds the commit hash it is
- * "tracking towards" (i.e. the next commit in that branch line that hasn't
- * been placed yet).
- *
- * For each commit:
- *   1. Find or claim the lane that is tracking this commit's hash.
- *   2. Assign each parent to a lane (reuse if possible, otherwise fork).
- *   3. Emit edges from this node to each parent's lane/row.
- *   4. Free any lanes that are no longer needed after merges.
+ * Key improvements over the previous algorithm:
+ *   1. Per-row column tracking (rowOccupied / rowNextX) — each row knows which
+ *      x-columns are in use, enabling proper branch compression.
+ *   2. routeEdge() traces EVERY row between a commit and its parent, inserting
+ *      intermediate waypoints (EdgeSegments) so lines never visually cross
+ *      through unrelated commit dots.
+ *   3. Color recycling — colors are freed when their branch ends, not tied to a
+ *      lane index permanently.
+ *   4. Merged-in lanes are freed eagerly after a merge commit.
  */
 export function buildGraphLayout(commits: GitCommit[], currentBranch: string): GraphNode[] {
   if (commits.length === 0) return [];
 
-  // Map hash → row index for quick parent-row lookup
+  const N = commits.length;
+
+  // Pass 0: hash → absolute row index
   const rowByHash = new Map<string, number>();
   commits.forEach((c, i) => rowByHash.set(c.hash, i));
 
-  // lanes[i] = hash of the commit we expect next in lane i (undefined = free slot)
-  const lanes: (string | undefined)[] = [];
+  // ── Per-row slot tracking ────────────────────────────────────────────────
+  // rowOccupied[r] = set of x-columns claimed at row r
+  // rowNextX[r]    = the next free x-column at row r
+  const rowOccupied: (Set<number> | undefined)[] = new Array(N);
+  const rowNextX:    (number | undefined)[]       = new Array(N);
 
-  // lane index assigned to each hash that has already been placed
-  const laneByHash = new Map<string, number>();
+  function claimXAt(row: number, x: number): void {
+    if (row < 0 || row >= N) return;
+    let s = rowOccupied[row];
+    if (!s) { s = new Set(); rowOccupied[row] = s; }
+    s.add(x);
+    const cur = rowNextX[row] ?? 0;
+    if (x >= cur) rowNextX[row] = x + 1;
+  }
+
+  function isXFreeInRange(x: number, r0: number, r1: number): boolean {
+    for (let r = r0; r <= r1; r++) {
+      if (rowOccupied[r]?.has(x)) return false;
+    }
+    return true;
+  }
+
+  /** Find the highest rowNextX across [r0,r1], claim that x at every row, return it. */
+  function allocateFreshX(r0: number, r1: number): number {
+    let max = 0;
+    for (let r = r0; r <= r1; r++) max = Math.max(max, rowNextX[r] ?? 0);
+    for (let r = r0; r <= r1; r++) claimXAt(r, max);
+    return max;
+  }
+
+  // ── Color recycling ──────────────────────────────────────────────────────
+  // availableColors[i] = last absolute row at which color i is "in use".
+  // A color is free for a branch starting at `startRow` when:
+  //   (availableColors[i] ?? -1) < startRow
+  const availableColors: number[] = [];
+
+  function getAvailableColor(startRow: number, preferIndex?: number): number {
+    if (preferIndex !== undefined && (availableColors[preferIndex] ?? -1) < startRow) {
+      return preferIndex;
+    }
+    for (let i = 0; i < availableColors.length; i++) {
+      if (i === preferIndex) continue;
+      if ((availableColors[i] ?? -1) < startRow) return i;
+    }
+    availableColors.push(-1);
+    return availableColors.length - 1;
+  }
+
+  function extendColor(ci: number, toRow: number): void {
+    if ((availableColors[ci] ?? -1) < toRow) availableColors[ci] = toRow;
+  }
+
+  // ── Lane tracking ────────────────────────────────────────────────────────
+  // lanes[i]        = hash the lane is currently tracking toward (undefined = free)
+  // laneColorIdx[i] = color palette index assigned to lane i
+  const lanes:        (string | undefined)[] = [];
+  const laneColorIdx: (number | undefined)[] = [];
 
   function findFreeLane(): number {
     const i = lanes.indexOf(undefined);
     return i === -1 ? lanes.length : i;
   }
 
-  // Determine which lane index is "main" so we can give it colour index 0
-  let mainLane = -1; // assigned on first commit that touches main/HEAD
+  // ── Edge routing ─────────────────────────────────────────────────────────
+  /**
+   * Produce a list of EdgeSegments routing from (startRow, startX) to
+   * (endRow, endX), claiming intermediate x-slots at each row passed through.
+   *
+   * - Straight (startX === endX): one vertical segment, claim intermediate rows.
+   * - Adjacent rows: one diagonal segment (no intermediate rows to claim).
+   * - Multi-row diagonal: pick a "travel column" tX for intermediate rows.
+   *     Prefer endX (bend at top), then startX (bend at bottom), else fresh column.
+   *   Emit two segments: the diagonal transition + the vertical run.
+   */
+  function routeEdge(
+    startRow: number, startX: number,
+    endRow:   number, endX:   number,
+  ): EdgeSegment[] {
+    if (endRow <= startRow) return [];
 
+    // ── Straight vertical ──
+    if (startX === endX) {
+      for (let r = startRow + 1; r < endRow; r++) claimXAt(r, startX);
+      return [{ fromRow: startRow, fromX: startX, toRow: endRow, toX: endX }];
+    }
+
+    // ── Adjacent rows: single diagonal, nothing to claim ──
+    const r0 = startRow + 1;
+    const r1 = endRow - 1;
+    if (r0 > r1) {
+      return [{ fromRow: startRow, fromX: startX, toRow: endRow, toX: endX }];
+    }
+
+    // ── Multi-row diagonal: pick travel column ──
+    let tX: number;
+    let usedFreshAlloc = false;
+    if (isXFreeInRange(endX, r0, r1)) {
+      tX = endX;     // bend at the top, travel straight at endX
+    } else if (isXFreeInRange(startX, r0, r1)) {
+      tX = startX;   // travel at startX ("locked-first"), bend near the bottom
+    } else {
+      tX = allocateFreshX(r0, r1);
+      usedFreshAlloc = true;
+    }
+
+    // Claim tX at all intermediate rows (allocateFreshX already did so if used)
+    if (!usedFreshAlloc) {
+      for (let r = r0; r <= r1; r++) claimXAt(r, tX);
+    }
+
+    if (tX === startX) {
+      // Travel at startX, bend near the parent commit ("locked-first" style)
+      return [
+        { fromRow: startRow,   fromX: startX, toRow: endRow - 1, toX: tX },
+        { fromRow: endRow - 1, fromX: tX,     toRow: endRow,     toX: endX },
+      ];
+    } else {
+      // Bend near the child commit, travel straight at tX (= endX or fresh col)
+      return [
+        { fromRow: startRow,     fromX: startX, toRow: startRow + 1, toX: tX },
+        { fromRow: startRow + 1, fromX: tX,     toRow: endRow,       toX: endX },
+      ];
+    }
+  }
+
+  // ── Main loop ────────────────────────────────────────────────────────────
+  let headLane = -1;   // lane index of the HEAD/main branch (gets color 0)
   const nodes: GraphNode[] = [];
 
-  for (let row = 0; row < commits.length; row++) {
+  for (let row = 0; row < N; row++) {
     const commit = commits[row]!;
 
-    // Find this commit's lane
+    // ── Step A: find or claim a lane for this commit ──
     let myLane = lanes.indexOf(commit.hash);
     if (myLane === -1) {
-      // No existing lane is tracking this commit — it's a branch head: claim a free slot
       myLane = findFreeLane();
       lanes[myLane] = commit.hash;
     }
-    laneByHash.set(commit.hash, myLane);
 
-    // Detect HEAD lane to pin colour index 0
-    const isHead = parseRefs(commit.refs).some(
+    // ── Step B: claim the x-slot for the commit dot itself ──
+    claimXAt(row, myLane);
+
+    // ── Step C: free duplicate lane entries (another lane also tracking this hash) ──
+    for (let i = 0; i < lanes.length; i++) {
+      if (i !== myLane && lanes[i] === commit.hash) {
+        lanes[i] = undefined;
+      }
+    }
+
+    // ── Step D: detect HEAD, assign / inherit color index ──
+    const refsParsed = parseRefs(commit.refs);
+    const isHead = refsParsed.some(
       (r) => r.kind === "head" || (r.kind === "local" && r.text === currentBranch),
     );
-    if (isHead && mainLane === -1) mainLane = myLane;
 
-    // Assign parents to lanes
+    if (isHead && headLane === -1) headLane = myLane;
+
+    if (laneColorIdx[myLane] === undefined) {
+      // New lane: assign a recycled color.
+      // HEAD/main lane tries to claim color index 0 first.
+      const ci = (isHead || myLane === headLane)
+        ? getAvailableColor(row, 0)
+        : getAvailableColor(row);
+      laneColorIdx[myLane] = ci;
+    }
+
+    const myColorIdx = laneColorIdx[myLane]!;
+
+    // ── Step E: process parents ──
     const parentEdges: ParentEdge[] = [];
     const { parents } = commit;
 
     if (parents.length === 0) {
-      // Root commit — free the lane
+      // Root commit — branch ends here; free color and lane
+      extendColor(myColorIdx, row);
       lanes[myLane] = undefined;
+      laneColorIdx[myLane] = undefined;
     } else {
-      // First parent: inherit this commit's lane (keeps the main branch straight)
-      const firstParent = parents[0]!;
-      lanes[myLane] = firstParent;
+      // First parent inherits this lane (keeps the main path straight)
+      lanes[myLane] = parents[0]!;
 
       for (let pi = 0; pi < parents.length; pi++) {
         const pHash = parents[pi]!;
-        const pRow = rowByHash.get(pHash) ?? (row + 1); // fallback if parent not in window
+        const pRow  = rowByHash.get(pHash) ?? (row + 1); // fallback if parent outside window
 
         let pLane: number;
+        let pColorIdx: number;
+
         if (pi === 0) {
-          // First parent inherits this lane
-          pLane = myLane;
+          // First parent continues on this lane
+          pLane     = myLane;
+          pColorIdx = myColorIdx;
         } else {
-          // Merge parent — check if another lane is already tracking it
+          // Merge parent: reuse existing lane if one already tracks this hash
           const existing = lanes.indexOf(pHash);
           if (existing !== -1) {
-            pLane = existing;
+            pLane     = existing;
+            pColorIdx = laneColorIdx[existing] ?? getAvailableColor(row);
+            if (laneColorIdx[existing] === undefined) laneColorIdx[existing] = pColorIdx;
           } else {
-            // Fork: open a new lane for this parent
+            // Open a new lane for this merge parent
             pLane = findFreeLane();
             lanes[pLane] = pHash;
+            pColorIdx = getAvailableColor(row);
+            laneColorIdx[pLane] = pColorIdx;
           }
         }
 
+        // Keep color alive through the full span of this edge
+        extendColor(pColorIdx, pRow);
+
+        const segments = routeEdge(row, myLane, pRow, pLane);
+
         parentEdges.push({
-          toLane: pLane,
-          toRow: pRow,
-          color: laneColor(pi === 0 ? myLane : pLane),
-          isMerge: parents.length > 1,
+          segments,
+          color:      laneColor(pColorIdx),
+          isMerge:    parents.length > 1,
+          parentHash: pHash,
         });
       }
 
-      // After a merge commit, free any lanes pointing to parents that now
-      // share a lane (avoid duplicate tracking)
+      // ── Step F: eagerly free lanes made redundant by merge convergence ──
+      // Any lane (other than myLane and the explicitly assigned parent lanes)
+      // that is tracking one of our parents is now redundant.
+      const retainedLanes = new Set<number>([myLane]);
+      for (let pi = 1; pi < parents.length; pi++) {
+        const idx = lanes.indexOf(parents[pi]!);
+        if (idx !== -1) retainedLanes.add(idx);
+      }
       for (let i = 0; i < lanes.length; i++) {
-        if (i !== myLane && parents.includes(lanes[i] ?? "")) {
-          // Another lane is also tracking one of our parents — that's fine,
-          // it will converge naturally.  Don't free it; let it merge.
+        if (!retainedLanes.has(i) && parents.includes(lanes[i] ?? "")) {
+          lanes[i] = undefined;
+          // laneColorIdx[i] is retained via extendColor — it will be recycled
+          // naturally once availableColors[ci] < next startRow that needs it.
         }
       }
     }
 
-    // Colour: index 0 for HEAD branch, otherwise based on lane index
-    const colorIndex = myLane === mainLane ? 0 : myLane >= 1 ? myLane : 0;
-
     nodes.push({
       commit,
       row,
-      lane: myLane,
-      color: laneColor(colorIndex),
+      lane:      myLane,
+      color:     laneColor(myColorIdx),
       parentEdges,
-      refLabels: parseRefs(commit.refs),
+      refLabels: refsParsed,
       isHead,
     });
   }
@@ -234,28 +405,41 @@ interface GraphSvgProps {
   onSelect: (hash: string) => void;
 }
 
+/**
+ * Convert one EdgeSegment into an SVG path string.
+ *
+ * @param seg     Segment with absolute row indices and x-columns.
+ * @param fromVis Visible (filtered) row index for seg.fromRow.
+ * @param toVis   Visible (filtered) row index for seg.toRow.
+ */
+function segmentPath(seg: EdgeSegment, fromVis: number, toVis: number): string {
+  const x1 = LANE_OFFSET + seg.fromX * LANE_W;
+  const y1 = fromVis * ROW_H + ROW_H / 2;
+  const x2 = LANE_OFFSET + seg.toX   * LANE_W;
+  const y2 = toVis   * ROW_H + ROW_H / 2;
+
+  if (x1 === x2) {
+    // Vertical segment — straight line
+    return `M ${x1} ${y1} L ${x2} ${y2}`;
+  }
+
+  // Diagonal transition — cubic bezier.
+  // Control points at (x1, y1+d) and (x2, y2-d) produce the canonical
+  // "branch opening" curve that hugs the start column and sweeps into the
+  // end column near the bottom.
+  const span = Math.abs(y2 - y1);
+  const d    = Math.min(span * 0.8, ROW_H * 0.8);
+  return `M ${x1} ${y1} C ${x1} ${y1 + d}, ${x2} ${y2 - d}, ${x2} ${y2}`;
+}
+
 function GraphSvg({ nodes, maxLane, selectedHash, onSelect }: GraphSvgProps) {
-  const svgWidth = LANE_OFFSET + (maxLane + 1) * LANE_W + 8;
+  const svgWidth  = LANE_OFFSET + (maxLane + 1) * LANE_W + 8;
   const svgHeight = nodes.length * ROW_H;
 
-  // Build SVG path data for each edge: straight vertical or bezier curve
-  function edgePath(fromLane: number, fromRow: number, toLane: number, toRow: number): string {
-    const x1 = LANE_OFFSET + fromLane * LANE_W;
-    const y1 = fromRow * ROW_H + ROW_H / 2;
-    const x2 = LANE_OFFSET + toLane * LANE_W;
-    const y2 = toRow * ROW_H + ROW_H / 2;
-
-    if (fromLane === toLane) {
-      // Same lane — draw a straight vertical line
-      return `M ${x1} ${y1} L ${x2} ${y2}`;
-    }
-    // Different lanes — cubic bezier that curves smoothly
-    const cx = x1;
-    const cy = y1 + ROW_H * 0.7;
-    const dx = x2;
-    const dy = y2 - ROW_H * 0.7;
-    return `M ${x1} ${y1} C ${cx} ${cy}, ${dx} ${dy}, ${x2} ${y2}`;
-  }
+  // Map absolute row index → visible index in the (potentially filtered) list.
+  // Keyed by node.row (absolute), not by hash, because segments store rows.
+  const visIdxByAbsRow = new Map<number, number>();
+  nodes.forEach((n, vi) => visIdxByAbsRow.set(n.row, vi));
 
   return (
     <svg
@@ -266,22 +450,38 @@ function GraphSvg({ nodes, maxLane, selectedHash, onSelect }: GraphSvgProps) {
     >
       {/* Edges (drawn first so dots sit on top) */}
       {nodes.map((node) =>
-        node.parentEdges.map((edge, ei) => (
-          <path
-            key={`${node.commit.hash}-e${ei}`}
-            d={edgePath(node.lane, node.row, edge.toLane, edge.toRow)}
-            stroke={edge.color}
-            strokeWidth={1.5}
-            fill="none"
-            opacity={0.75}
-          />
-        )),
+        node.parentEdges.map((edge, ei) =>
+          edge.segments.map((seg, si) => {
+            // Both endpoints must be in the visible window.
+            const fromVis = visIdxByAbsRow.get(seg.fromRow);
+            const toVis   = visIdxByAbsRow.get(seg.toRow);
+
+            // If FROM is outside the visible set, skip entirely.
+            if (fromVis === undefined) return null;
+
+            // If TO is outside (parent not in visible window), clip to a
+            // virtual row just below the last visible row so the edge exits
+            // gracefully at the bottom of the SVG.
+            const clippedToVis = toVis ?? nodes.length;
+
+            return (
+              <path
+                key={`${node.commit.hash}-e${ei}-s${si}`}
+                d={segmentPath(seg, fromVis, clippedToVis)}
+                stroke={edge.color}
+                strokeWidth={1.5}
+                fill="none"
+                opacity={0.75}
+              />
+            );
+          }),
+        ),
       )}
 
       {/* Commit dots */}
-      {nodes.map((node) => {
+      {nodes.map((node, visIdx) => {
         const cx = LANE_OFFSET + node.lane * LANE_W;
-        const cy = node.row * ROW_H + ROW_H / 2;
+        const cy = visIdx * ROW_H + ROW_H / 2;
         const r = node.isHead ? HEAD_R : DOT_R;
         const isSelected = node.commit.hash === selectedHash;
 
@@ -590,10 +790,20 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
     );
   }, [nodes, filter]);
 
-  const maxLane = useMemo(
-    () => visibleNodes.reduce((m, n) => Math.max(m, n.lane), 0),
-    [visibleNodes],
-  );
+  // maxLane must account for segment x-columns, not just commit dot lanes,
+  // since routeEdge may allocate travel columns wider than any commit lane.
+  const maxLane = useMemo(() => {
+    let max = 0;
+    for (const n of visibleNodes) {
+      max = Math.max(max, n.lane);
+      for (const edge of n.parentEdges) {
+        for (const seg of edge.segments) {
+          max = Math.max(max, seg.fromX, seg.toX);
+        }
+      }
+    }
+    return max;
+  }, [visibleNodes]);
 
   const svgWidth = LANE_OFFSET + (maxLane + 1) * LANE_W + 8;
 
