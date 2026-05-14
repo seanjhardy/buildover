@@ -8,6 +8,17 @@ interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
 
+// Electron notification bridge — exposed by electron/preload.ts via contextBridge.
+// Only available when running inside Electron; undefined in plain browser dev mode.
+interface ElectronNotifications {
+  updateBadge(attentionCount: number, runningCount: number): Promise<void>;
+  notify(title: string, body: string): Promise<void>;
+}
+
+interface Window {
+  electronNotifications?: ElectronNotifications;
+}
+
 // Type shim for openwakeword-wasm-browser which ships JS-only (no .d.ts).
 declare module "openwakeword-wasm-browser" {
   type WakeWordEventMap = {

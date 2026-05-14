@@ -22,7 +22,7 @@ export interface Usage {
   fetchedAt: string;
 }
 
-const POLL_MS = 5 * 60 * 1000;
+const POLL_MS = 30 * 60 * 1000;
 
 export function useUsage() {
   const [usage, setUsage] = useState<Usage | null>(null);

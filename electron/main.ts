@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, nativeImage } = require("electron");
+const { app, BrowserWindow, shell, nativeImage, ipcMain, Notification } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -72,6 +72,7 @@ function createWindow(): void {
       preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
+      sandbox: false, // required so preload can use require("electron")
       backgroundThrottling: false,
       webSecurity: false, // allows localhost API/WS calls without CORS overhead
     },
@@ -93,6 +94,37 @@ app.whenReady().then(async () => {
 
   await startServers();
   createWindow();
+
+  // ── Dock badge ─────────────────────────────────────────────────────────────
+  // Payload: (attentionCount, runningCount)
+  // Badge format: "N •" for both, "N" for attention only, "•" for running only, "" for none.
+  ipcMain.handle(
+    "notification:update-badge",
+    (_event: any, attentionCount: number, runningCount: number) => {
+      if (!app.dock) return;
+      if (attentionCount > 0 && runningCount > 0) {
+        app.dock.setBadge(`${attentionCount} •`);
+      } else if (attentionCount > 0) {
+        app.dock.setBadge(`${attentionCount}`);
+      } else if (runningCount > 0) {
+        app.dock.setBadge("•");
+      } else {
+        app.dock.setBadge("");
+      }
+    },
+  );
+
+  // ── Native notification ─────────────────────────────────────────────────────
+  // Only fires when the main window is NOT focused — user is already watching otherwise.
+  ipcMain.handle(
+    "notification:notify",
+    (_event: any, title: string, body: string) => {
+      if (mainWindow?.isFocused()) return;
+      if (!Notification.isSupported()) return;
+      const n = new Notification({ title, body, silent: true });
+      n.show();
+    },
+  );
 });
 
 app.on("activate", () => {

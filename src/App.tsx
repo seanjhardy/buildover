@@ -21,6 +21,7 @@ import { useAgent } from "./hooks/useAgent.js";
 import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
 import { useAudioRingBuffer } from "./hooks/useAudioRingBuffer.js";
 import { useChats } from "./hooks/useChats.js";
+import { useNotifications } from "./hooks/useNotifications.js";
 import { useRepoTabBadges } from "./hooks/useRepoTabBadges.js";
 import { useTodos } from "./hooks/useTodos.js";
 import { useFilesChanged } from "./hooks/useFilesChanged.js";
@@ -58,6 +59,9 @@ export default function App() {
   const allRepoChats = useAllRepoChats(openRepoPaths);
   const { badges: repoTabBadges, markSeen: markRepoTabSeen } =
     useRepoTabBadges(openRepoPaths, activeRepo?.path ?? null, allRepoChats);
+
+  // Dock badge + native macOS notifications for agent status changes.
+  useNotifications(allRepoChats);
 
   const [model, setModel] = useState<Model>("claude-sonnet-4-6");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
@@ -118,7 +122,15 @@ export default function App() {
     setChatDrafts(drafts);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [chatIdsKey]);
-  const todoNarrow = false;
+  // Collapse the right-rail todo panel when the window is too narrow.
+  // Using window.innerWidth is reliable at all times (no DOM layout needed).
+  // The right-rail panels start getting squeezed below ~1100px window width.
+  const [todoNarrow, setTodoNarrow] = useState(() => window.innerWidth < 1100);
+  useEffect(() => {
+    const onResize = () => setTodoNarrow(window.innerWidth < 1100);
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
   const prevStreamingRef = useRef(false);
   // msgScrollRef points at .message-area (the scroll container).
   // MessageList and MessageJumpBar both use it for scroll operations.

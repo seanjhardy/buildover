@@ -63,6 +63,12 @@ class AgentSession {
   // chat_status broadcasts for turn-content events so the client never sees
   // the chat flicker to "running" and back during an invisible compact turn.
   private currentTurnSilent = false;
+  // If a user message arrives while a silent auto-compact turn is in progress,
+  // we can't run it immediately (running = true) but we also can't surface a
+  // "Chat already running" error since the user has no idea compaction is
+  // happening. Instead we park the turn here and start it as soon as the
+  // compact finishes.
+  private pendingUserTurn: Parameters<AgentSession["runTurn"]>[0] | null = null;
   // Tracks the active turn's permissionMode so it can be updated mid-turn.
   // canUseTool reads this on every invocation via the getter passed to the
   // SDK, so toggling bypass takes effect on the next decision.
@@ -263,6 +269,13 @@ class AgentSession {
     silent?: boolean;
   }): Promise<void> {
     if (this.running) {
+      if (this.currentTurnSilent && !args.silent) {
+        // A silent auto-compact is in progress. The user has no idea — the UI
+        // showed the chat as done. Park this turn and run it the moment
+        // compaction finishes (see the finally block below).
+        this.pendingUserTurn = args;
+        return;
+      }
       throw new Error("Chat already running");
     }
     this.running = true;
@@ -429,6 +442,13 @@ class AgentSession {
           isRetry: true,  // don't echo "/compact" as a user message
           silent: true,   // suppress assistant/result turns from reaching the UI
         });
+      } else if (this.pendingUserTurn) {
+        // A user message arrived while a silent compact turn was running and
+        // was parked (see the running guard above). Now that the session is
+        // free, send it through normally.
+        const queued = this.pendingUserTurn;
+        this.pendingUserTurn = null;
+        void this.runTurn(queued);
       }
     }
   }
