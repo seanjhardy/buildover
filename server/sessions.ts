@@ -149,7 +149,15 @@ class AgentSession {
     // Persist the response on the transcript so future replays show it.
     const ts = new Date().toISOString();
     void this.record({ type: "permission_response", requestId, result, ts }).then(
-      (rec) => this.pushStatusFor(rec),
+      (rec) => {
+        // Only push a status update while the turn is still running. If the
+        // record() promise resolves after the turn's finally block has already
+        // called pushStatusFor (possible when the agent's last tool use results
+        // in a permission that is resolved just as the turn ends), broadcasting
+        // again here would produce a duplicate "agent_done" chat_status event
+        // and therefore a duplicate notification on the client.
+        if (this.running) this.pushStatusFor(rec);
+      },
     );
     pending.resolve(result);
     return true;
@@ -488,25 +496,47 @@ class AgentSession {
       });
       return;
     }
+    // Silent (auto-compact) turns must not write turn-content events to the
+    // persisted log. Storing a `result` for a compact turn causes the client to
+    // render an extra result line for every auto-compact that ran — the same
+    // events that are already suppressed from being broadcast to subscribers.
+    const SILENT_PERSIST_SUPPRESS = new Set([
+      "result",
+      "assistant",
+      "user_tool_results",
+      "turn_start",
+      "turn_end",
+    ]);
+    if (this.currentTurnSilent && SILENT_PERSIST_SUPPRESS.has(event.type)) {
+      return;
+    }
+
     const ts = new Date().toISOString();
     const { chatId: _omit, ...rest } = event as AgentEvent & { chatId: string };
     const persisted = { ...rest, ts } as ChatEvent;
     const updated = await this.record(persisted);
-    // During a silent (auto-compact) turn, skip broadcasting chat_status for
-    // turn-content events. Persisting turn_start would make computeStatus()
-    // return "running" and push that to clients, causing the chat to flicker
-    // to "running" and back — confusing the UI and the message-queue auto-send
-    // logic. The final pushStatusFor in runTurn's finally block broadcasts the
-    // correct terminal status once the compact turn is fully done.
+    // Always suppress pushStatusFor for terminal turn events (result, turn_end):
+    // the finally block in runTurn is solely responsible for broadcasting the
+    // definitive terminal status, so firing it here too would send a duplicate
+    // chat_status event — and trigger a duplicate notification on the client.
+    //
+    // For silent (auto-compact) turns, additionally suppress the mid-turn
+    // content events (assistant, turn_start, etc.) so the chat never flickers
+    // to "running" and back during an invisible compact turn.
+    const ALWAYS_SUPPRESS_TYPES = new Set([
+      "result",
+      "turn_end",
+    ]);
     const SILENT_SUPPRESS_TYPES = new Set([
       "assistant",
       "user_tool_results",
-      "result",
       "user_message_echo",
       "turn_start",
-      "turn_end",
     ]);
-    if (!this.currentTurnSilent || !SILENT_SUPPRESS_TYPES.has(event.type)) {
+    const suppressed =
+      ALWAYS_SUPPRESS_TYPES.has(event.type) ||
+      (this.currentTurnSilent && SILENT_SUPPRESS_TYPES.has(event.type));
+    if (!suppressed) {
       await this.pushStatusFor(updated);
     }
   }

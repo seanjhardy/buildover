@@ -72,18 +72,23 @@ export function useNotifications(
           if (prev && NOTIFY_STATUSES.has(prev)) {
             notified.delete(`${chat.id}:${prev}`);
           }
+        }
 
-          // Fire a native notification on transition INTO a notify-worthy status.
-          if (
-            NOTIFY_STATUSES.has(chat.status) &&
-            !notified.has(`${chat.id}:${chat.status}`)
-          ) {
-            notified.add(`${chat.id}:${chat.status}`);
-            void api.notify(
-              `buildover — ${statusLabel(chat.status)}`,
-              chat.title || "Unnamed chat",
-            );
-          }
+        // Fire a native notification on transition INTO a notify-worthy status.
+        // Checked independently of hasTransitioned so that the notifiedRef dedup
+        // key acts as the single source of truth — guarding against any code path
+        // (race conditions, React StrictMode double-invocations, server replays,
+        // etc.) that could deliver the same notify-worthy status more than once.
+        if (
+          NOTIFY_STATUSES.has(chat.status) &&
+          prev !== undefined &&                          // don't notify on first load
+          !notified.has(`${chat.id}:${chat.status}`)
+        ) {
+          notified.add(`${chat.id}:${chat.status}`);
+          void api.notify(
+            `buildover — ${statusLabel(chat.status)}`,
+            chat.title || "Unnamed chat",
+          );
         }
 
         // Record current status as the new "previous" for the next render.

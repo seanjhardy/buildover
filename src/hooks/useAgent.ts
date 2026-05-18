@@ -168,6 +168,12 @@ export function useAgent(
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
 
+  // Tracks the number of turn_start events that haven't been matched by a
+  // turn_end yet. This lets us guard against stale chat_status events (e.g.
+  // "awaiting_input" from turn N) overriding isStreaming that was set true by
+  // turn_start for the immediately-queued turn N+1.
+  const turnCountRef = useRef(0);
+
   // Mirror chatId in a ref so the event handler always reads the current value
   // without needing to be re-registered on every chatId change.
   const chatIdRef = useRef(chatId);
@@ -176,6 +182,10 @@ export function useAgent(
   useEffect(() => agentSocket.onConnection(setConnection), []);
 
   useEffect(() => {
+    // Reset the turn counter whenever we switch to a new chat so stale counts
+    // from the previous chat don't bleed into the new one.
+    turnCountRef.current = 0;
+
     if (!repoPath || !chatId) {
       setTurns([]);
       setIsStreaming(false);
@@ -337,9 +347,57 @@ export function useAgent(
       // multiplexer routes by chatId so this should be impossible, but guard
       // anyway.
       if (event.chatId !== chatIdRef.current) return;
+
+      // isStreaming is driven exclusively by the turn counter, which is
+      // updated by turn_start / turn_end events.  chat_status and chat_replay
+      // also call setIsStreaming, but those signals can be stale (e.g. an
+      // "awaiting_input" status that arrives after the turn_start for the
+      // next queued message, or a "running" status that arrives after
+      // turn_end).  We completely ignore those calls by routing all
+      // setIsStreaming invocations through a counter-authoritative setter.
+      //
+      // The rules:
+      //   • turn_start → increment counter, set streaming = true
+      //   • turn_end   → decrement counter, set streaming = (counter > 0)
+      //   • everything else → setIsStreaming is a no-op (passed to
+      //     applyAgentEvent but ignored)
+      if (event.type === "turn_start") {
+        turnCountRef.current += 1;
+        setIsStreaming(true);
+      } else if (event.type === "turn_end") {
+        turnCountRef.current = Math.max(0, turnCountRef.current - 1);
+        setIsStreaming(turnCountRef.current > 0);
+      } else if (event.type === "chat_replay") {
+        // A chat_replay is the initial history snapshot sent when we subscribe.
+        // If the replayed record shows the agent was already running, seed the
+        // counter to 1 so isStreaming reflects reality.  We only do this if
+        // the counter is currently 0 — if a turn_start already arrived before
+        // the replay (unlikely but theoretically possible in a reconnect race),
+        // we trust the counter rather than the snapshot status.
+        if (turnCountRef.current === 0) {
+          const running = event.record.status === "running";
+          turnCountRef.current = running ? 1 : 0;
+          setIsStreaming(running);
+        }
+      }
+      // Note: we intentionally do NOT touch isStreaming for chat_status events.
+      // chat_status "running"/"awaiting_input" can arrive out of order relative
+      // to turn_start/turn_end, causing phantom spinner-on or spinner-off states.
+      // The turn counter (updated only by turn_start/turn_end/chat_replay) is
+      // the single source of truth for isStreaming.
+
+      // Pass a no-op setter for isStreaming so that applyAgentEvent's
+      // chat_status and chat_replay branches cannot interfere with the
+      // counter-authoritative value we set above.
+      const noopSetIsStreaming: React.Dispatch<React.SetStateAction<boolean>> = () => {
+        // Intentionally empty — isStreaming is managed solely by turn_start /
+        // turn_end above.  All other callers (chat_status, chat_replay) are
+        // silenced here to prevent out-of-order events from corrupting state.
+      };
+
       applyAgentEvent(event, {
         setTurns: cachedSetTurns,
-        setIsStreaming,
+        setIsStreaming: noopSetIsStreaming,
         setSessionId: cachedSetSessionId,
         setTools: cachedSetTools,
         setMcpServers: cachedSetMcpServers,
@@ -515,30 +573,30 @@ interface Setters {
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
   switch (event.type) {
     case "chat_replay": {
-      // Hydrating from a full replay can involve hundreds of turns. Wrap in
-      // startTransition so React renders it as an interruptible low-priority
-      // update — the UI stays responsive while the reconciliation runs.
-      startTransition(() => {
-        hydrateFromRecord(event.record, s);
-        // Restore any in-flight permission request the server is still waiting on.
-        const first = event.pendingPermissions[0];
-        s.setPendingPermission(
-          first
-            ? {
-                requestId: first.requestId,
-                toolName: first.toolName,
-                input: first.input,
-                suggestions: first.suggestions ?? [],
-              }
-            : undefined,
-        );
-        s.setStatus(event.record.status);
-        s.setIsStreaming(event.record.status === "running");
-        // Expose this chat's saved permission mode so App.tsx can sync its UI.
-        s.setChatPermissionMode(event.record.permissionMode);
-        // Compute branch navigation metadata from the replayed record.
-        s.setBranchInfo(computeBranchInfo(event.record));
-      });
+      // Hydrate synchronously (no startTransition) so that this full-replace
+      // setTurns cannot be interleaved with the live "result" event's functional
+      // updater — which was the root cause of the duplicate result line.
+      // React will batch this with any other synchronous updates in the same
+      // event-loop tick, keeping renders efficient without the race condition.
+      hydrateFromRecord(event.record, s);
+      // Restore any in-flight permission request the server is still waiting on.
+      const first = event.pendingPermissions[0];
+      s.setPendingPermission(
+        first
+          ? {
+              requestId: first.requestId,
+              toolName: first.toolName,
+              input: first.input,
+              suggestions: first.suggestions ?? [],
+            }
+          : undefined,
+      );
+      s.setStatus(event.record.status);
+      s.setIsStreaming(event.record.status === "running");
+      // Expose this chat's saved permission mode so App.tsx can sync its UI.
+      s.setChatPermissionMode(event.record.permissionMode);
+      // Compute branch navigation metadata from the replayed record.
+      s.setBranchInfo(computeBranchInfo(event.record));
       break;
     }
     case "chat_forked":
@@ -575,17 +633,36 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       break;
     case "result":
       s.setSessionId(event.sessionId || undefined);
-      s.setTurns((prev) => [
-        ...prev,
-        {
-          kind: "result",
-          id: `result-${Date.now()}`,
-          subtype: event.subtype,
-          durationMs: event.durationMs,
-          totalCostUsd: event.totalCostUsd,
-          numTurns: event.numTurns,
-        },
-      ]);
+      s.setTurns((prev) => {
+        // Deduplicate: scan backwards from the end of the current turn (up to
+        // the previous user message) to see if chat_replay already hydrated
+        // this result. This prevents a second copy when the deferred
+        // startTransition hydration and the live broadcast both fire.
+        for (let i = prev.length - 1; i >= 0; i--) {
+          const t = prev[i];
+          if (t.kind === "user") break; // don't look past the start of this turn
+          if (
+            t.kind === "result" &&
+            t.subtype === event.subtype &&
+            t.durationMs === event.durationMs &&
+            t.totalCostUsd === event.totalCostUsd &&
+            t.numTurns === event.numTurns
+          ) {
+            return prev; // already present — skip the duplicate
+          }
+        }
+        return [
+          ...prev,
+          {
+            kind: "result",
+            id: `result-${Date.now()}`,
+            subtype: event.subtype,
+            durationMs: event.durationMs,
+            totalCostUsd: event.totalCostUsd,
+            numTurns: event.numTurns,
+          },
+        ];
+      });
       break;
     case "permission_request":
       // RequestUserAttention is now handled via the pending_attention event —
@@ -659,7 +736,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       if (event.sessionId) s.setSessionId(event.sessionId);
       // Running ⇔ a turn is in progress for the agent.
       if (event.status === "running") s.setIsStreaming(true);
-      else if (event.status !== "awaiting_input") s.setIsStreaming(false);
+      else s.setIsStreaming(false);
       break;
     case "chat_title":
       // Title isn't displayed inside the chat body, but other consumers (the
@@ -671,7 +748,22 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
 function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   const turns: ChatTurn[] = [];
   let initSeen = false;
+  // Track whether the current agent turn had a real user message driving it.
+  // Auto-compact turns have no user_message — their `result` events should not
+  // be rendered as visible result lines (they were already suppressed from live
+  // broadcasts, but old records may have them persisted on disk).
+  let currentTurnHasUserMessage = false;
   for (const ev of record.events) {
+    if (ev.type === "user_message") {
+      // user_message is persisted *before* turn_start, so we set the flag here
+      // and only clear it after the turn ends (on turn_end).
+      currentTurnHasUserMessage = true;
+    } else if (ev.type === "turn_end") {
+      currentTurnHasUserMessage = false;
+    }
+    // Skip result events for turns that had no user message — these are
+    // silent auto-compact turns whose results should never be shown.
+    if (ev.type === "result" && !currentTurnHasUserMessage) continue;
     const t = chatEventToTurn(ev);
     if (t) turns.push(t);
     if (!initSeen && ev.type === "system_init") {

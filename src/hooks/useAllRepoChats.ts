@@ -37,13 +37,6 @@ export function useAllRepoChats(
     const cleanups: (() => void)[] = [];
     const subscribed = subscribedRef.current;
 
-    // Fetch initial chat list for repos we don't have data for yet.
-    for (const repoPath of paths) {
-      void api.listChats(repoPath).then((list) => {
-        setChatsByRepo((prev) => ({ ...prev, [repoPath]: list }));
-      });
-    }
-
     // Wire up WS subscriptions for newly discovered chats across all repos.
     function subscribeNewChats() {
       const currentPaths = openRepoPathsRef.current;
@@ -79,7 +72,17 @@ export function useAllRepoChats(
       }
     }
 
-    subscribeNewChats();
+    // Fetch initial chat list for repos we don't have data for yet, then
+    // immediately subscribe so we don't miss events during the async gap.
+    for (const repoPath of paths) {
+      void api.listChats(repoPath).then((list) => {
+        setChatsByRepo((prev) => ({ ...prev, [repoPath]: list }));
+        // Subscribe right after the list is known so we minimise the window
+        // between the REST snapshot and live WS event delivery.
+        subscribeNewChats();
+      });
+    }
+
     const interval = setInterval(subscribeNewChats, 2000);
 
     // On reconnect, re-fetch all repos so badges stay accurate after restarts.
