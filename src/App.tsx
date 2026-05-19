@@ -29,8 +29,10 @@ import { useFilesChanged } from "./hooks/useFilesChanged.js";
 import { useWakeWord } from "./hooks/useWakeWord.js";
 import { useWorkspace } from "./hooks/useWorkspace.js";
 import { TerminalPanel } from "./components/TerminalPanel.js";
+import { UpdateBanner } from "./components/UpdateBanner.js";
 import { agentSocket } from "./lib/agentSocket.js";
-import { api, gitApi } from "./lib/api.js";
+import { api, gitApi, selfUpdateApi } from "./lib/api.js";
+import { useSelfUpdate } from "./hooks/useSelfUpdate.js";
 import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
   MODELS,
@@ -64,6 +66,9 @@ export default function App() {
 
   // Dock badge + native macOS notifications for agent status changes.
   useNotifications(allRepoChats);
+
+  // Self-update checker — polls /api/self/status every 10 minutes.
+  const selfUpdate = useSelfUpdate();
 
   const [model, setModel] = useState<Model>("claude-sonnet-4-6");
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
@@ -437,6 +442,59 @@ export default function App() {
     void workspace.reloadRecents();
   };
 
+  // Open the buildover repo itself in a new AI chat, pre-seeded with a prompt
+  // to rebase local changes onto origin/main. Used by the update banner when
+  // the working tree is dirty and the user clicks "Fix with AI".
+  const handleOpenRebaseChat = useCallback(async () => {
+    try {
+      const [infoRes, localDiff] = await Promise.all([
+        selfUpdateApi.getInfo(),
+        selfUpdate.status?.localDiff ?? "",
+      ]);
+      const appRoot = infoRes.appRoot;
+
+      // Open (or switch to) the buildover repo
+      await workspace.openRepo(appRoot);
+      setHomeOpen(false);
+      setMarketOpen(false);
+
+      // Create a fresh chat in the buildover repo
+      const chat = await api.createChat(appRoot, model, permissionMode);
+      workspace.setActiveChat(chat.id);
+
+      // Subscribe then auto-send the rebase prompt after a short delay
+      // so the useAgent hook has time to set up its subscription.
+      agentSocket.send({ type: "subscribe", chatId: chat.id, repoPath: appRoot, withReplay: true });
+      const diff = typeof localDiff === "string" ? localDiff : "";
+      const prompt = [
+        "I need to update Buildover to the latest `main` branch, but I have local changes that need to be rebased on top of it.",
+        "",
+        diff
+          ? `Here are my current local changes:\n\`\`\`diff\n${diff.slice(0, 8_000)}\n\`\`\``
+          : "Please check `git diff HEAD` for the current local changes.",
+        "",
+        "Please:",
+        "1. Run `git status` and `git log --oneline -5` to understand the current state.",
+        "2. Use `git stash`, `git pull origin main`, then `git stash pop` to rebase my changes — or `git fetch origin && git rebase origin/main` if that's cleaner.",
+        "3. Resolve any conflicts intelligently, preserving intentional local changes.",
+        "4. Confirm everything is clean with `git status` at the end.",
+      ].join("\n");
+
+      setTimeout(() => {
+        agentSocket.send({
+          type: "user_message",
+          chatId: chat.id,
+          repoPath: appRoot,
+          text: prompt,
+          model,
+          permissionMode,
+        });
+      }, 400);
+    } catch (err) {
+      console.error("[UpdateBanner] Failed to open rebase chat:", err);
+    }
+  }, [selfUpdate.status?.localDiff, workspace, model, permissionMode]);
+
   // Close the git graph when the active repo changes
   useEffect(() => {
     setGitGraphOpen(false);
@@ -505,6 +563,17 @@ export default function App() {
   return (
     <div className={`app-shell ${mcpOpen ? "with-panel" : ""}`}>
       <div className="app">
+        {selfUpdate.showBanner && selfUpdate.status && (
+          <UpdateBanner
+            status={selfUpdate.status}
+            isPulling={selfUpdate.isPulling}
+            pullResult={selfUpdate.pullResult}
+            onPull={selfUpdate.pull}
+            onForcePull={selfUpdate.forcePull}
+            onOpenAiChat={handleOpenRebaseChat}
+            onDismiss={selfUpdate.dismiss}
+          />
+        )}
         <header className="app-header">
           <h1>
             <span className="brand-dot" />

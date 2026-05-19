@@ -213,6 +213,41 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             sessionId: message.session_id ?? currentSessionId ?? "",
             content,
           });
+          // Emit an intermediate context_usage update so the ring moves during
+          // long multi-step turns instead of only updating at the final result.
+          // Each assistant message carries per-iteration usage from BetaMessage.
+          const iterUsage = message.message?.usage as
+            | {
+                input_tokens?: number;
+                output_tokens?: number;
+                cache_read_input_tokens?: number;
+                cache_creation_input_tokens?: number;
+              }
+            | undefined;
+          if (iterUsage) {
+            const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
+              "claude-opus-4-7": 1_000_000,
+              "claude-sonnet-4-6": 1_000_000,
+              "claude-haiku-4-5": 200_000,
+            };
+            const inputTokens = iterUsage.input_tokens ?? 0;
+            const outputTokens = iterUsage.output_tokens ?? 0;
+            const cacheReadTokens = iterUsage.cache_read_input_tokens ?? 0;
+            const cacheWriteTokens = iterUsage.cache_creation_input_tokens ?? 0;
+            const usedTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+            const contextWindowSize = MODEL_CONTEXT_WINDOWS[args.model] ?? 200_000;
+            const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
+            emit({
+              type: "context_usage",
+              usedTokens,
+              contextWindowSize,
+              pct,
+              inputTokens,
+              outputTokens,
+              cacheReadTokens,
+              cacheWriteTokens,
+            });
+          }
           break;
         }
 
@@ -272,8 +307,8 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             // modelEntry.contextWindow comes from the SDK; if absent, fall back
             // to our static table keyed by the model used in this turn, then 200k.
             const contextWindowSize =
-              modelEntry?.contextWindow ??
               MODEL_CONTEXT_WINDOWS[args.model] ??
+              modelEntry?.contextWindow ??
               200_000;
             const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
             emit({

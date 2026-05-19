@@ -54,6 +54,13 @@ import {
 } from "./schedules.js";
 import { attachTerminalWss } from "./terminal.js";
 import { searchMessages, removeIndexedChat, getIndexStatus } from "./embeddings.js";
+import {
+  checkForUpdates,
+  getSelfUpdateStatus,
+  getSelfAppRoot,
+  pullLatestMain,
+  startSelfUpdateChecker,
+} from "./selfUpdate.js";
 import type {
   AgentEvent,
   ClientMessage,
@@ -706,6 +713,42 @@ app.delete("/api/schedules/:id", async (req, res) => {
   }
 });
 
+// ---- Self-update routes ----
+
+app.get("/api/self/status", async (_req, res) => {
+  try {
+    // Return cached result immediately; background cron keeps it fresh.
+    // If there is no cache yet (first request before the initial check fires),
+    // run one synchronously so the client always gets a real answer.
+    const status = getSelfUpdateStatus() ?? (await checkForUpdates());
+    res.json(status);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/self/info", (_req, res) => {
+  res.json({ appRoot: getSelfAppRoot() });
+});
+
+app.post("/api/self/pull", async (_req, res) => {
+  try {
+    const result = await pullLatestMain(false);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/self/force-pull", async (_req, res) => {
+  try {
+    const result = await pullLatestMain(true);
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ---- WebSocket multiplexer ----
 const httpServer = createServer(app);
 // Both WS endpoints use noServer mode so we can route a single `upgrade`
@@ -997,6 +1040,7 @@ httpServer.listen(PORT, () => {
   console.log(`[server] websocket at ws://localhost:${PORT}/agent`);
   void recoverStaleChats();
   void startScheduler();
+  startSelfUpdateChecker();
 });
 
 // Walk every recent repo and patch chats whose persisted state is "running"

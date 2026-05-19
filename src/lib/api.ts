@@ -271,3 +271,38 @@ export const gitApi = {
   createBranch: (repoPath: string, name: string, fromHash?: string) =>
     send<{ ok: boolean }>("POST", `/api/git/branch`, { repoPath, name, fromHash }),
 };
+
+// ── Self-update ────────────────────────────────────────────────────────────────
+
+export interface CommitInfo {
+  sha: string;
+  message: string;
+  author: string;
+  date: string;
+  url: string;
+}
+
+export interface SelfUpdateStatus {
+  hasUpdate: boolean;
+  localSHA: string;
+  remoteSHA: string;
+  commits: CommitInfo[];
+  isDirty: boolean;
+  localDiff?: string;
+  error?: string;
+  checkedAt: string;
+}
+
+export const selfUpdateApi = {
+  getStatus: () =>
+    getJson<SelfUpdateStatus>(`/api/self/status`),
+
+  getInfo: () =>
+    getJson<{ appRoot: string }>(`/api/self/info`),
+
+  pull: () =>
+    send<{ success: boolean; output: string }>("POST", `/api/self/pull`),
+
+  forcePull: () =>
+    send<{ success: boolean; output: string }>("POST", `/api/self/force-pull`),
+};
