@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # add-to-dock.sh — one-shot setup that installs buildover as a macOS app and
-# pins it to the Dock.  Run once after cloning the repo:
+# launches it.  Run once after cloning the repo:
 #
 #   bash add-to-dock.sh
 #
@@ -11,7 +11,7 @@ set -euo pipefail
 
 REPO_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-echo "▶ buildover — dock setup"
+echo "▶ buildover — setup"
 echo "  Repo: $REPO_DIR"
 echo ""
 
@@ -65,13 +65,29 @@ cat > "$CONTENTS/Info.plist" << 'PLIST'
     <key>CFBundleShortVersionString</key><string>1.0</string>
     <key>CFBundlePackageType</key>       <string>APPL</string>
     <key>NSHighResolutionCapable</key>   <true/>
-    <key>LSMinimumSystemVersion</key>    <string>12.0</string>
+    <key>LSMinimumSystemVersion</key>    <string>11.0</string>
 </dict>
 </plist>
 PLIST
 
-# Electron binary — copy the real binary so macOS accepts it as a native executable
-cp "$ELECTRON_REAL" "$CONTENTS/MacOS/buildover"
+# Launcher shell script — delegates to the Electron binary from node_modules.
+# Using a shell script instead of copying the binary means:
+#   • the correct architecture binary (arm64 or x64) is always used for this machine
+#   • no "app is damaged" / "not supported on this version" Gatekeeper complaints
+#     caused by copying a binary built for a different architecture
+#
+# We must pass the app directory explicitly. When a copied Electron binary sits
+# inside a .app bundle it knows to look in Contents/Resources/app automatically.
+# But when we exec the Electron binary from node_modules, it looks for resources
+# relative to *its own* bundle (node_modules/electron/dist/Electron.app) and
+# finds nothing — showing the default "no app loaded" screen. Passing the path
+# as the first argument overrides that lookup.
+cat > "$CONTENTS/MacOS/buildover" << LAUNCHER
+#!/usr/bin/env bash
+SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
+APP_DIR="\$(dirname "\$SCRIPT_DIR")/Resources/app"
+exec "${ELECTRON_REAL}" "\$APP_DIR" "\$@"
+LAUNCHER
 chmod +x "$CONTENTS/MacOS/buildover"
 
 # package.json stub required by Electron to locate main.js ───────────────────
@@ -97,45 +113,13 @@ fi
 echo "  ✔ $APP_PATH created"
 echo ""
 
-# ── 5. Pin to the Dock ────────────────────────────────────────────────────────
-echo "▶ Adding to Dock…"
-
-# Check if buildover is already pinned (avoid duplicates)
-ALREADY_IN_DOCK=$(defaults read com.apple.dock persistent-apps 2>/dev/null \
-  | grep "com.buildover.app" || true)
-
-if [ -n "$ALREADY_IN_DOCK" ]; then
-  echo "  (already in Dock — skipping duplicate)"
-else
-  if command -v dockutil &>/dev/null; then
-    # dockutil gives finer control if the user has it installed
-    dockutil --add "$APP_PATH" --no-restart
-    killall Dock
-  else
-    # Plain defaults manipulation — works on all Macs without extra tools
-    defaults write com.apple.dock persistent-apps -array-add \
-      "<dict>
-        <key>tile-data</key>
-        <dict>
-          <key>file-data</key>
-          <dict>
-            <key>_CFURLString</key>     <string>file://${APP_PATH}/</string>
-            <key>_CFURLStringType</key> <integer>15</integer>
-          </dict>
-          <key>file-label</key>        <string>buildover</string>
-          <key>bundle-identifier</key> <string>com.buildover.app</string>
-        </dict>
-        <key>tile-type</key> <string>file-tile</string>
-      </dict>"
-    killall Dock
-  fi
-  echo "  ✔ Dock updated"
-fi
+# ── 5. Launch the app ────────────────────────────────────────────────────────
+echo "▶ Launching buildover…"
+open "$APP_PATH"
 
 echo ""
-echo "✔  All done!  buildover is ready in your Dock."
+echo "✔  All done!  buildover is launching."
 echo ""
-echo "   • Click the Dock icon to launch the app."
 echo "   • The app loads code directly from:"
 echo "       $REPO_DIR/dist-electron/"
 echo "   • Re-run this script any time you want to refresh the installation."

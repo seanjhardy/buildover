@@ -84,7 +84,7 @@ const chatCache = new Map<string, CachedChat>();
 const MAX_CACHE_SIZE = 20;
 
 export type ChatTurn =
-  | { kind: "user"; id: string; text: string; attachments?: Attachment[] }
+  | { kind: "user"; id: string; text: string; attachments?: Attachment[]; checkpointId?: string }
   | { kind: "assistant"; id: string; content: ContentBlock[] }
   | { kind: "tool_results"; id: string; content: ContentBlock[] }
   | {
@@ -130,6 +130,7 @@ interface UseAgentReturn {
   contextUsage: ContextUsage | null;
   branchInfo: Map<string, BranchInfo>;
   send: (text: string, opts: SendOptions) => void;
+  revertToCheckpoint: (checkpointId: string) => void;
   respondPermission: (
     requestId: string,
     result:
@@ -525,6 +526,20 @@ export function useAgent(
     [repoPath],
   );
 
+  const revertToCheckpoint = useCallback(
+    (checkpointId: string) => {
+      const id = chatIdRef.current;
+      if (!id || !repoPath) return;
+      agentSocket.send({
+        type: "revert_to_checkpoint",
+        chatId: id,
+        repoPath,
+        checkpointId,
+      });
+    },
+    [repoPath],
+  );
+
   return {
     turns,
     connection,
@@ -540,6 +555,7 @@ export function useAgent(
     contextUsage,
     branchInfo,
     send,
+    revertToCheckpoint,
     respondPermission,
     respondAttention,
     interrupt,
@@ -738,6 +754,23 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       if (event.status === "running") s.setIsStreaming(true);
       else s.setIsStreaming(false);
       break;
+    case "revert_checkpoint":
+      // Attach this checkpoint id to the most recent user turn so the "↩ Revert"
+      // button appears immediately without waiting for a full chat_replay.
+      s.setTurns((prev) => {
+        for (let i = prev.length - 1; i >= 0; i--) {
+          if (prev[i].kind === "user") {
+            const updated = [...prev];
+            updated[i] = {
+              ...(prev[i] as Extract<ChatTurn, { kind: "user" }>),
+              checkpointId: event.checkpointId,
+            };
+            return updated;
+          }
+        }
+        return prev;
+      });
+      break;
     case "chat_title":
       // Title isn't displayed inside the chat body, but other consumers (the
       // sidebar) handle this event in their own subscriptions.
@@ -760,6 +793,17 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
       currentTurnHasUserMessage = true;
     } else if (ev.type === "turn_end") {
       currentTurnHasUserMessage = false;
+    } else if (ev.type === "revert_checkpoint") {
+      // Attach this checkpoint to the most recently pushed user turn so the
+      // "↩ Revert" button appears below that message in the UI.
+      for (let i = turns.length - 1; i >= 0; i--) {
+        if (turns[i].kind === "user") {
+          const u = turns[i] as Extract<ChatTurn, { kind: "user" }>;
+          turns[i] = { ...u, checkpointId: ev.checkpointId };
+          break;
+        }
+      }
+      continue; // revert_checkpoint is not a visible turn itself
     }
     // Skip result events for turns that had no user message — these are
     // silent auto-compact turns whose results should never be shown.

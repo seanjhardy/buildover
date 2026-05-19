@@ -6,12 +6,14 @@ import {
   readChat,
   rebuildIndex,
   recoverStaleChat,
+  revertToCheckpoint,
   setTitle,
   switchBranch,
   withChatLock,
   writeChat,
 } from "./chats.js";
 import { generateTitle } from "./title.js";
+import { makeCheckpointId, saveSnapshot } from "./snapshots.js";
 import type {
   AgentEvent,
   Attachment,
@@ -335,6 +337,17 @@ class AgentSession {
       }
     }
 
+    // Persist a revert_checkpoint event before every non-silent turn so the
+    // user can restore file state to this exact point later.
+    const checkpointId = args.silent ? null : makeCheckpointId();
+    if (checkpointId) {
+      await this.record({
+        type: "revert_checkpoint",
+        checkpointId,
+        ts: new Date().toISOString(),
+      });
+    }
+
     // Track the latest model so we can use it for the auto-compact turn.
     this.lastModel = args.model;
 
@@ -415,6 +428,18 @@ class AgentSession {
             void this.persistAgentEvent(ev);
           }),
         abortController: this.abort,
+        // Snapshot the target file before any file-modifying tool runs so we
+        // can restore it when the user clicks "Revert".  Only active for
+        // non-silent turns (silent = auto-compact, which has no checkpoint).
+        onBeforeFileTool: checkpointId
+          ? async (_toolName, input) => {
+              const inp = input as Record<string, unknown>;
+              const filePath = String(inp.file_path ?? "");
+              if (filePath) {
+                await saveSnapshot(this.repoPath, this.chatId, checkpointId, filePath);
+              }
+            }
+          : undefined,
       });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -600,6 +625,30 @@ class AgentSession {
       args.targetBranchId,
     );
     if (!record) throw new Error("Branch not found");
+
+    this.broadcast({
+      type: "chat_replay",
+      chatId: this.chatId,
+      record,
+      pendingPermissions: [],
+    });
+    this.broadcast({
+      type: "chat_status",
+      chatId: this.chatId,
+      status: record.status,
+      sessionId: record.sessionId,
+    });
+
+    await rebuildIndex(this.repoPath);
+  }
+
+  // Revert file changes and chat history back to just before the given
+  // checkpoint, then broadcast the updated record to all subscribers.
+  async runRevert(checkpointId: string): Promise<void> {
+    if (this.running) throw new Error("Cannot revert while agent is running");
+
+    const record = await revertToCheckpoint(this.repoPath, this.chatId, checkpointId);
+    if (!record) throw new Error("Checkpoint not found");
 
     this.broadcast({
       type: "chat_replay",

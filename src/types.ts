@@ -149,7 +149,15 @@ export type ChatEvent =
   | { type: "error"; message: string; ts: string }
   | { type: "turn_start"; ts: string }
   | { type: "turn_end"; ts: string }
-  | ({ type: "context_usage"; ts: string } & ContextUsage);
+  | ({ type: "context_usage"; ts: string } & ContextUsage)
+  | {
+      // Persisted just before each non-silent turn_start.  Stores the id used
+      // to name the file-content snapshot directory so the server can locate
+      // and restore snapshots when the user clicks "Revert".
+      type: "revert_checkpoint";
+      checkpointId: string;
+      ts: string;
+    };
 
 // A diverging branch at a fork point. Stores all events from the branching
 // user_message onwards (inclusive). Absent on linear (non-forked) chats.
@@ -266,7 +274,35 @@ export type ClientMessage =
       repoPath: string;
       parentMessageId: string;
       targetBranchId: string;
+    }
+  | {
+      // Revert all file changes made from the given checkpoint onward and
+      // truncate the chat history back to just before that checkpoint.
+      type: "revert_to_checkpoint";
+      chatId: string;
+      repoPath: string;
+      checkpointId: string;
     };
+
+// ---- Semantic search ----
+
+export interface SearchResult {
+  chatId: string;
+  chatTitle: string;
+  chatUpdatedAt: string;
+  messageText: string;
+  eventIndex: number;
+  score: number;
+  ts: string;
+}
+
+export interface SearchIndexStatus {
+  isModelLoading: boolean;
+  isIndexing: boolean;
+  modelError: string | null;
+  indexed: number;
+  total: number;
+}
 
 export interface ContextUsage {
   usedTokens: number;
@@ -370,6 +406,14 @@ export type AgentEvent =
       chatId: string;
       branchId: string;         // ID of the branch that now holds the old trunk
       parentMessageId: string;  // which user_message was the fork point
+    }
+  // Broadcast live when the server creates a revert checkpoint just before a
+  // non-silent turn starts. The client annotates the preceding user turn so the
+  // "↩ Revert" button appears without waiting for a full chat_replay.
+  | {
+      type: "revert_checkpoint";
+      chatId: string;
+      checkpointId: string;
     };
 
 // ---- Orchestrator wire protocol ----

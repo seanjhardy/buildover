@@ -1,7 +1,9 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import { X } from "lucide-react";
 import { ChatSidebarItem } from "./ChatSidebarItem.js";
 import { GitPanel } from "./GitPanel.js";
-import type { ChatStatus, ChatSummary } from "../types.js";
+import { searchApi } from "../lib/api.js";
+import type { ChatStatus, ChatSummary, SearchResult } from "../types.js";
 
 interface Props {
   chats: ChatSummary[];
@@ -15,15 +17,12 @@ interface Props {
   onOpenGraph?: () => void;
 }
 
-// Sidebar grouping order. Awaiting-input is most urgent (user has to click
-// something), running is next, then error (needs attention), then agent_done
-// (assistant said it was done), then idle. Finished/archived collapses below.
 const GROUP_ORDER: ChatStatus[] = [
   "awaiting_input",
-  "running",
-  "error",
-  "agent_done",
   "idle",
+  "running",
+  "agent_done",
+  "error",
 ];
 
 const GROUP_LABEL: Record<ChatStatus, string> = {
@@ -34,6 +33,27 @@ const GROUP_LABEL: Record<ChatStatus, string> = {
   idle: "Idle",
   finished: "Archive",
 };
+
+function timeAgo(iso: string): string {
+  const diff = Date.now() - new Date(iso).getTime();
+  const m = Math.floor(diff / 60_000);
+  const h = Math.floor(m / 60);
+  const d = Math.floor(h / 24);
+  if (d > 30) return `${Math.floor(d / 30)}mo ago`;
+  if (d > 0) return `${d}d ago`;
+  if (h > 0) return `${h}h ago`;
+  if (m > 0) return `${m}m ago`;
+  return "just now";
+}
+
+function scoreColor(score: number): string {
+  const t = Math.min(1, Math.max(0, (score - 0.25) / 0.75));
+  // interpolate orange (low) → green (high)
+  const r = Math.round(217 + (72 - 217) * t);
+  const g = Math.round(119 + (199 - 119) * t);
+  const b = Math.round(87 + (120 - 87) * t);
+  return `rgb(${r}, ${g}, ${b})`;
+}
 
 export function ChatSidebar({
   chats,
@@ -48,23 +68,43 @@ export function ChatSidebar({
 }: Props) {
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
+  const [searchResults, setSearchResults] = useState<SearchResult[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const filtered = useMemo(() => {
-    const q = query.trim().toLowerCase();
-    if (!q) return chats;
-    return chats.filter((c) => {
-      return (
-        c.title.toLowerCase().includes(q) ||
-        c.preview.toLowerCase().includes(q)
-      );
-    });
-  }, [chats, query]);
+  const isSearchMode = query.trim().length > 0;
 
+  // Debounced semantic search
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    const q = query.trim();
+    if (!q) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
+    setIsSearching(true);
+    debounceRef.current = setTimeout(async () => {
+      try {
+        const { results } = await searchApi.search(repoPath, q);
+        setSearchResults(results);
+      } catch {
+        setSearchResults([]);
+      } finally {
+        setIsSearching(false);
+      }
+    }, 350);
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current);
+    };
+  }, [query, repoPath]);
+
+  // Normal grouped list (used when not in search mode)
   const grouped = useMemo(() => {
     const archive: ChatSummary[] = [];
     const groups = new Map<ChatStatus, ChatSummary[]>();
     for (const status of GROUP_ORDER) groups.set(status, []);
-    for (const c of filtered) {
+    for (const c of chats) {
       if (c.status === "finished") {
         archive.push(c);
       } else {
@@ -78,18 +118,37 @@ export function ChatSidebar({
     for (const arr of groups.values()) arr.sort(sortByRecency);
     archive.sort(sortByRecency);
     return { groups, archive };
-  }, [filtered]);
+  }, [chats]);
 
   return (
     <aside className="chat-sidebar">
       <div className="chat-sidebar-toolbar">
-        <input
-          className="chat-search"
-          type="search"
-          placeholder="Search chats"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
+        <div className="chat-search-wrap">
+          <svg className="chat-search-icon" width="13" height="13" viewBox="0 0 20 20" fill="none">
+            <circle cx="8.5" cy="8.5" r="5.5" stroke="currentColor" strokeWidth="1.7" />
+            <path d="M13.5 13.5L17 17" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+          </svg>
+          <input
+            className="chat-search"
+            type="text"
+            placeholder="Search messages…"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+          />
+          {isSearching
+            ? <span className="chat-search-spinner" />
+            : isSearchMode && (
+              <button
+                type="button"
+                className="chat-search-clear"
+                onClick={() => setQuery("")}
+                title="Clear search"
+              >
+                <X size={12} strokeWidth={2.5} />
+              </button>
+            )
+          }
+        </div>
         <button
           type="button"
           className="new-chat-btn"
@@ -99,62 +158,95 @@ export function ChatSidebar({
           + New
         </button>
       </div>
+
       <div className="chat-sidebar-list">
-        {GROUP_ORDER.map((status) => {
-          const items = grouped.groups.get(status) ?? [];
-          if (items.length === 0) return null;
-          return (
-            <div key={status} className="chat-group">
-              <div className="chat-group-label">{GROUP_LABEL[status]}</div>
-              {items.map((c) => (
-                <ChatSidebarItem
-                  key={c.id}
-                  chat={c}
-                  active={c.id === activeChatId}
-                  onSelect={onSelect}
-                  onToggleFinished={onToggleFinished}
-                  onDelete={onDelete}
-                  draftText={chatDrafts[c.id]}
+        {isSearchMode ? (
+          /* ── Semantic search results ── */
+          <>
+            {!isSearching && searchResults.length === 0 && (
+              <div className="chat-sidebar-empty">No results for "{query}"</div>
+            )}
+
+            {searchResults.map((r) => (
+              <button
+                key={`${r.chatId}:${r.eventIndex}`}
+                type="button"
+                className={`sidebar-search-result${r.chatId === activeChatId ? " sidebar-search-result--active" : ""}`}
+                onClick={() => onSelect(r.chatId)}
+              >
+                <div
+                  className="sidebar-search-result-bar"
+                  style={{ background: scoreColor(r.score) }}
                 />
-              ))}
-            </div>
-          );
-        })}
-        {filtered.length === 0 && chats.length > 0 && (
-          <div className="chat-sidebar-empty">No chats match "{query}"</div>
-        )}
-        {chats.length === 0 && (
-          <div className="chat-sidebar-empty">
-            No chats yet. Click <strong>+ New</strong> to start.
-          </div>
-        )}
-        {grouped.archive.length > 0 && (
-          <div className="chat-archive">
-            <button
-              type="button"
-              className="chat-archive-toggle"
-              onClick={() => setArchiveOpen((v) => !v)}
-            >
-              <span className="chat-archive-caret">
-                {archiveOpen ? "▾" : "▸"}
-              </span>
-              Archive ({grouped.archive.length})
-            </button>
-            {archiveOpen &&
-              grouped.archive.map((c) => (
-                <ChatSidebarItem
-                  key={c.id}
-                  chat={c}
-                  active={c.id === activeChatId}
-                  onSelect={onSelect}
-                  onToggleFinished={onToggleFinished}
-                  onDelete={onDelete}
-                  draftText={chatDrafts[c.id]}
-                />
-              ))}
-          </div>
+                <div className="sidebar-search-result-body">
+                  <div className="sidebar-search-result-text">{r.messageText}</div>
+                  <div className="sidebar-search-result-meta">
+                    <span className="sidebar-search-result-title">{r.chatTitle}</span>
+                    <span className="sidebar-search-result-sep">·</span>
+                    <span className="sidebar-search-result-time">{timeAgo(r.chatUpdatedAt)}</span>
+                  </div>
+                </div>
+              </button>
+            ))}
+          </>
+        ) : (
+          /* ── Normal grouped chat list ── */
+          <>
+            {GROUP_ORDER.map((status) => {
+              const items = grouped.groups.get(status) ?? [];
+              if (items.length === 0) return null;
+              return (
+                <div key={status} className="chat-group">
+                  <div className="chat-group-label">{GROUP_LABEL[status]}</div>
+                  {items.map((c) => (
+                    <ChatSidebarItem
+                      key={c.id}
+                      chat={c}
+                      active={c.id === activeChatId}
+                      onSelect={onSelect}
+                      onToggleFinished={onToggleFinished}
+                      onDelete={onDelete}
+                      draftText={chatDrafts[c.id]}
+                    />
+                  ))}
+                </div>
+              );
+            })}
+            {chats.length === 0 && (
+              <div className="chat-sidebar-empty">
+                No chats yet. Click <strong>+ New</strong> to start.
+              </div>
+            )}
+            {grouped.archive.length > 0 && (
+              <div className="chat-archive">
+                <button
+                  type="button"
+                  className="chat-archive-toggle"
+                  onClick={() => setArchiveOpen((v) => !v)}
+                >
+                  <span className="chat-archive-caret">
+                    {archiveOpen ? "▾" : "▸"}
+                  </span>
+                  Archive ({grouped.archive.length})
+                </button>
+                {archiveOpen &&
+                  grouped.archive.map((c) => (
+                    <ChatSidebarItem
+                      key={c.id}
+                      chat={c}
+                      active={c.id === activeChatId}
+                      onSelect={onSelect}
+                      onToggleFinished={onToggleFinished}
+                      onDelete={onDelete}
+                      draftText={chatDrafts[c.id]}
+                    />
+                  ))}
+              </div>
+            )}
+          </>
         )}
       </div>
+
       <GitPanel repoPath={repoPath} onOpenGraph={onOpenGraph} />
     </aside>
   );

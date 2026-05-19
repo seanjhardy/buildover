@@ -28,11 +28,15 @@ type Row =
       key: string;
     };
 
-// RenderSVG is a presentational tool — its "tool call" is just the transport
-// for SVG markup. It must always render inline as a graphic and never get
-// folded into a "N tools called" group.
+// Presentational tools render inline as rich content (SVG, table, chart).
+// Their "tool call" is just the transport for data. They must never get
+// folded into a "N tools called" group and always render as standalone blocks.
 function isPresentationalTool(name: string): boolean {
-  return name === "RenderSVG" || name.endsWith("__RenderSVG");
+  return (
+    name === "RenderSVG" || name.endsWith("__RenderSVG") ||
+    name === "RenderTable" || name.endsWith("__RenderTable") ||
+    name === "RenderChart" || name.endsWith("__RenderChart")
+  );
 }
 
 // Walks the content array and packs consecutive tool_use blocks into groups.

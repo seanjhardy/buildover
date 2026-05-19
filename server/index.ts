@@ -1,6 +1,7 @@
 import express from "express";
 import { createServer } from "node:http";
-import { readFile as fsReadFile } from "node:fs/promises";
+import { readFile as fsReadFile, readdir } from "node:fs/promises";
+import { join, relative, isAbsolute as pathIsAbsolute, resolve as resolvePath } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
   createChat,
@@ -51,6 +52,8 @@ import {
   deleteTask,
   startScheduler,
 } from "./schedules.js";
+import { attachTerminalWss } from "./terminal.js";
+import { searchMessages, removeIndexedChat, getIndexStatus } from "./embeddings.js";
 import type {
   AgentEvent,
   ClientMessage,
@@ -316,11 +319,39 @@ app.delete("/api/chats/:chatId", async (req, res) => {
     dropSession(repoPath, req.params.chatId);
     const ok = await deleteChat(repoPath, req.params.chatId);
     if (!ok) return res.status(404).json({ error: "Not found" });
+    // Remove embeddings for the deleted chat
+    removeIndexedChat(repoPath, req.params.chatId);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+});
+
+// ---- Semantic search ----
+app.post("/api/search", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const query = String(req.body?.query ?? "").trim();
+    const limit = Math.min(Number(req.body?.limit ?? 12), 50);
+    const { results, status } = await searchMessages(repoPath, query, limit);
+    res.json({ results, status });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/search/status", (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    // Kick off background indexing if not started yet
+    void (async () => { try { const { ensureIndexedBackground } = await import("./embeddings.js"); ensureIndexedBackground(repoPath); } catch {} })();
+    res.json(getIndexStatus());
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -476,6 +507,43 @@ app.get("/api/file/read", async (req, res) => {
   }
 });
 
+// ---- File list ----
+const FILE_LIST_EXCLUDES = new Set([
+  "node_modules", ".git", "dist", "build", "out",
+  ".next", ".cache", "coverage", ".turbo", ".swc",
+]);
+const FILE_LIST_MAX = 5000;
+
+async function walkDir(root: string, current: string, results: string[]): Promise<void> {
+  if (results.length >= FILE_LIST_MAX) return;
+  let entries;
+  try { entries = await readdir(current, { withFileTypes: true }); } catch { return; }
+  for (const entry of entries) {
+    if (results.length >= FILE_LIST_MAX) return;
+    if (FILE_LIST_EXCLUDES.has(entry.name)) continue;
+    const full = join(current, entry.name);
+    if (entry.isDirectory()) {
+      await walkDir(root, full, results);
+    } else if (entry.isFile()) {
+      results.push(relative(root, full));
+    }
+  }
+}
+
+app.get("/api/file/list", async (req, res) => {
+  try {
+    const repoPath = String(req.query.path ?? "");
+    if (!repoPath) throw new Error("path required");
+    if (!pathIsAbsolute(repoPath)) throw new Error("absolute path required");
+    const root = resolvePath(repoPath);
+    const files: string[] = [];
+    await walkDir(root, root, files);
+    res.json({ files });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ---- Dashboard ----
 app.get("/api/dashboard", async (_req, res) => {
   try {
@@ -610,6 +678,10 @@ const httpServer = createServer(app);
 // handshake with a 400 on the already-upgraded socket, which kills the
 // connection from the browser's side.
 const wss = new WebSocketServer({ noServer: true });
+
+// Terminal WebSocket server — one per browser tab, multiplexed by tabId
+const terminalWss = new WebSocketServer({ noServer: true });
+attachTerminalWss(terminalWss);
 
 wss.on("connection", (ws: WebSocket) => {
   // A connection can subscribe to many chats. We hold the unsubscribe fn plus
@@ -789,6 +861,20 @@ wss.on("connection", (ws: WebSocket) => {
             });
           break;
         }
+        case "revert_to_checkpoint": {
+          await subscribe(msg.repoPath, msg.chatId, false);
+          const session = getSession(msg.repoPath, msg.chatId);
+          session
+            .runRevert(msg.checkpointId)
+            .catch((err) => {
+              send({
+                type: "error",
+                chatId: msg.chatId,
+                message: err instanceof Error ? err.message : String(err),
+              });
+            });
+          break;
+        }
       }
     } catch (err) {
       send({
@@ -824,6 +910,10 @@ httpServer.on("upgrade", (req, socket, head) => {
   } else if (pathname === "/orchestrator") {
     orchWss.handleUpgrade(req, socket, head, (ws) => {
       orchWss.emit("connection", ws, req);
+    });
+  } else if (pathname === "/terminal") {
+    terminalWss.handleUpgrade(req, socket, head, (ws) => {
+      terminalWss.emit("connection", ws, req);
     });
   } else {
     socket.destroy();

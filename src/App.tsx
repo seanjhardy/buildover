@@ -27,6 +27,7 @@ import { useTodos } from "./hooks/useTodos.js";
 import { useFilesChanged } from "./hooks/useFilesChanged.js";
 import { useWakeWord } from "./hooks/useWakeWord.js";
 import { useWorkspace } from "./hooks/useWorkspace.js";
+import { TerminalPanel } from "./components/TerminalPanel.js";
 import { agentSocket } from "./lib/agentSocket.js";
 import { api, gitApi } from "./lib/api.js";
 import type { FileEntry } from "./hooks/useFilesChanged.js";
@@ -438,6 +439,7 @@ export default function App() {
     setGitGraphOpen(false);
   }, [activeRepo?.path]);
 
+
   const handleGitCheckout = useCallback(
     async (branch: string) => {
       if (!activeRepo) return;
@@ -637,117 +639,133 @@ export default function App() {
             >
 
             <main className="chat-pane" ref={chatPaneRef}>
-              {gitGraphOpen ? (
-                <GitGraphView
-                  repoPath={activeRepo.path}
-                  onClose={() => setGitGraphOpen(false)}
-                  onCheckout={(branch) => void handleGitCheckout(branch)}
-                />
-              ) : !activeChat ? (
-                <EmptyChat onCreate={handleCreateChat} />
-              ) : (
-                <>
-                  <div className="chat-pane-header">
-                    <div className="chat-pane-title">{activeChat.title}</div>
-                    <div className="chat-pane-meta">
-                      {activeRepo.path}
+              {/* chat-pane-content: everything above the terminal panel */}
+              <div className="chat-pane-content">
+                {gitGraphOpen ? (
+                  <GitGraphView
+                    repoPath={activeRepo.path}
+                    onClose={() => setGitGraphOpen(false)}
+                    onCheckout={(branch) => void handleGitCheckout(branch)}
+                  />
+                ) : !activeChat ? (
+                  <EmptyChat onCreate={handleCreateChat} />
+                ) : (
+                  <>
+                    <div className="chat-pane-header">
+                      <div className="chat-pane-title">{activeChat.title}</div>
+                      <div className="chat-pane-meta">
+                        {activeRepo.path}
+                      </div>
                     </div>
-                  </div>
-                  <div className="chat-pane-body">
-                    <div className="chat-group">
-                      <div className="chat-column">
-                        <MessageList
-                          turns={agent.turns}
-                          isStreaming={agent.isStreaming}
-                          cwd={agent.cwd ?? activeRepo.path}
-                          scrollRef={msgScrollRef}
-                          jumpBarRef={jumpBarRef}
-                          branchInfo={agent.branchInfo}
-                          onForkMessage={(userMessageId, newText) =>
-                            agent.forkMessage(userMessageId, newText, { model, permissionMode })
-                          }
-                          onSwitchBranch={agent.switchBranch}
-                          chatId={activeChatId ?? undefined}
-                        />
-                        {agent.pendingAttention && (
-                          <AttentionPrompt
-                            pending={agent.pendingAttention}
-                            onRespond={agent.respondAttention}
-                          />
-                        )}
-                        {agent.pendingPermission && !agent.pendingAttention && (
-                          <PermissionPrompt
-                            pending={agent.pendingPermission}
-                            onRespond={agent.respondPermission}
-                          />
-                        )}
-                        <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
-                          <QueuedMessages
-                            queue={messageQueue}
-                            onRemove={removeFromQueue}
-                            onFastForward={fastForwardQueued}
-                          />
-                          <Composer
-                            key={activeChatId ?? "none"}
-                            chatId={activeChatId ?? ""}
-                            onSend={(text, attachments) =>
-                              agent.send(text, {
-                                model,
-                                permissionMode,
-                                attachments,
-                              })
-                            }
-                            onQueueMessage={addToQueue}
-                            onInterrupt={agent.interrupt}
-                            onDraftChange={handleDraftChange}
-                            disabled={
-                              agent.isStreaming || agent.connection !== "connected"
-                            }
+                    <div className="chat-pane-body">
+                      <div className="chat-group">
+                        <div className="chat-column">
+                          <MessageList
+                            turns={agent.turns}
                             isStreaming={agent.isStreaming}
-                            model={model}
-                            permissionMode={permissionMode}
-                            onPermissionModeChange={(m) => {
-                              setPermissionMode(m);
-                              // Push the change to the in-flight turn so toggling
-                              // bypass mid-turn auto-resolves pending prompts and
-                              // suppresses future ones.
-                              agent.setPermissionMode(m);
-                            }}
-                            onToggleMcp={() => setMcpOpen((v) => !v)}
-                            contextUsage={agent.contextUsage}
+                            cwd={agent.cwd ?? activeRepo.path}
+                            scrollRef={msgScrollRef}
+                            jumpBarRef={jumpBarRef}
+                            branchInfo={agent.branchInfo}
+                            onForkMessage={(userMessageId, newText) =>
+                              agent.forkMessage(userMessageId, newText, { model, permissionMode })
+                            }
+                            onSwitchBranch={agent.switchBranch}
+                            onRevert={agent.revertToCheckpoint}
+                            chatId={activeChatId ?? undefined}
                           />
+                          {agent.pendingAttention && (
+                            <AttentionPrompt
+                              pending={agent.pendingAttention}
+                              onRespond={agent.respondAttention}
+                            />
+                          )}
+                          {agent.pendingPermission && !agent.pendingAttention && (
+                            <PermissionPrompt
+                              pending={agent.pendingPermission}
+                              onRespond={agent.respondPermission}
+                            />
+                          )}
+                          <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
+                            <QueuedMessages
+                              queue={messageQueue}
+                              onRemove={removeFromQueue}
+                              onFastForward={fastForwardQueued}
+                            />
+                            <Composer
+                              key={activeChatId ?? "none"}
+                              chatId={activeChatId ?? ""}
+                              onSend={(text, attachments) =>
+                                agent.send(text, {
+                                  model,
+                                  permissionMode,
+                                  attachments,
+                                })
+                              }
+                              onQueueMessage={addToQueue}
+                              onInterrupt={agent.interrupt}
+                              onDraftChange={handleDraftChange}
+                              disabled={
+                                agent.isStreaming || agent.connection !== "connected"
+                              }
+                              isStreaming={agent.isStreaming}
+                              model={model}
+                              permissionMode={permissionMode}
+                              onPermissionModeChange={(m) => {
+                                setPermissionMode(m);
+                                // Push the change to the in-flight turn so toggling
+                                // bypass mid-turn auto-resolves pending prompts and
+                                // suppresses future ones.
+                                agent.setPermissionMode(m);
+                              }}
+                              onToggleMcp={() => setMcpOpen((v) => !v)}
+                              contextUsage={agent.contextUsage}
+                              repoPath={activeRepo?.path}
+                            />
+                          </div>
+                        </div>
+                        {/* right-rail: jump bar always; files panel + todo panel stacked (wide); compact todo strip (narrow) */}
+                        {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+                        <div ref={rightRailRef} className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
+                          <MessageJumpBar
+                            jumpBarRef={jumpBarRef}
+                          />
+                          {!todoNarrow && (filesChanged.length > 0 || todos.length > 0) && (
+                            <div className="right-rail-panels">
+                              {filesChanged.length > 0 && (
+                                <FilesPanel
+                                  files={filesChanged}
+                                  onFileOpen={setOpenFile}
+                                  activeFilePath={openFile?.path ?? null}
+                                />
+                              )}
+                              {todos.length > 0 && (
+                                <TodoPanel todos={todos} compact={false} />
+                              )}
+                            </div>
+                          )}
+                          {todoNarrow && todos.length > 0 && (
+                            <div className="right-rail-panels">
+                              <TodoPanel todos={todos} compact={true} />
+                            </div>
+                          )}
                         </div>
                       </div>
-                      {/* right-rail: jump bar always; files panel + todo panel stacked (wide); compact todo strip (narrow) */}
-                      {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-                      <div ref={rightRailRef} className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
-                        <MessageJumpBar
-                          jumpBarRef={jumpBarRef}
-                        />
-                        {!todoNarrow && (filesChanged.length > 0 || todos.length > 0) && (
-                          <div className="right-rail-panels">
-                            {filesChanged.length > 0 && (
-                              <FilesPanel
-                                files={filesChanged}
-                                onFileOpen={setOpenFile}
-                                activeFilePath={openFile?.path ?? null}
-                              />
-                            )}
-                            {todos.length > 0 && (
-                              <TodoPanel todos={todos} compact={false} />
-                            )}
-                          </div>
-                        )}
-                        {todoNarrow && todos.length > 0 && (
-                          <div className="right-rail-panels">
-                            <TodoPanel todos={todos} compact={true} />
-                          </div>
-                        )}
-                      </div>
                     </div>
-                  </div>
-                </>
-              )}
+                  </>
+                )}
+              </div>
+              {/* One terminal panel per open repo — kept mounted so PTY sessions
+                  survive repo switches. Non-active panels are hidden via
+                  display:none and stay alive in the background. */}
+              {workspace.openRepos.map((repo) => (
+                <TerminalPanel
+                  key={repo.path}
+                  repoPath={repo.path}
+                  defaultCwd={repo.path}
+                  hidden={repo.path !== activeRepo.path}
+                />
+              ))}
             </main>
             </div>{/* end workspace-panels */}
           </div>

@@ -5,6 +5,8 @@ import type {
   PermissionMode,
   RecentRepoInfo,
   RepoInfo,
+  SearchResult,
+  SearchIndexStatus,
 } from "../types.js";
 
 // In Electron production, the page is served from file:// so there is no
@@ -165,6 +167,21 @@ export const api = {
     send<{ ok: boolean }>("DELETE", `/api/schedules/${id}`),
 };
 
+// ── Semantic search ────────────────────────────────────────────────────────────
+export const searchApi = {
+  search: (repoPath: string, query: string, limit = 12) =>
+    send<{ results: SearchResult[]; status: SearchIndexStatus }>(
+      "POST",
+      `/api/search`,
+      { repoPath, query, limit },
+    ),
+
+  status: (repoPath: string) =>
+    getJson<SearchIndexStatus>(
+      `/api/search/status?repoPath=${encodeURIComponent(repoPath)}`,
+    ),
+};
+
 export interface GitStatus {
   currentBranch: string;
   branches: string[];
@@ -198,6 +215,11 @@ export const fileApi = {
     getJson<{ content: string }>(
       `/api/file/read?path=${encodeURIComponent(filePath)}`,
     ).then((r) => r.content),
+
+  listFiles: (repoPath: string) =>
+    getJson<{ files: string[] }>(
+      `/api/file/list?path=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.files),
 };
 
 export const gitApi = {

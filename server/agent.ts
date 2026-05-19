@@ -67,6 +67,10 @@ interface RunArgs {
   // regardless of permission-mode bypass.
   requestAttentionAck: RequestAttentionAck;
   abortController?: AbortController;
+  // Optional hook called just before a file-modifying tool (Write, Edit,
+  // MultiEdit) executes.  The session uses this to snapshot the target file's
+  // current content so it can be restored on revert.
+  onBeforeFileTool?: (toolName: string, input: unknown) => Promise<void>;
 }
 
 // Runs one user-turn through the SDK, normalizing messages into our wire
@@ -94,7 +98,19 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
   // because they are user-interaction checkpoints, not dangerous operations.
   const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention", "AskUserQuestion"]);
 
+  // Tool names that modify files — we snapshot before these run.
+  const FILE_MODIFYING_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
+
   const canUseTool: CanUseTool = async (toolName, input) => {
+    // Snapshot the target file before any file-modifying tool executes so we
+    // can restore it on revert.  Do this regardless of permission mode so even
+    // auto-approved edits are covered.
+    if (args.onBeforeFileTool && FILE_MODIFYING_TOOLS.has(toolName)) {
+      await args.onBeforeFileTool(toolName, input).catch(() => {
+        // Best-effort: a snapshot failure must never block the agent turn.
+      });
+    }
+
     // In bypassPermissions mode, the SDK still calls canUseTool for every
     // tool when the callback is supplied — so the mode alone won't suppress
     // prompts. Short-circuit here to honor the user's choice.

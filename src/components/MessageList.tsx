@@ -38,6 +38,7 @@ interface Props {
   branchInfo?: Map<string, BranchInfo>;
   onForkMessage?: (userMessageId: string, newText: string) => void;
   onSwitchBranch?: (parentMessageId: string, targetBranchId: string) => void;
+  onRevert?: (checkpointId: string) => void;
 }
 
 // A single virtual row — either a real ChatTurn, the streaming indicator, or
@@ -109,7 +110,7 @@ function buildVirtualItems(turns: ChatTurn[]): VirtualItem[] {
   return out;
 }
 
-function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chatId, branchInfo, onForkMessage, onSwitchBranch }: Props) {
+function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chatId, branchInfo, onForkMessage, onSwitchBranch, onRevert }: Props) {
   // The scroll container div. Also exposed via the external scrollRef so that
   // MessageJumpBar (which listens for scroll events and queries DOM nodes in
   // the container) continues to work after we add virtualisation.
@@ -199,41 +200,82 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
   }, [userItems]);
 
   // On chat switch: arm the scroll-to-bottom flag and reset tool results.
+  // Also reset wasAtBottom to true so the ResizeObserver correctly pins to the
+  // bottom if streaming starts before the scroll event has fired.
   useEffect(() => {
     if (!chatId) return;
     scrollToChatBottomRef.current = true;
+    wasAtBottomRef.current = true;
     toolResultsRef.current = {};
     prevTurnsLenRef.current = 0;
   }, [chatId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Snapshot scroll position BEFORE commit so we can decide whether to
-  // auto-scroll after new items are added.
+  // Track whether the user is at the bottom via a real scroll event listener.
+  // This fires only on actual user scroll (not React re-renders), giving us
+  // accurate "at bottom" state without the snapshot-effect race condition.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    wasAtBottomRef.current =
-      el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD;
-  });
+    const onScroll = () => {
+      wasAtBottomRef.current =
+        el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD;
+    };
+    el.addEventListener("scroll", onScroll, { passive: true });
+    return () => el.removeEventListener("scroll", onScroll);
+  }, []);
 
-  // Auto-scroll whenever turns change (streaming or new-chat load).
+  // Watch virtua's inner wrapper for height changes caused by streaming content
+  // growing (text flowing, code blocks expanding, etc.) and keep the view
+  // pinned to the bottom whenever the user was already there.
+  // Direct el.scrollTop = el.scrollHeight bypasses virtua's stale item-size
+  // cache, which scrollToIndex(last, {align:"end"}) would use and undershoot.
   useEffect(() => {
-    const v = virtualizerRef.current;
-    if (!v || items.length === 0) return;
+    const el = containerRef.current;
+    if (!el) return;
+    const ro = new ResizeObserver(() => {
+      if (wasAtBottomRef.current) {
+        el.scrollTop = el.scrollHeight;
+      }
+    });
+    const inner = el.firstElementChild;
+    if (inner) ro.observe(inner);
+    return () => ro.disconnect();
+  }, []);
 
-    const scrollToEnd = () => v.scrollToIndex(items.length - 1, { align: "end" });
+  // Auto-scroll whenever turns change (new message added or chat switch).
+  // We always defer to rAF so virtua has painted the new item before we read
+  // scrollHeight — otherwise we'd scroll to the old bottom and the new item
+  // would appear below the viewport.
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+
+    const scrollToEnd = () => {
+      el.scrollTop = el.scrollHeight;
+    };
 
     if (scrollToChatBottomRef.current && turns.length > 0) {
       scrollToChatBottomRef.current = false;
-      scrollToEnd();
+      // Use virtua's scrollToIndex rather than a direct DOM scroll. At this
+      // point virtua has only rendered items near the top (scrollTop=0), so
+      // el.scrollHeight is far shorter than the real bottom — direct DOM scroll
+      // would undershoot on any long chat. scrollToIndex tells virtua to render
+      // and position at the last item regardless of what's been painted yet.
       const raf = requestAnimationFrame(() => {
-        scrollToEnd();
-        const t = setTimeout(scrollToEnd, 150);
-        return () => clearTimeout(t);
+        virtualizerRef.current?.scrollToIndex(items.length, { align: "end" });
       });
-      return () => cancelAnimationFrame(raf);
+      // Belt-and-suspenders: after virtua has settled, force the true DOM bottom
+      // in case scrollToIndex's estimated position was slightly off.
+      const t = setTimeout(scrollToEnd, 300);
+      return () => {
+        cancelAnimationFrame(raf);
+        clearTimeout(t);
+      };
     }
     if (turns.length === 1 || wasAtBottomRef.current) {
-      scrollToEnd();
+      // Defer so virtua has painted the new item and scrollHeight is up to date.
+      const raf = requestAnimationFrame(scrollToEnd);
+      return () => cancelAnimationFrame(raf);
     }
   }, [turns]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -266,7 +308,9 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
             messageId={item.id}
             branchInfo={branchInfo?.get(item.id)}
             isStreaming={isStreaming}
+            checkpointId={item.checkpointId}
             onFork={onForkMessage ?? (() => {})}
+            onRevert={onRevert}
             onSwitchBranch={onSwitchBranch ?? (() => {})}
           />
         </div>
@@ -289,8 +333,10 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
           : "—";
       return (
         <div key={item.id} className="result-line">
-          {item.subtype} · {item.numTurns} turns ·{" "}
-          {(item.durationMs / 1000).toFixed(1)}s · {cost}
+          <span>
+            {item.subtype} · {item.numTurns} turns ·{" "}
+            {(item.durationMs / 1000).toFixed(1)}s · {cost}
+          </span>
         </div>
       );
     }

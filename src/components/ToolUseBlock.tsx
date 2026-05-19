@@ -1,5 +1,8 @@
 import { useState } from "react";
 import { SvgBlock } from "./SvgBlock.js";
+import { TableBlock } from "./TableBlock.js";
+import { ChartBlock } from "./ChartBlock.js";
+import type { ChartDataset } from "./ChartBlock.js";
 
 interface Props {
   name: string;
@@ -44,6 +47,14 @@ function summarize(name: string, input: unknown, cwd?: string): string {
     case "RenderSVG":
     case "mcp__buildover-custom-tools__RenderSVG":
       return String(i.title ?? "inline SVG");
+    case "RenderTable":
+    case "mcp__buildover-custom-tools__RenderTable":
+      return String(i.title ?? "table");
+    case "RenderChart":
+    case "mcp__buildover-custom-tools__RenderChart": {
+      const chartType = String(i.type ?? "chart");
+      return i.title ? `${chartType} · ${i.title}` : chartType;
+    }
     default:
       try {
         return JSON.stringify(input).slice(0, 120);
@@ -53,26 +64,82 @@ function summarize(name: string, input: unknown, cwd?: string): string {
   }
 }
 
-// True for any tool name that should be rendered as a graphic instead of
-// the standard collapsed/expanded card. Includes the bare name and the
-// MCP-prefixed form the SDK emits (`mcp__<server>__<tool>`).
-function isRenderSvgTool(name: string): boolean {
-  return name === "RenderSVG" || name.endsWith("__RenderSVG");
+// Returns the presentational type for tools that render inline as rich
+// content instead of the standard collapsed/expanded tool card. Handles
+// both the bare name and the MCP-prefixed form (`mcp__<server>__<tool>`).
+type PresentationalType = "svg" | "table" | "chart";
+function getPresentationalType(name: string): PresentationalType | null {
+  if (name === "RenderSVG" || name.endsWith("__RenderSVG")) return "svg";
+  if (name === "RenderTable" || name.endsWith("__RenderTable")) return "table";
+  if (name === "RenderChart" || name.endsWith("__RenderChart")) return "chart";
+  return null;
 }
 
 export function ToolUseBlock({ name, input, result, cwd }: Props) {
   const [collapsed, setCollapsed] = useState(true);
 
-  // Special case: the RenderSVG skill renders inline as actual graphics
-  // instead of as a tool card. The "tool call" itself is just the transport
-  // for getting the SVG markup into the chat history.
-  if (isRenderSvgTool(name) && input && typeof input === "object") {
+  // Presentational tools render inline as rich content; the tool call is
+  // just the transport mechanism for the data.
+  const presentational = getPresentationalType(name);
+  if (presentational && input && typeof input === "object") {
     const i = input as Record<string, unknown>;
-    const svg = typeof i.svg === "string" ? i.svg : "";
-    if (svg) {
+
+    if (presentational === "svg") {
+      const svg = typeof i.svg === "string" ? i.svg : "";
+      if (svg) {
+        return (
+          <SvgBlock
+            svg={svg}
+            title={typeof i.title === "string" ? i.title : undefined}
+            caption={typeof i.caption === "string" ? i.caption : undefined}
+          />
+        );
+      }
+    }
+
+    if (presentational === "table") {
+      const headers = Array.isArray(i.headers)
+        ? (i.headers as unknown[]).map(String)
+        : [];
+      const rows = Array.isArray(i.rows)
+        ? (i.rows as unknown[]).map((row) =>
+            Array.isArray(row) ? (row as unknown[]).map(String) : [],
+          )
+        : [];
       return (
-        <SvgBlock
-          svg={svg}
+        <TableBlock
+          headers={headers}
+          rows={rows}
+          title={typeof i.title === "string" ? i.title : undefined}
+          caption={typeof i.caption === "string" ? i.caption : undefined}
+        />
+      );
+    }
+
+    if (presentational === "chart") {
+      const type = i.type === "bar" || i.type === "line" || i.type === "pie"
+        ? i.type
+        : "bar";
+      const labels = Array.isArray(i.labels)
+        ? (i.labels as unknown[]).map(String)
+        : [];
+      const datasets: ChartDataset[] = Array.isArray(i.datasets)
+        ? (i.datasets as unknown[]).map((ds) => {
+            const d = ds as Record<string, unknown>;
+            return {
+              label: typeof d.label === "string" ? d.label : "",
+              values: Array.isArray(d.values)
+                ? (d.values as unknown[]).map(Number)
+                : [],
+              color: typeof d.color === "string" ? d.color : undefined,
+            };
+          })
+        : [];
+      return (
+        <ChartBlock
+          type={type}
+          labels={labels}
+          datasets={datasets}
           title={typeof i.title === "string" ? i.title : undefined}
           caption={typeof i.caption === "string" ? i.caption : undefined}
         />

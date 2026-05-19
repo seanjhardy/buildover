@@ -16,6 +16,7 @@ import { type Attachment, type ContextUsage, type Model, type PermissionMode } f
 import { AttachmentChip } from "./AttachmentChip.js";
 import { ContextRing } from "./ContextRing.js";
 import { useTranscription } from "../hooks/useTranscription.js";
+import { fileApi } from "../lib/api.js";
 
 interface Props {
   chatId: string;
@@ -30,6 +31,7 @@ interface Props {
   onPermissionModeChange: (m: PermissionMode) => void;
   onToggleMcp: () => void;
   contextUsage?: ContextUsage | null;
+  repoPath?: string;
 }
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -75,6 +77,46 @@ const MODE_META: Record<
     icon: <ShieldOff size={13} />,
   },
 };
+
+// ---- Slash commands ----
+interface SlashCommand {
+  key: string;
+  mode: PermissionMode;
+  label: string;
+  description: string;
+  icon: ReactNode;
+}
+
+const SLASH_COMMANDS: SlashCommand[] = [
+  {
+    key: "plan",
+    mode: "plan",
+    label: "Plan mode",
+    description: "Claude will explore code and present a plan",
+    icon: <ClipboardList size={13} />,
+  },
+  {
+    key: "auto",
+    mode: "acceptEdits",
+    label: "Edit automatically",
+    description: "Claude will edit without asking for approval",
+    icon: <Hammer size={13} />,
+  },
+  {
+    key: "ask",
+    mode: "default",
+    label: "Ask before edits",
+    description: "Claude will ask for approval before each edit",
+    icon: <MessageCircleQuestion size={13} />,
+  },
+  {
+    key: "yolo",
+    mode: "bypassPermissions",
+    label: "Bypass permissions",
+    description: "Claude will not ask before running commands",
+    icon: <ShieldOff size={13} />,
+  },
+];
 
 async function fileToAttachment(file: File): Promise<Attachment> {
   const isImage = file.type.startsWith("image/");
@@ -124,6 +166,7 @@ export function Composer(props: Props) {
     onPermissionModeChange,
     onToggleMcp,
     contextUsage,
+    repoPath,
   } = props;
 
   const DRAFT_KEY = `buildover.draft.${chatId}`;
@@ -147,6 +190,20 @@ export function Composer(props: Props) {
   const modeWrapRef = useRef<HTMLDivElement>(null);
   const plusWrapRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+
+  // ---- @ file popup state ----
+  const [atPopupOpen, setAtPopupOpen] = useState(false);
+  const [atQuery, setAtQuery] = useState("");
+  const [atFiles, setAtFiles] = useState<string[]>([]);
+  const [atHighlightIndex, setAtHighlightIndex] = useState(0);
+  const atSearchRef = useRef<HTMLInputElement>(null);
+  const atWrapRef = useRef<HTMLDivElement>(null);
+
+  // ---- / command popup state ----
+  const [slashPopupOpen, setSlashPopupOpen] = useState(false);
+  const [slashQuery, setSlashQuery] = useState("");
+  const [slashHighlightIndex, setSlashHighlightIndex] = useState(0);
+  const slashWrapRef = useRef<HTMLDivElement>(null);
 
   // Debounce-save the draft text to localStorage and notify parent.
   const saveDraft = (value: string) => {
@@ -194,7 +251,7 @@ export function Composer(props: Props) {
 
   // Close popups on outside click.
   useEffect(() => {
-    if (!modePopupOpen && !plusPopupOpen) return;
+    if (!modePopupOpen && !plusPopupOpen && !atPopupOpen && !slashPopupOpen) return;
     const onDoc = (e: MouseEvent) => {
       const target = e.target as Node;
       if (modePopupOpen && !modeWrapRef.current?.contains(target)) {
@@ -203,10 +260,16 @@ export function Composer(props: Props) {
       if (plusPopupOpen && !plusWrapRef.current?.contains(target)) {
         setPlusPopupOpen(false);
       }
+      if (atPopupOpen && !atWrapRef.current?.contains(target)) {
+        setAtPopupOpen(false);
+      }
+      if (slashPopupOpen && !slashWrapRef.current?.contains(target)) {
+        setSlashPopupOpen(false);
+      }
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
-  }, [modePopupOpen, plusPopupOpen]);
+  }, [modePopupOpen, plusPopupOpen, atPopupOpen, slashPopupOpen]);
 
   // Auto-resize textarea to fit content, up to a maximum height.
   useEffect(() => {
@@ -215,6 +278,22 @@ export function Composer(props: Props) {
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
   }, [text]);
+
+  // Lazy-load file list the first time the @ popup opens.
+  useEffect(() => {
+    if (!atPopupOpen || !repoPath || atFiles.length > 0) return;
+    fileApi.listFiles(repoPath).then(setAtFiles).catch(() => {});
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [atPopupOpen, repoPath]);
+
+  // Focus the search input when the @ popup opens.
+  useEffect(() => {
+    if (atPopupOpen) setTimeout(() => atSearchRef.current?.focus(), 0);
+  }, [atPopupOpen]);
+
+  // Reset highlight indices when queries change.
+  useEffect(() => { setAtHighlightIndex(0); }, [atQuery]);
+  useEffect(() => { setSlashHighlightIndex(0); }, [slashQuery]);
 
   const cycleMode = () => {
     const idx = MODE_CYCLE.indexOf(permissionMode);
@@ -265,6 +344,45 @@ export function Composer(props: Props) {
     clearDraft();
   };
 
+  // Replace the @<query> token with the selected file path.
+  const selectAtFile = (filePath: string) => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const cursor = el.selectionStart ?? el.value.length;
+    const before = el.value.slice(0, cursor);
+    const replaced = before.replace(/@([^\s@]*)$/, `@${filePath}`);
+    const newText = replaced + el.value.slice(cursor);
+    setText(newText);
+    saveDraft(newText);
+    setAtPopupOpen(false);
+    setAtQuery("");
+    requestAnimationFrame(() => {
+      el.setSelectionRange(replaced.length, replaced.length);
+      el.focus();
+    });
+  };
+
+  // Remove the /command token and apply the permission mode.
+  const selectSlashCommand = (cmd: SlashCommand) => {
+    const el = textareaRef.current;
+    if (!el) return;
+    const cursor = el.selectionStart ?? el.value.length;
+    const before = el.value.slice(0, cursor);
+    const replaced = before.replace(/(?:^|\n)\/[^\s]*$/, (m) =>
+      m.startsWith("\n") ? "\n" : "",
+    );
+    const newText = replaced + el.value.slice(cursor);
+    setText(newText);
+    saveDraft(newText);
+    onPermissionModeChange(cmd.mode);
+    setSlashPopupOpen(false);
+    setSlashQuery("");
+    requestAnimationFrame(() => {
+      el.setSelectionRange(replaced.length, replaced.length);
+      el.focus();
+    });
+  };
+
   const addFiles = async (files: FileList | File[]) => {
     setError(null);
     const next: Attachment[] = [];
@@ -279,6 +397,14 @@ export function Composer(props: Props) {
   };
 
   const meta = MODE_META[permissionMode];
+
+  // Derived filtered lists (computed at render time for use in JSX + keyboard handlers).
+  const atFilesFiltered = atFiles
+    .filter((f) => atQuery === "" || f.toLowerCase().includes(atQuery.toLowerCase()))
+    .slice(0, 50);
+  const slashCommandsFiltered = SLASH_COMMANDS.filter((c) =>
+    c.key.startsWith(slashQuery.toLowerCase()),
+  );
 
   return (
     <div
@@ -311,48 +437,212 @@ export function Composer(props: Props) {
       )}
       {error && <div className="composer-error">{error}</div>}
 
-      <textarea
-        ref={textareaRef}
-        className="composer-input"
-        placeholder={
-          disabled
-            ? "Claude is working…"
-            : permissionMode === "plan"
-              ? "Describe what you want Claude to plan…"
-              : "Message Claude (Shift+Tab cycles modes)"
-        }
-        value={text}
-        onChange={(e) => {
-          setText(e.target.value);
-          saveDraft(e.target.value);
-        }}
-        onPaste={async (e) => {
-          const items = e.clipboardData?.items;
-          if (!items) return;
-          const files: File[] = [];
-          for (const item of items) {
-            if (item.kind === "file") {
-              const f = item.getAsFile();
-              if (f) files.push(f);
+      <div className="composer-input-wrap">
+        {/* ---- @ file search popup ---- */}
+        {atPopupOpen && (
+          <div ref={atWrapRef} className="at-popup" role="listbox" aria-label="File search">
+            <input
+              ref={atSearchRef}
+              className="at-popup-search"
+              placeholder="Search files…"
+              value={atQuery}
+              onChange={(e) => setAtQuery(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "ArrowDown") {
+                  e.preventDefault();
+                  setAtHighlightIndex((i) => Math.min(i + 1, atFilesFiltered.length - 1));
+                } else if (e.key === "ArrowUp") {
+                  e.preventDefault();
+                  setAtHighlightIndex((i) => Math.max(i - 1, 0));
+                } else if (e.key === "Enter") {
+                  e.preventDefault();
+                  const chosen = atFilesFiltered[atHighlightIndex];
+                  if (chosen) selectAtFile(chosen);
+                } else if (e.key === "Escape") {
+                  e.preventDefault();
+                  setAtPopupOpen(false);
+                  textareaRef.current?.focus();
+                }
+              }}
+            />
+            <div className="at-popup-list">
+              {atFilesFiltered.length === 0 && (
+                <div className="at-popup-empty">
+                  {atFiles.length === 0 ? "Loading files…" : "No files match"}
+                </div>
+              )}
+              {atFilesFiltered.map((filePath, i) => {
+                const parts = filePath.split("/");
+                const basename = parts[parts.length - 1];
+                const dir = parts.slice(0, -1).join("/");
+                return (
+                  <button
+                    key={filePath}
+                    className={`inline-popup-item${i === atHighlightIndex ? " highlighted" : ""}`}
+                    role="option"
+                    aria-selected={i === atHighlightIndex}
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // prevent textarea losing focus
+                      selectAtFile(filePath);
+                    }}
+                    onMouseEnter={() => setAtHighlightIndex(i)}
+                  >
+                    <span className="inline-popup-item-name">{basename}</span>
+                    {dir && <span className="inline-popup-item-path">{dir}</span>}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        {/* ---- / command popup ---- */}
+        {slashPopupOpen && (
+          <div ref={slashWrapRef} className="slash-popup" role="listbox" aria-label="Commands">
+            {slashCommandsFiltered.length === 0 && (
+              <div className="at-popup-empty">No matching commands</div>
+            )}
+            {slashCommandsFiltered.map((cmd, i) => (
+              <button
+                key={cmd.key}
+                className={`inline-popup-item${i === slashHighlightIndex ? " highlighted" : ""}`}
+                role="option"
+                aria-selected={i === slashHighlightIndex}
+                onMouseDown={(e) => {
+                  e.preventDefault();
+                  selectSlashCommand(cmd);
+                }}
+                onMouseEnter={() => setSlashHighlightIndex(i)}
+              >
+                <span className="popup-item-icon">{cmd.icon}</span>
+                <div>
+                  <div className="popup-item-label">/{cmd.key}</div>
+                  <div className="popup-item-desc">{cmd.description}</div>
+                </div>
+              </button>
+            ))}
+          </div>
+        )}
+
+        <textarea
+          ref={textareaRef}
+          className="composer-input"
+          placeholder={
+            disabled
+              ? "Claude is working…"
+              : permissionMode === "plan"
+                ? "Describe what you want Claude to plan…"
+                : "Message Claude (@ for files, / for commands)"
+          }
+          value={text}
+          onChange={(e) => {
+            const val = e.target.value;
+            const cursor = e.target.selectionStart ?? val.length;
+            setText(val);
+            saveDraft(val);
+
+            // Detect @ trigger: @ followed by non-whitespace before cursor.
+            const before = val.slice(0, cursor);
+            const atMatch = before.match(/@([^\s@]*)$/);
+            if (atMatch) {
+              setAtQuery(atMatch[1]);
+              setAtPopupOpen(true);
+              setSlashPopupOpen(false);
+              return;
             }
-          }
-          if (files.length) {
-            e.preventDefault();
-            addFiles(files);
-          }
-        }}
-        onKeyDown={(e) => {
-          if (e.key === "Tab" && e.shiftKey) {
-            e.preventDefault();
-            cycleMode();
-            return;
-          }
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            submit();
-          }
-        }}
-      />
+
+            // Detect / trigger: only at position 0 or immediately after a newline.
+            const slashMatch = before.match(/(?:^|\n)\/([^\s/]*)$/);
+            if (slashMatch) {
+              setSlashQuery(slashMatch[1]);
+              setSlashPopupOpen(true);
+              setAtPopupOpen(false);
+              return;
+            }
+
+            // Neither trigger active — close any open popup.
+            setAtPopupOpen(false);
+            setSlashPopupOpen(false);
+          }}
+          onPaste={async (e) => {
+            const items = e.clipboardData?.items;
+            if (!items) return;
+            const files: File[] = [];
+            for (const item of items) {
+              if (item.kind === "file") {
+                const f = item.getAsFile();
+                if (f) files.push(f);
+              }
+            }
+            if (files.length) {
+              e.preventDefault();
+              addFiles(files);
+            }
+          }}
+          onKeyDown={(e) => {
+            // ---- @ popup keyboard navigation ----
+            if (atPopupOpen) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setAtHighlightIndex((i) => Math.min(i + 1, atFilesFiltered.length - 1));
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setAtHighlightIndex((i) => Math.max(i - 1, 0));
+                return;
+              }
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const chosen = atFilesFiltered[atHighlightIndex];
+                if (chosen) selectAtFile(chosen);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setAtPopupOpen(false);
+                return;
+              }
+            }
+
+            // ---- / popup keyboard navigation ----
+            if (slashPopupOpen) {
+              if (e.key === "ArrowDown") {
+                e.preventDefault();
+                setSlashHighlightIndex((i) => Math.min(i + 1, slashCommandsFiltered.length - 1));
+                return;
+              }
+              if (e.key === "ArrowUp") {
+                e.preventDefault();
+                setSlashHighlightIndex((i) => Math.max(i - 1, 0));
+                return;
+              }
+              if (e.key === "Enter") {
+                e.preventDefault();
+                const chosen = slashCommandsFiltered[slashHighlightIndex];
+                if (chosen) selectSlashCommand(chosen);
+                return;
+              }
+              if (e.key === "Escape") {
+                e.preventDefault();
+                setSlashPopupOpen(false);
+                return;
+              }
+            }
+
+            // ---- Existing shortcuts ----
+            if (e.key === "Tab" && e.shiftKey) {
+              e.preventDefault();
+              cycleMode();
+              return;
+            }
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              submit();
+            }
+          }}
+        />
+      </div>
 
       <div className="composer-bar">
         <div className="composer-bar-left">

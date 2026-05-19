@@ -128,9 +128,137 @@ export function createCustomToolsServer(requestAttentionAck: RequestAttentionAck
   },
 );
 
+  // RenderTable: lets the agent embed a formatted data table directly into
+  // the chat history. Like RenderSVG, the handler is a no-op confirmation —
+  // the actual data (headers + rows) lives in the tool_use input, which the
+  // client picks up and renders via the TableBlock component.
+  const renderTableTool = tool(
+    "RenderTable",
+    "Render a formatted data table directly in the chat. Use this whenever " +
+      "structured data would be clearer as a table than as prose or a code " +
+      "block — comparisons, metrics, schedules, lists with multiple attributes. " +
+      "Provide column headers and rows as arrays of strings. Numeric values " +
+      "should be pre-formatted (e.g. '1,234' or '98.6%') since all cells are " +
+      "treated as plain text. Pair the table with a short title and, if " +
+      "helpful, a one-line caption explaining what the data shows.",
+    {
+      headers: z
+        .array(z.string())
+        .describe("Column header labels, left to right."),
+      rows: z
+        .array(z.array(z.string()))
+        .describe(
+          "Row data. Each element is one row; each row is an array of cell " +
+            "values in the same order as headers. All cells are plain text.",
+        ),
+      title: z
+        .string()
+        .optional()
+        .describe(
+          "Short label shown above the table (e.g. \"Monthly Costs\"). " +
+            "Keep under ~60 chars.",
+        ),
+      caption: z
+        .string()
+        .optional()
+        .describe(
+          "Optional one-line caption rendered under the table. Plain text.",
+        ),
+    },
+    async (args) => {
+      const title = args.title ? ` "${args.title}"` : "";
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Rendered table${title} in the chat.`,
+          },
+        ],
+      };
+    },
+  );
+
+  // RenderChart: lets the agent embed a bar, line, or pie chart directly into
+  // the chat. The handler is a no-op confirmation; the chart data lives in the
+  // tool_use input and is rendered client-side via the ChartBlock component
+  // using pure SVG — no external chart library required.
+  const renderChartTool = tool(
+    "RenderChart",
+    "Render a bar, line, or pie chart directly in the chat. Use this " +
+      "whenever a visual would show trends, comparisons, or proportions more " +
+      "clearly than prose or a table. Choose the type based on the data: " +
+      "'bar' for comparing discrete categories, 'line' for trends over time " +
+      "or a continuous axis, 'pie' for part-to-whole proportions (one series " +
+      "only). Provide human-readable labels and pre-scaled numeric values. " +
+      "Multiple datasets are supported for bar and line charts (they appear " +
+      "as grouped bars or overlapping lines with a legend). Pie charts use " +
+      "only the first dataset.",
+    {
+      type: z
+        .enum(["bar", "line", "pie"])
+        .describe("Chart type: 'bar', 'line', or 'pie'."),
+      labels: z
+        .array(z.string())
+        .describe(
+          "Labels for each data point or pie slice, in order. " +
+            "Keep each label short (under ~14 chars) so they fit on the axis.",
+        ),
+      datasets: z
+        .array(
+          z.object({
+            label: z
+              .string()
+              .describe(
+                "Series name shown in the legend. Keep under ~12 chars.",
+              ),
+            values: z
+              .array(z.number())
+              .describe(
+                "Numeric values, one per label entry, in the same order.",
+              ),
+            color: z
+              .string()
+              .optional()
+              .describe(
+                "Optional CSS colour for this series (e.g. '#4e9af1'). " +
+                  "If omitted, a built-in palette is used.",
+              ),
+          }),
+        )
+        .describe(
+          "One or more data series. Bar and line charts support multiple " +
+            "series (grouped/overlapping). Pie charts use only the first series.",
+        ),
+      title: z
+        .string()
+        .optional()
+        .describe(
+          "Short label shown above the chart (e.g. \"Weekly Active Users\"). " +
+            "Keep under ~60 chars.",
+        ),
+      caption: z
+        .string()
+        .optional()
+        .describe(
+          "Optional one-line caption rendered under the chart. Plain text.",
+        ),
+    },
+    async (args) => {
+      const title = args.title ? ` "${args.title}"` : "";
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Rendered ${args.type} chart${title} in the chat.`,
+          },
+        ],
+      };
+    },
+  );
+
   return createSdkMcpServer({
     name: "buildover-custom-tools",
     version: "1.0.0",
-    tools: [requestUserAttentionTool, renderSvgTool],
+    tools: [requestUserAttentionTool, renderSvgTool, renderTableTool, renderChartTool],
   });
 }

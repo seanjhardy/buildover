@@ -10,7 +10,9 @@ interface Props {
   messageId: string;
   branchInfo?: BranchInfo;      // present when forks exist at this message
   isStreaming: boolean;
+  checkpointId?: string;        // set when this turn can be reverted
   onFork: (userMessageId: string, newText: string) => void;
+  onRevert?: (checkpointId: string) => void;
   onSwitchBranch: (parentMessageId: string, targetBranchId: string) => void;
 }
 
@@ -36,7 +38,9 @@ export const UserMessage = memo(function UserMessage({
   messageId,
   branchInfo,
   isStreaming,
+  checkpointId,
   onFork,
+  onRevert,
   onSwitchBranch,
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
@@ -98,7 +102,7 @@ export const UserMessage = memo(function UserMessage({
 
   return (
     <div className="message user">
-      {/* Wrapper provides the max-width constraint and is the anchor for the pencil button */}
+      {/* Wrapper provides the max-width constraint and stacks bubble + action bar */}
       <div className="bubble-wrapper">
         {isEditing ? (
           /* ---- Edit mode ---- */
@@ -172,33 +176,45 @@ export const UserMessage = memo(function UserMessage({
           </div>
         ) : (
           /* ---- Display mode ---- */
-          <div className="bubble">
-            {attachments && attachments.length > 0 && (
-              <div className="bubble-attachments">
-                {attachments.map((a) => (
-                  <AttachmentChip
-                    key={a.id}
-                    attachment={a}
-                    compact
-                    onClick={() => setPreviewAttachment(a)}
-                  />
-                ))}
+          <>
+            <div className="bubble">
+              {attachments && attachments.length > 0 && (
+                <div className="bubble-attachments">
+                  {attachments.map((a) => (
+                    <AttachmentChip
+                      key={a.id}
+                      attachment={a}
+                      compact
+                      onClick={() => setPreviewAttachment(a)}
+                    />
+                  ))}
+                </div>
+              )}
+              {text}
+            </div>
+            {/* Action bar — appears below the bubble on hover */}
+            {!isStreaming && (
+              <div className="bubble-actions">
+                <button
+                  className="bubble-edit-btn"
+                  onClick={() => setIsEditing(true)}
+                  title="Edit message"
+                  aria-label="Edit message"
+                >
+                  <PencilIcon />
+                </button>
+                {checkpointId && onRevert && (
+                  <button
+                    className="bubble-revert-btn"
+                    onClick={() => onRevert(checkpointId)}
+                    title="Revert to before this message"
+                  >
+                    ↩ Revert
+                  </button>
+                )}
               </div>
             )}
-            {text}
-          </div>
-        )}
-
-        {/* Pencil button — overlaps bottom-right corner of wrapper, shown on hover */}
-        {!isStreaming && !isEditing && (
-          <button
-            className="bubble-edit-btn"
-            onClick={() => setIsEditing(true)}
-            title="Edit message"
-            aria-label="Edit message"
-          >
-            <PencilIcon />
-          </button>
+          </>
         )}
       </div>
       {previewAttachment && (
