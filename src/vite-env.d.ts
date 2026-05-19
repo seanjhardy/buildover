@@ -15,8 +15,19 @@ interface ElectronNotifications {
   notify(title: string, body: string): Promise<void>;
 }
 
+interface ElectronShell {
+  openExternal(url: string): Promise<void>;
+}
+
+interface ElectronPermissions {
+  check(): Promise<{ microphone: string }>;
+  openSettings(type: string): Promise<void>;
+}
+
 interface Window {
   electronNotifications?: ElectronNotifications;
+  electronShell?: ElectronShell;
+  electronPermissions?: ElectronPermissions;
 }
 
 // Type shim for openwakeword-wasm-browser which ships JS-only (no .d.ts).

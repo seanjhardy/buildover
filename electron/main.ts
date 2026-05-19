@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell, nativeImage, ipcMain, Notification } = require("electron");
+const { app, BrowserWindow, shell, nativeImage, ipcMain, Notification, systemPreferences } = require("electron");
 const path = require("path");
 const { spawn } = require("child_process");
 const http = require("http");
@@ -79,7 +79,11 @@ function createWindow(): void {
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
   mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
-    shell.openExternal(url);
+    // WebLinksAddon's default handler calls window.open() with no URL first
+    // (about:blank); only forward real http(s) links to the OS browser.
+    if (url && url !== "about:blank" && /^https?:/i.test(url)) {
+      shell.openExternal(url);
+    }
     return { action: "deny" };
   });
   mainWindow.loadURL("http://localhost:5173");
@@ -113,6 +117,28 @@ app.whenReady().then(async () => {
       }
     },
   );
+
+  ipcMain.handle("shell:open-external", (_event: any, url: string) => {
+    if (typeof url === "string" && /^https?:/i.test(url)) {
+      shell.openExternal(url);
+    }
+  });
+
+  // ── System permissions ──────────────────────────────────────────────────────
+  ipcMain.handle("permissions:check", () => {
+    return {
+      microphone: systemPreferences.getMediaAccessStatus("microphone") as string,
+    };
+  });
+
+  ipcMain.handle("permissions:open-settings", async (_event: any, type: string) => {
+    const urls: Record<string, string> = {
+      notifications: "x-apple.systempreferences:com.apple.preference.notifications",
+      microphone: "x-apple.systempreferences:com.apple.preference.security?Privacy_Microphone",
+    };
+    const url = urls[type];
+    if (url) await shell.openExternal(url);
+  });
 
   // ── Native notification ─────────────────────────────────────────────────────
   // Only fires when the main window is NOT focused — user is already watching otherwise.

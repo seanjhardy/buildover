@@ -65,12 +65,12 @@ class AgentSession {
   // chat_status broadcasts for turn-content events so the client never sees
   // the chat flicker to "running" and back during an invisible compact turn.
   private currentTurnSilent = false;
-  // If a user message arrives while a silent auto-compact turn is in progress,
-  // we can't run it immediately (running = true) but we also can't surface a
+  // If user messages arrive while a silent auto-compact turn is in progress,
+  // we can't run them immediately (running = true) but we also can't surface a
   // "Chat already running" error since the user has no idea compaction is
-  // happening. Instead we park the turn here and start it as soon as the
-  // compact finishes.
-  private pendingUserTurn: Parameters<AgentSession["runTurn"]>[0] | null = null;
+  // happening. We persist + echo each message immediately for UI visibility,
+  // then queue the turns here and drain them once the compact finishes.
+  private pendingUserTurns: Parameters<AgentSession["runTurn"]>[0][] = [];
   // Tracks the active turn's permissionMode so it can be updated mid-turn.
   // canUseTool reads this on every invocation via the getter passed to the
   // SDK, so toggling bypass takes effect on the next decision.
@@ -281,9 +281,32 @@ class AgentSession {
     if (this.running) {
       if (this.currentTurnSilent && !args.silent) {
         // A silent auto-compact is in progress. The user has no idea — the UI
-        // showed the chat as done. Park this turn and run it the moment
-        // compaction finishes (see the finally block below).
-        this.pendingUserTurn = args;
+        // showed the chat as done. Persist + echo the message immediately so it
+        // is durable and visible in the UI, then queue the agent turn to run
+        // once compaction finishes (see the finally block below).
+        if (!args.isRetry) {
+          const userId = `u-${Date.now()}`;
+          const ts = new Date().toISOString();
+          const userEvent: ChatEvent = {
+            type: "user_message",
+            id: userId,
+            text: args.text,
+            attachments: args.attachments,
+            ts,
+          };
+          // appendEvent uses withChatLock internally — it will queue behind any
+          // lock already held by the compact turn (no deadlock, just ordering).
+          void this.record(userEvent);
+          this.broadcast({
+            type: "user_message_echo",
+            chatId: this.chatId,
+            id: userId,
+            text: args.text,
+            attachments: args.attachments,
+          });
+        }
+        // Mark as retry so the parked turn doesn't double-persist/echo.
+        this.pendingUserTurns.push({ ...args, isRetry: true });
         return;
       }
       throw new Error("Chat already running");
@@ -475,12 +498,12 @@ class AgentSession {
           isRetry: true,  // don't echo "/compact" as a user message
           silent: true,   // suppress assistant/result turns from reaching the UI
         });
-      } else if (this.pendingUserTurn) {
-        // A user message arrived while a silent compact turn was running and
-        // was parked (see the running guard above). Now that the session is
-        // free, send it through normally.
-        const queued = this.pendingUserTurn;
-        this.pendingUserTurn = null;
+      } else if (this.pendingUserTurns.length > 0) {
+        // One or more user messages arrived while a silent compact turn was
+        // running and were parked (see the running guard above). Now that the
+        // session is free, send the first one through. Its own finally block
+        // will drain the next entry, and so on until the queue is empty.
+        const queued = this.pendingUserTurns.shift()!;
         void this.runTurn(queued);
       }
     }

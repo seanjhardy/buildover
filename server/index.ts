@@ -1,6 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
-import { readFile as fsReadFile, readdir } from "node:fs/promises";
+import { readFile as fsReadFile, readdir, readFile, writeFile } from "node:fs/promises";
 import { join, relative, isAbsolute as pathIsAbsolute, resolve as resolvePath } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -106,6 +106,42 @@ app.get("/focus", (_req, res) => {
 </script>
 </body>
 </html>`);
+});
+
+// ---- Env var management ----
+const MANAGED_ENV_VARS = ["WHISPER_API_KEY", "GROQ_API_KEY", "GROQ_WHISPER_MODEL"];
+
+app.get("/api/env/status", (_req, res) => {
+  const status: Record<string, boolean> = {};
+  for (const key of MANAGED_ENV_VARS) {
+    status[key] = Boolean(process.env[key]);
+  }
+  res.json({ status });
+});
+
+app.post("/api/env/set", async (req, res) => {
+  const key = String(req.body?.key ?? "").trim();
+  const value = String(req.body?.value ?? "").trim();
+  if (!/^[A-Z][A-Z0-9_]*$/.test(key) || !MANAGED_ENV_VARS.includes(key)) {
+    res.status(400).json({ error: "Invalid or unknown env var key" });
+    return;
+  }
+  const envPath = join(process.cwd(), ".env");
+  let content = "";
+  try { content = await readFile(envPath, "utf-8"); } catch { /* create fresh */ }
+  // Replace existing key or append
+  const lines = content.split("\n");
+  const idx = lines.findIndex((l) => new RegExp(`^\\s*${key}\\s*=`).test(l));
+  const newLine = `${key}="${value}"`;
+  if (idx >= 0) {
+    lines[idx] = newLine;
+  } else {
+    if (lines.length > 0 && lines[lines.length - 1] !== "") lines.push("");
+    lines.push(newLine);
+  }
+  await writeFile(envPath, lines.join("\n"), "utf-8");
+  process.env[key] = value; // take effect immediately in this process
+  res.json({ ok: true });
 });
 
 app.get("/api/usage", async (_req, res) => {

@@ -369,17 +369,28 @@ export function useAgent(
         turnCountRef.current = Math.max(0, turnCountRef.current - 1);
         setIsStreaming(turnCountRef.current > 0);
       } else if (event.type === "chat_replay") {
-        // A chat_replay is the initial history snapshot sent when we subscribe.
-        // If the replayed record shows the agent was already running, seed the
-        // counter to 1 so isStreaming reflects reality.  We only do this if
-        // the counter is currently 0 — if a turn_start already arrived before
-        // the replay (unlikely but theoretically possible in a reconnect race),
-        // we trust the counter rather than the snapshot status.
-        if (turnCountRef.current === 0) {
-          const running = event.record.status === "running";
-          turnCountRef.current = running ? 1 : 0;
-          setIsStreaming(running);
+        // A chat_replay is the initial history snapshot sent when we (re)subscribe.
+        // Use it to authoritatively sync the turn counter with ground truth:
+        //
+        //  • Not running → always reset to 0. This fixes the case where turn_end
+        //    was lost during a WebSocket disconnect, leaving the counter stuck at 1
+        //    and isStreaming permanently true (which silently ate all new messages
+        //    into the queue without ever draining them).
+        //
+        //  • Running, counter is 0 → seed to 1 so isStreaming reflects reality
+        //    (turn_start hasn't arrived yet on this connection).
+        //
+        //  • Running, counter > 0 → a live turn_start already arrived; trust the
+        //    counter (a turn_start that beat the replay in a reconnect race).
+        const running = event.record.status === "running";
+        if (!running) {
+          turnCountRef.current = 0;
+          setIsStreaming(false);
+        } else if (turnCountRef.current === 0) {
+          turnCountRef.current = 1;
+          setIsStreaming(true);
         }
+        // else: running and counter > 0 — live signal already correct, leave it.
       }
       // Note: we intentionally do NOT touch isStreaming for chat_status events.
       // chat_status "running"/"awaiting_input" can arrive out of order relative

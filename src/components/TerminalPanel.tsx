@@ -4,6 +4,7 @@ import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Plus, X, ChevronDown, Terminal as TerminalIcon } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
+import { openExternalUrl } from "../lib/openExternalUrl.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -213,11 +214,17 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
       ws.onmessage = (ev: MessageEvent) => {
         try {
           const msg = JSON.parse(ev.data as string) as {
-            type: string; tabId: string; data?: string; code?: number;
+            type: string; tabId: string; data?: string; code?: number; message?: string;
           };
-          if (msg.type === "output" && msg.data) {
+          if (msg.type === "output") {
             setTabSettingUp(msg.tabId, false);
-            terminalsRef.current.get(msg.tabId)?.terminal.write(msg.data);
+            if (msg.data) terminalsRef.current.get(msg.tabId)?.terminal.write(msg.data);
+          } else if (msg.type === "error") {
+            setTabSettingUp(msg.tabId, false);
+            const terminal = terminalsRef.current.get(msg.tabId)?.terminal;
+            if (terminal) {
+              terminal.write(`\r\n\x1b[31m[terminal error: ${msg.message ?? "unknown error"}]\x1b[0m\r\n`);
+            }
           } else if (msg.type === "exit") {
             const inst = terminalsRef.current.get(msg.tabId);
             if (inst) {
@@ -279,7 +286,9 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
 
     const fitAddon = new FitAddon();
     terminal.loadAddon(fitAddon);
-    terminal.loadAddon(new WebLinksAddon());
+    terminal.loadAddon(new WebLinksAddon((_event, uri) => {
+      openExternalUrl(uri);
+    }));
     terminal.open(container);
 
     terminal.onData((data) => {

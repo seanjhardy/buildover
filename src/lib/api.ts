@@ -168,6 +168,16 @@ export const api = {
 };
 
 // ── Semantic search ────────────────────────────────────────────────────────────
+// ── Env var management ─────────────────────────────────────────────────────
+export const envApi = {
+  getStatus: () =>
+    getJson<{ status: Record<string, boolean> }>(`/api/env/status`).then(
+      (r) => r.status,
+    ),
+  setVar: (key: string, value: string) =>
+    send<{ ok: boolean }>("POST", `/api/env/set`, { key, value }),
+};
+
 export const searchApi = {
   search: (repoPath: string, query: string, limit = 12) =>
     send<{ results: SearchResult[]; status: SearchIndexStatus }>(

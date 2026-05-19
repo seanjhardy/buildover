@@ -37,59 +37,94 @@ export function useAllRepoChats(
     const cleanups: (() => void)[] = [];
     const subscribed = subscribedRef.current;
 
-    // Wire up WS subscriptions for newly discovered chats across all repos.
-    function subscribeNewChats() {
-      const currentPaths = openRepoPathsRef.current;
-      for (const repoPath of currentPaths) {
-        const chats = chatsByRepoRef.current[repoPath] ?? [];
-        for (const chat of chats) {
-          if (subscribed.has(chat.id)) continue;
-          subscribed.add(chat.id);
+    // Subscribe to a specific list of chats for a repo. Unlike subscribeNewChats
+    // below, this takes a list directly so callers can subscribe immediately after
+    // a REST fetch without waiting for the chatsByRepoRef to update (React state
+    // updates are async, so the ref may still hold the old value at call time).
+    function subscribeChats(repoPath: string, chats: ChatSummary[]) {
+      for (const chat of chats) {
+        if (subscribed.has(chat.id)) continue;
+        subscribed.add(chat.id);
 
-          const handler = (event: AgentEvent) => {
-            // Only apply if this repo is still open.
-            if (!openRepoPathsRef.current.includes(repoPath)) return;
-            applyEventToMap(setChatsByRepo, repoPath, event);
-          };
+        const handler = (event: AgentEvent) => {
+          // Only apply if this repo is still open.
+          if (!openRepoPathsRef.current.includes(repoPath)) return;
+          applyEventToMap(setChatsByRepo, repoPath, event);
+        };
 
-          const unsubscribeListener = agentSocket.onChatEvent(chat.id, handler);
-          agentSocket.send({
-            type: "subscribe",
-            chatId: chat.id,
-            repoPath,
-            withReplay: false,
-          });
+        const unsubscribeListener = agentSocket.onChatEvent(chat.id, handler);
+        agentSocket.send({
+          type: "subscribe",
+          chatId: chat.id,
+          repoPath,
+          withReplay: false,
+        });
 
-          cleanups.push(() => {
-            unsubscribeListener();
-            subscribed.delete(chat.id);
-            setTimeout(
-              () => agentSocket.send({ type: "unsubscribe", chatId: chat.id }),
-              0,
-            );
-          });
-        }
+        cleanups.push(() => {
+          unsubscribeListener();
+          subscribed.delete(chat.id);
+          setTimeout(
+            () => agentSocket.send({ type: "unsubscribe", chatId: chat.id }),
+            0,
+          );
+        });
       }
     }
 
-    // Fetch initial chat list for repos we don't have data for yet, then
-    // immediately subscribe so we don't miss events during the async gap.
+    // Wire up WS subscriptions for any chats now in the ref that aren't yet
+    // subscribed. Used by the interval to catch any stragglers.
+    function subscribeNewChats() {
+      const currentPaths = openRepoPathsRef.current;
+      for (const repoPath of currentPaths) {
+        subscribeChats(repoPath, chatsByRepoRef.current[repoPath] ?? []);
+      }
+    }
+
+    // Fetch initial chat list for repos we don't have data for yet. We subscribe
+    // immediately using the fetched list (not via chatsByRepoRef, which won't
+    // reflect the setChatsByRepo call until after the next React render).
     for (const repoPath of paths) {
       void api.listChats(repoPath).then((list) => {
         setChatsByRepo((prev) => ({ ...prev, [repoPath]: list }));
-        // Subscribe right after the list is known so we minimise the window
-        // between the REST snapshot and live WS event delivery.
-        subscribeNewChats();
+        subscribeChats(repoPath, list);
       });
     }
 
-    const interval = setInterval(subscribeNewChats, 2000);
+    // Periodically re-fetch to pick up chats created since the last fetch.
+    // We deliberately only ADD new chats — existing chats' live statuses come
+    // from WS events and must not be overwritten with potentially stale REST data.
+    const interval = setInterval(async () => {
+      const currentPaths = openRepoPathsRef.current;
+      for (const repoPath of currentPaths) {
+        try {
+          const list = await api.listChats(repoPath);
+          const knownIds = new Set(
+            (chatsByRepoRef.current[repoPath] ?? []).map((c) => c.id),
+          );
+          const freshChats = list.filter((c) => !knownIds.has(c.id));
+          if (freshChats.length > 0) {
+            setChatsByRepo((prev) => ({
+              ...prev,
+              [repoPath]: [...(prev[repoPath] ?? []), ...freshChats],
+            }));
+            // Subscribe immediately using the fresh list — the ref won't have
+            // these IDs yet since setChatsByRepo is async.
+            subscribeChats(repoPath, freshChats);
+          }
+        } catch {
+          // Network error — skip this tick.
+        }
+      }
+      // Also catch any chats that slipped through (e.g. ref updated between ticks).
+      subscribeNewChats();
+    }, 2000);
 
     // On reconnect, re-fetch all repos so badges stay accurate after restarts.
     const unsubReconnect = agentSocket.onReconnect(() => {
       for (const repoPath of openRepoPathsRef.current) {
         void api.listChats(repoPath).then((list) => {
           setChatsByRepo((prev) => ({ ...prev, [repoPath]: list }));
+          subscribeChats(repoPath, list);
         });
       }
     });

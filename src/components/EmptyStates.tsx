@@ -1,6 +1,7 @@
 import { useRef, useCallback } from "react";
 import type React from "react";
 import { OpenRepoMenu } from "./OpenRepoMenu.js";
+import { SetupPanel } from "./SetupPanel.js";
 import type { RecentRepoInfo } from "../types.js";
 
 interface EmptyWorkspaceProps {
@@ -93,8 +94,9 @@ export function EmptyWorkspace({
       <div className="ew-orb ew-orb-primary" aria-hidden="true" />
       <div className="ew-orb ew-orb-secondary" aria-hidden="true" />
 
-      <div className="empty-workspace-card">
-        {/* Icon cluster + central logo */}
+      <div className="ew-layout">
+        <div className="empty-workspace-card">
+          {/* Icon cluster + central logo */}
         <div className="ew-icon-cluster" aria-hidden="true">
           {/* Static language icons at fixed positions */}
           {ORBIT_ICONS.map(([icon, angle, dist]) => {
@@ -162,6 +164,10 @@ export function EmptyWorkspace({
           <span className="ew-chip-dot" aria-hidden="true">·</span>
           <span className="ew-chip">Privacy-first</span>
         </div>
+      </div>
+
+      {/* Setup panel — right column */}
+      <SetupPanel />
       </div>
     </div>
   );

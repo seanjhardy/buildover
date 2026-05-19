@@ -12,6 +12,7 @@ import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.
 import { ChatSidebar } from "./components/ChatSidebar.js";
 import { GitGraphView } from "./components/GitGraphView.js";
 import { RepoTabs } from "./components/RepoTabs.js";
+import { MarketPanel } from "./components/MarketPanel.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
 import { TodoPanel } from "./components/TodoPanel.js";
 import { FilesPanel } from "./components/FilesPanel.js";
@@ -83,6 +84,8 @@ export default function App() {
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
   const [gitGraphOpen, setGitGraphOpen] = useState(false);
+  const [marketOpen, setMarketOpen] = useState(false);
+  const [homeOpen, setHomeOpen] = useState(false);
   // File viewer: null = hidden, FileEntry = open
   const [openFile, setOpenFile] = useState<FileEntry | null>(null);
   // Per-chat message queues: chatId → queued messages for that chat.
@@ -581,34 +584,59 @@ export default function App() {
           </div>
         </header>
 
-        {activeRepo && (
-          <RepoTabs
-            openRepos={workspace.openRepos}
-            activeRepoPath={activeRepo?.path ?? null}
-            recents={workspace.recents}
-            onSelect={(path) => {
-              markRepoTabSeen(path);
-              workspace.setActiveRepo(path);
-            }}
-            onClose={workspace.closeRepo}
-            onOpen={async (path) => {
-              await workspace.openRepo(path);
-            }}
-            onForgetRecent={handleForgetRecent}
-            badges={repoTabBadges}
-          />
-        )}
+        <RepoTabs
+          openRepos={workspace.openRepos}
+          activeRepoPath={
+            marketOpen || homeOpen ? null : (workspace.activeRepo?.path ?? null)
+          }
+          recents={workspace.recents}
+          onHome={() => {
+            setMarketOpen(false);
+            setHomeOpen(true);
+          }}
+          onSelect={(path) => {
+            setMarketOpen(false);
+            setHomeOpen(false);
+            markRepoTabSeen(path);
+            workspace.setActiveRepo(path);
+          }}
+          onClose={workspace.closeRepo}
+          onOpen={async (path) => {
+            setMarketOpen(false);
+            setHomeOpen(false);
+            await workspace.openRepo(path);
+          }}
+          onForgetRecent={handleForgetRecent}
+          badges={repoTabBadges}
+          marketActive={marketOpen}
+          homeActive={homeOpen}
+          onMarket={() => {
+            setHomeOpen(false);
+            setMarketOpen((v) => !v);
+          }}
+        />
 
-        {!activeRepo ? (
+        {marketOpen ? (
+          <MarketPanel onClose={() => setMarketOpen(false)} />
+        ) : (homeOpen || !activeRepo) ? (
           <EmptyWorkspace
             recents={workspace.recents}
             onOpen={async (path) => {
+              setHomeOpen(false);
               await workspace.openRepo(path);
             }}
             onForgetRecent={handleForgetRecent}
           />
-        ) : (
-          <div className={`workspace${openFile ? " workspace--file-open" : ""}`}>
+        ) : null}
+
+        {/* Workspace is always mounted while a repo is open so terminal PTY
+            sessions survive navigating to the home page. We hide it with
+            display:none instead of unmounting it when home/market is active. */}
+        {activeRepo && (
+          <div
+            className={`workspace${openFile ? " workspace--file-open" : ""}`}
+            style={{ display: (marketOpen || homeOpen) ? "none" : undefined }}
+          >
             {/* File viewer slides in from the right, absolutely positioned */}
             {openFile && (
               <FileViewer
