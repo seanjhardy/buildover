@@ -7,12 +7,23 @@ interface Props {
   onOpenGraph?: () => void;
 }
 
+const EXPANDED_STORAGE_KEY = "buildover.gitPanel.expanded";
+
+function loadExpandedPreference(): boolean {
+  try {
+    const stored = localStorage.getItem(EXPANDED_STORAGE_KEY);
+    if (stored === "true") return true;
+    if (stored === "false") return false;
+  } catch { /* ignore */ }
+  return true;
+}
+
 export function GitPanel({ repoPath, onOpenGraph }: Props) {
   const [status, setStatus] = useState<GitStatus | null>(null);
   const [loading, setLoading] = useState(false);
   const [opLoading, setOpLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [expanded, setExpanded] = useState(true);
+  const [expanded, setExpanded] = useState(loadExpandedPreference);
   const [showBranchPicker, setShowBranchPicker] = useState(false);
   const [showCommitInput, setShowCommitInput] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
@@ -28,6 +39,12 @@ export function GitPanel({ repoPath, onOpenGraph }: Props) {
       setStatus(null);
     }
   }, [repoPath]);
+
+  useEffect(() => {
+    try {
+      localStorage.setItem(EXPANDED_STORAGE_KEY, String(expanded));
+    } catch { /* ignore */ }
+  }, [expanded]);
 
   // Initial load + polling while expanded
   useEffect(() => {

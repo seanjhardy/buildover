@@ -28,6 +28,10 @@ export interface TerminalPanelProps {
   hidden?: boolean;
 }
 
+const TERMINAL_FONT_SIZE = 11;
+const MIN_FIT_WIDTH = 40;
+const MIN_FIT_HEIGHT = 40;
+
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function storageKey(repoPath: string) {
@@ -79,15 +83,33 @@ const XTERM_THEME = {
 export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelProps) {
   const key = storageKey(repoPath);
   const saved = loadState(repoPath);
+  const initialTabsRef = useRef<TerminalTab[] | null>(null);
+  if (!initialTabsRef.current) {
+    initialTabsRef.current = saved?.tabs?.length ? saved.tabs : [makeTab(defaultCwd, 0)];
+  }
+  const initialTabs = initialTabsRef.current;
 
   const [isOpen, setIsOpen]       = useState(saved?.isOpen ?? false);
   const [height, setHeight]       = useState(saved?.height ?? 280);
-  const [tabs, setTabs]           = useState<TerminalTab[]>(() =>
-    saved?.tabs?.length ? saved.tabs : [makeTab(defaultCwd, 0)]
-  );
+  const [isResizing, setIsResizing] = useState(false);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const [tabs, setTabs]           = useState<TerminalTab[]>(() => initialTabs);
   const [activeTabId, setActiveTabId] = useState<string | null>(() =>
-    saved?.activeTabId ?? null
+    saved?.activeTabId && initialTabs.some((t) => t.id === saved.activeTabId)
+      ? saved.activeTabId
+      : initialTabs[0]?.id ?? null
   );
+  const [settingUpTabIds, setSettingUpTabIds] = useState<Set<string>>(() => new Set(initialTabs.map((t) => t.id)));
+  const tabsRef = useRef(tabs);
+  const settingUpTabIdsRef = useRef(settingUpTabIds);
+
+  useEffect(() => {
+    tabsRef.current = tabs;
+  }, [tabs]);
+
+  useEffect(() => {
+    settingUpTabIdsRef.current = settingUpTabIds;
+  }, [settingUpTabIds]);
 
   // Ensure activeTabId is always in sync with tabs list
   useEffect(() => {
@@ -109,6 +131,20 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
   // DOM container refs — set via ref-callback on each container div
   const containerRefs = useRef<Map<string, HTMLDivElement | null>>(new Map());
 
+  const setTabSettingUp = useCallback((tabId: string, isSettingUp: boolean) => {
+    const next = new Set(settingUpTabIdsRef.current);
+    if (isSettingUp) {
+      next.add(tabId);
+    } else {
+      next.delete(tabId);
+    }
+
+    settingUpTabIdsRef.current = next;
+    const inst = terminalsRef.current.get(tabId);
+    if (inst) inst.terminal.options.disableStdin = isSettingUp;
+    setSettingUpTabIds(next);
+  }, []);
+
   // ── WebSocket ─────────────────────────────────────────────────────────────────
   const wsRef            = useRef<WebSocket | null>(null);
   const wsOpenRef        = useRef(false);
@@ -122,47 +158,102 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
     }
   }, []);
 
-  useEffect(() => {
-    const ws = new WebSocket("ws://localhost:8787/terminal");
-    wsRef.current = ws;
+  const fitTerminalWhenReady = useCallback((
+    tabId: string,
+    terminal: Terminal,
+    fitAddon: FitAddon,
+    options: { focus?: boolean; attempts?: number } = {}
+  ) => {
+    const { focus = false, attempts = 8 } = options;
 
-    ws.onopen = () => {
-      wsOpenRef.current = true;
-      for (const msg of pendingRef.current) ws.send(JSON.stringify(msg));
-      pendingRef.current = [];
+    const tryFit = (remaining: number) => {
+      const container = containerRefs.current.get(tabId);
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      if (!hidden && isOpen && rect.width >= MIN_FIT_WIDTH && rect.height >= MIN_FIT_HEIGHT) {
+        fitAddon.fit();
+        if (focus) terminal.focus();
+        return;
+      }
+
+      if (remaining > 0) {
+        requestAnimationFrame(() => tryFit(remaining - 1));
+      }
     };
 
-    ws.onmessage = (ev: MessageEvent) => {
-      try {
-        const msg = JSON.parse(ev.data as string) as {
-          type: string; tabId: string; data?: string; code?: number;
-        };
-        if (msg.type === "output" && msg.data) {
-          terminalsRef.current.get(msg.tabId)?.terminal.write(msg.data);
-        } else if (msg.type === "exit") {
-          const inst = terminalsRef.current.get(msg.tabId);
-          if (inst) {
-            inst.terminal.write(
-              "\r\n\x1b[2m[process exited — press Enter to restart]\x1b[0m\r\n"
-            );
-            // Restart on next keystroke
-            const onData = inst.terminal.onData((d) => {
-              if (d === "\r" || d === "\n") {
-                onData.dispose();
-                const tab = tabs.find((t) => t.id === msg.tabId);
-                if (tab) wsSend({ type: "create", tabId: tab.id, cwd: tab.cwd });
-              }
-            });
+    requestAnimationFrame(() => tryFit(attempts));
+  }, [hidden, isOpen]);
+
+  useEffect(() => {
+    let disposed = false;
+    let reconnectTimer: number | null = null;
+
+    const connect = () => {
+      if (disposed) return;
+
+      const ws = new WebSocket("ws://localhost:8787/terminal");
+      wsRef.current = ws;
+
+      ws.onopen = () => {
+        if (disposed || wsRef.current !== ws) return;
+        wsOpenRef.current = true;
+
+        for (const tab of tabsRef.current) {
+          if (terminalsRef.current.has(tab.id)) {
+            setTabSettingUp(tab.id, true);
+            ws.send(JSON.stringify({ type: "create", tabId: tab.id, cwd: tab.cwd }));
           }
         }
-      } catch { /* ignore */ }
+
+        for (const msg of pendingRef.current) ws.send(JSON.stringify(msg));
+        pendingRef.current = [];
+      };
+
+      ws.onmessage = (ev: MessageEvent) => {
+        try {
+          const msg = JSON.parse(ev.data as string) as {
+            type: string; tabId: string; data?: string; code?: number;
+          };
+          if (msg.type === "output" && msg.data) {
+            setTabSettingUp(msg.tabId, false);
+            terminalsRef.current.get(msg.tabId)?.terminal.write(msg.data);
+          } else if (msg.type === "exit") {
+            const inst = terminalsRef.current.get(msg.tabId);
+            if (inst) {
+              setTabSettingUp(msg.tabId, true);
+              inst.terminal.write(
+                "\r\n\x1b[2m[process exited - restarting]\x1b[0m\r\n"
+              );
+              const tab = tabsRef.current.find((t) => t.id === msg.tabId);
+              if (tab) wsSend({ type: "create", tabId: tab.id, cwd: tab.cwd });
+            }
+          }
+        } catch { /* ignore */ }
+      };
+
+      ws.onclose = () => {
+        if (wsRef.current === ws) {
+          wsOpenRef.current = false;
+          wsRef.current = null;
+        }
+        for (const tabId of terminalsRef.current.keys()) {
+          setTabSettingUp(tabId, true);
+        }
+        if (!disposed) {
+          reconnectTimer = window.setTimeout(connect, 500);
+        }
+      };
     };
 
-    ws.onclose = () => { wsOpenRef.current = false; };
+    connect();
 
     return () => {
+      disposed = true;
+      if (reconnectTimer !== null) window.clearTimeout(reconnectTimer);
       wsOpenRef.current = false;
-      ws.close();
+      wsRef.current?.close();
+      wsRef.current = null;
     };
   // Only run once per mount — ws lifecycle is independent of prop changes
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -176,13 +267,14 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
     const terminal = new Terminal({
       theme: XTERM_THEME,
       fontFamily: 'ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace',
-      fontSize: 12,
-      lineHeight: 1.5,
+      fontSize: TERMINAL_FONT_SIZE,
+      lineHeight: 1.4,
       cursorBlink: true,
       cursorStyle: "bar",
       scrollback: 5000,
       allowTransparency: false,
       macOptionIsMeta: true,
+      disableStdin: settingUpTabIdsRef.current.has(tab.id),
     });
 
     const fitAddon = new FitAddon();
@@ -190,18 +282,19 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
     terminal.loadAddon(new WebLinksAddon());
     terminal.open(container);
 
-    terminal.onData((data) => wsSend({ type: "input", tabId: tab.id, data }));
+    terminal.onData((data) => {
+      if (settingUpTabIdsRef.current.has(tab.id) || !wsOpenRef.current) return;
+      wsSend({ type: "input", tabId: tab.id, data });
+    });
     terminal.onResize(({ cols, rows }) => wsSend({ type: "resize", tabId: tab.id, cols, rows }));
 
     terminalsRef.current.set(tab.id, { terminal, fitAddon });
 
     // Tell the server to spawn the PTY, then fit so xterm knows its dimensions
+    setTabSettingUp(tab.id, true);
     wsSend({ type: "create", tabId: tab.id, cwd: tab.cwd });
-    requestAnimationFrame(() => {
-      fitAddon.fit();
-      terminal.focus();
-    });
-  }, [wsSend]);
+    fitTerminalWhenReady(tab.id, terminal, fitAddon, { focus: true });
+  }, [fitTerminalWhenReady, setTabSettingUp, wsSend]);
 
   // Ref-callback: called whenever a container div mounts/unmounts.
   // Initialises immediately (panel closed or not) so PTYs are pre-warmed.
@@ -225,14 +318,11 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
     } else {
       const inst = terminalsRef.current.get(activeTabId);
       if (inst) {
-        requestAnimationFrame(() => {
-          inst.fitAddon.fit();
-          inst.terminal.focus();
-        });
+        fitTerminalWhenReady(activeTabId, inst.terminal, inst.fitAddon, { focus: true });
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]);
+  }, [isOpen, hidden]);
 
   // When switching tabs, fit + focus the newly visible terminal
   useEffect(() => {
@@ -244,21 +334,18 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
     } else {
       const inst = terminalsRef.current.get(activeTabId);
       if (inst) {
-        requestAnimationFrame(() => {
-          inst.fitAddon.fit();
-          inst.terminal.focus();
-        });
+        fitTerminalWhenReady(activeTabId, inst.terminal, inst.fitAddon, { focus: true });
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTabId]);
+  }, [activeTabId, hidden]);
 
-  // Refit visible terminal after panel height changes (drag resize)
+  // Refit visible terminal after panel height changes (not during drag — fit on mouseup)
   useEffect(() => {
-    if (!isOpen || !activeTabId) return;
+    if (isResizing || !isOpen || !activeTabId) return;
     const inst = terminalsRef.current.get(activeTabId);
-    if (inst) requestAnimationFrame(() => inst.fitAddon.fit());
-  }, [height, isOpen, activeTabId]);
+    if (inst) fitTerminalWhenReady(activeTabId, inst.terminal, inst.fitAddon);
+  }, [height, isOpen, activeTabId, isResizing, fitTerminalWhenReady]);
 
   // ── Tab management ─────────────────────────────────────────────────────────────
 
@@ -277,6 +364,12 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
       terminalsRef.current.delete(tabId);
     }
     containerRefs.current.delete(tabId);
+    setSettingUpTabIds((prev) => {
+      const next = new Set(prev);
+      next.delete(tabId);
+      settingUpTabIdsRef.current = next;
+      return next;
+    });
     setTabs((prev) => {
       const next = prev.filter((t) => t.id !== tabId);
       if (next.length === 0) {
@@ -300,27 +393,42 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
   const handleResizeMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     dragStateRef.current = { startY: e.clientY, startHeight: height };
+    setIsResizing(true);
 
     const onMouseMove = (ev: MouseEvent) => {
       if (!dragStateRef.current) return;
       const delta = dragStateRef.current.startY - ev.clientY;
       const next = Math.max(120, Math.min(700, dragStateRef.current.startHeight + delta));
-      setHeight(next);
+      // Update DOM directly — avoid React re-renders, localStorage writes, and
+      // xterm refits on every mousemove (those made drag feel extremely laggy).
+      if (panelRef.current) panelRef.current.style.height = `${next}px`;
     };
 
     const onMouseUp = () => {
+      const panel = panelRef.current;
+      const finalHeight = panel?.style.height
+        ? parseInt(panel.style.height, 10)
+        : dragStateRef.current?.startHeight ?? height;
       dragStateRef.current = null;
       document.removeEventListener("mousemove", onMouseMove);
       document.removeEventListener("mouseup", onMouseUp);
+      setIsResizing(false);
+      if (Number.isFinite(finalHeight)) setHeight(finalHeight);
       if (activeTabId) {
         const inst = terminalsRef.current.get(activeTabId);
-        requestAnimationFrame(() => inst?.fitAddon.fit());
+        if (inst) fitTerminalWhenReady(activeTabId, inst.terminal, inst.fitAddon);
       }
     };
 
     document.addEventListener("mousemove", onMouseMove);
     document.addEventListener("mouseup", onMouseUp);
-  }, [height, activeTabId]);
+  }, [height, activeTabId, fitTerminalWhenReady]);
+
+  const handlePanelTransitionEnd = useCallback((e: React.TransitionEvent<HTMLDivElement>) => {
+    if (e.propertyName !== "height" || !isOpen || !activeTabId) return;
+    const inst = terminalsRef.current.get(activeTabId);
+    if (inst) fitTerminalWhenReady(activeTabId, inst.terminal, inst.fitAddon, { focus: true });
+  }, [activeTabId, fitTerminalWhenReady, isOpen]);
 
   // ── Keyboard shortcut: Cmd+T ──────────────────────────────────────────────────
 
@@ -349,10 +457,13 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
   }, []);
 
   // ── Render ─────────────────────────────────────────────────────────────────────
+  const activeTabSettingUp = activeTabId ? settingUpTabIds.has(activeTabId) : false;
 
   return (
     <div
-      className={`terminal-panel${isOpen ? " terminal-panel--open" : ""}`}
+      ref={panelRef}
+      className={`terminal-panel${isOpen ? " terminal-panel--open" : ""}${isResizing ? " terminal-panel--resizing" : ""}`}
+      onTransitionEnd={handlePanelTransitionEnd}
       style={{
         ...(isOpen ? { height } : {}),
         // Keep mounted but invisible when another repo is active
@@ -407,6 +518,12 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
               style={{ display: tab.id === activeTabId ? "flex" : "none" }}
             />
           ))}
+          {activeTabSettingUp && (
+            <div className="terminal-loading-overlay" aria-live="polite">
+              <span className="terminal-loading-spinner" />
+              <span>Setting up terminal</span>
+            </div>
+          )}
         </div>
 
         {/* Tab list (right sidebar) */}

@@ -6,14 +6,15 @@ import path from "path";
 
 // ── Custom ZDOTDIR for orange prompt ─────────────────────────────────────────
 // Creates a tiny .zshrc that (1) sources the user's real ~/.zshrc so all their
-// aliases / nvm / PATH / oh-my-zsh still loads, then (2) appends a precmd hook
-// that unconditionally sets PROMPT last — winning over any oh-my-zsh theme.
+// aliases / nvm / PATH / oh-my-zsh still loads, then (2) hides zsh's partial-line
+// marker and appends a precmd hook that unconditionally sets PROMPT last.
 const CUSTOM_ZDOTDIR = path.join(os.tmpdir(), "buildover-zsh-dotdir");
 mkdirSync(CUSTOM_ZDOTDIR, { recursive: true });
 writeFileSync(
   path.join(CUSTOM_ZDOTDIR, ".zshrc"),
   [
     `[[ -f ${JSON.stringify(path.join(os.homedir(), ".zshrc"))} ]] && source ${JSON.stringify(path.join(os.homedir(), ".zshrc"))}`,
+    `PROMPT_EOL_MARK=''`,
     `_buildover_set_prompt() { PROMPT='%F{#d97757}%n@%m %1~ >%f '; }`,
     `precmd_functions+=(_buildover_set_prompt)`,
   ].join("\n") + "\n",

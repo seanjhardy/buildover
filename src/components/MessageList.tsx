@@ -347,8 +347,9 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
 
   if (turns.length === 0 && !isStreaming) {
     return (
-      <div className="message-list" ref={containerRef}>
+      <div className="message-list message-list--empty" ref={containerRef}>
         <div className="message-list-empty">
+          <div className="message-list-empty-logo" aria-hidden="true" />
           <p>{"Let's a build!"}</p>
         </div>
       </div>

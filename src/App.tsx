@@ -488,6 +488,8 @@ export default function App() {
       ? (chats.chats.find((c) => c.id === activeChatId) ?? null)
       : null;
 
+  const hasSidePanels = filesChanged.length > 0 || todos.length > 0;
+
   // Wake word button title
   const wakeWordTitle = !wakeWord.isSupported
     ? "Wake word unavailable (requires Web Audio API)"
@@ -658,7 +660,9 @@ export default function App() {
                       </div>
                     </div>
                     <div className="chat-pane-body">
-                      <div className="chat-group">
+                      <div
+                        className={`chat-group${hasSidePanels ? "" : " chat-group--centered"}`}
+                      >
                         <div className="chat-column">
                           <MessageList
                             turns={agent.turns}

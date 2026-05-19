@@ -207,9 +207,6 @@ export function OrchestratorBar({ activeRepoPath, onNavigate, wakeWordTriggerRef
         aria-label={isRecording ? "Stop listening" : "Start listening"}
         title={isRecording ? "Stop listening" : "Start listening"}
       >
-        {/* Connection-status dot in the top-right corner of the FAB */}
-        <span className={`orch-fab-dot ${orchestrator.connection}`} aria-hidden />
-
         {isRecording ? (
           <span className="orch-fab-rec-indicator" />
         ) : isTranscribing ? (
