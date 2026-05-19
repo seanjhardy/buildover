@@ -1,0 +1,442 @@
+/* ============================================================ */
+/* Market Panel                                                  */
+/* ============================================================ */
+
+/* ── Market panel ──────────────────────────────────────────────────────────── */
+
+.market-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: #16110c;
+  position: relative;
+}
+
+/* ── Close button ── */
+.market-close-btn {
+  position: absolute;
+  top: 10px;
+  right: 14px;
+  z-index: 20;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid #3a2818;
+  border-radius: var(--corner-radius-small);
+  background: rgba(22, 17, 12, 0.92);
+  color: #7a6248;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+.market-close-btn:hover {
+  background: #2a1e12;
+  color: #d0b898;
+}
+
+/* ── Awning ── */
+.market-awning-wrap {
+  flex-shrink: 0;
+  position: relative;
+  line-height: 0;
+}
+.market-awning-svg {
+  width: 100%;
+  height: 150px;
+  display: block;
+}
+.market-awning-sign {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+}
+.market-awning-sign-inner {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 3px;
+  background: #1a1008;
+  border: 1.5px solid #4a3020;
+  border-radius: 5px;
+  padding: 8px 24px 9px;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 190, 120, 0.05),
+    0 2px 8px rgba(0, 0, 0, 0.5);
+}
+.market-awning-sign-title {
+  font-family: var(--app-chat-font-family);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.35em;
+  color: #c4a472;
+  text-transform: uppercase;
+}
+.market-awning-sign-sub {
+  font-family: var(--app-monospace-font-family);
+  font-size: 9px;
+  letter-spacing: 0.25em;
+  color: #5a4030;
+  text-transform: uppercase;
+}
+
+/* ── Body layout ── */
+.market-body {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* ── Owner pane ── */
+.market-owner-pane {
+  width: 228px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 14px 12px;
+  border-right: 1px solid #2a1c10;
+  background: #1c1510;
+  overflow-y: auto;
+  gap: 10px;
+}
+
+.market-owner-figure {
+  width: 80px;
+  flex-shrink: 0;
+}
+.market-owner-svg {
+  width: 80px;
+  height: 120px;
+  display: block;
+}
+
+/* ── Dialogue box ── */
+.market-dialogue-box {
+  width: 100%;
+  border: 1.5px solid #3a2818;
+  border-radius: var(--corner-radius-medium);
+  background: #201508;
+  padding: 10px 12px;
+  position: relative;
+}
+.market-dialogue-box::before {
+  content: "";
+  position: absolute;
+  top: -7px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: 12px;
+  height: 7px;
+  background: #201508;
+  clip-path: polygon(0% 100%, 50% 0%, 100% 100%);
+}
+.market-dialogue-name {
+  font-family: var(--app-monospace-font-family);
+  font-size: 9px;
+  font-weight: 700;
+  color: #c4894a;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  margin-bottom: 6px;
+}
+.market-dialogue-text {
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  line-height: 1.6;
+  color: #a08060;
+  margin: 0;
+}
+
+/* ── Dialogue choices ── */
+.market-dialogue-choices {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.market-choice-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 1.5px solid #2e2010;
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: #6a5038;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  text-align: left;
+  transition: background 0.12s, border-color 0.12s, color 0.12s;
+}
+.market-choice-btn:hover {
+  background: #221808;
+  border-color: #4a3020;
+  color: #a08060;
+}
+.market-choice-btn.active {
+  border-color: #c4894a;
+  background: rgba(196, 137, 74, 0.1);
+  color: #c4894a;
+}
+.market-choice-btn.active .market-choice-arrow {
+  color: #c4894a;
+}
+.market-choice-arrow {
+  font-size: 8px;
+  color: #4a3828;
+  flex-shrink: 0;
+  transition: color 0.12s;
+}
+.market-choice-badge {
+  margin-left: auto;
+  background: #c4894a;
+  color: #100a04;
+  font-size: 9px;
+  font-weight: 700;
+  border-radius: 8px;
+  padding: 1px 5px;
+  min-width: 16px;
+  text-align: center;
+}
+
+/* ── Search (in owner pane) ── */
+.market-search-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  margin-top: 2px;
+}
+.market-search-icon {
+  position: absolute;
+  left: 8px;
+  color: #5a4030;
+  pointer-events: none;
+}
+.market-search-input {
+  width: 100%;
+  padding: 7px 10px 7px 26px;
+  border: 1.5px solid #2e2010;
+  border-radius: var(--corner-radius-medium);
+  background: #201508;
+  color: #c4b090;
+  font-size: 11px;
+  font-family: var(--app-monospace-font-family);
+  outline: none;
+  transition: border-color 0.12s;
+}
+.market-search-input::placeholder {
+  color: #4a3828;
+}
+.market-search-input:focus {
+  border-color: #7a5030;
+}
+
+/* ── Plant columns ── */
+.market-plant-col {
+  width: 68px;
+  flex-shrink: 0;
+  background: #16110c;
+  overflow: hidden;
+}
+
+/* ── Grid pane ── */
+.market-grid-pane {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: #140f0a;
+}
+
+/* ── Plugin grid ── */
+.market-grid {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 14px;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  gap: 12px;
+  align-content: start;
+}
+
+/* ── Plugin card — skeuomorphic warm style ── */
+.market-plugin-card {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 14px 15px 12px;
+  border: 1px solid #4a3018;
+  border-radius: 10px;
+  background: linear-gradient(165deg, #2e2010 0%, #241608 60%, #1e1206 100%);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 190, 120, 0.07),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    0 1px 0 #0e0904,
+    0 4px 12px rgba(0, 0, 0, 0.5),
+    0 1px 3px rgba(0, 0, 0, 0.3);
+  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s;
+  position: relative;
+}
+.market-plugin-card:hover {
+  transform: translateY(-2px);
+  border-color: #6a4828;
+  box-shadow:
+    inset 0 1px 0 rgba(255, 190, 120, 0.1),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
+    0 2px 0 #0e0904,
+    0 8px 24px rgba(0, 0, 0, 0.55),
+    0 3px 6px rgba(0, 0, 0, 0.35);
+}
+.market-plugin-card.featured {
+  border-color: #5a3a20;
+}
+.market-plugin-card.installed {
+  border-color: rgba(120, 180, 100, 0.3);
+  box-shadow:
+    inset 0 1px 0 rgba(180, 255, 160, 0.05),
+    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
+    0 1px 0 #0e0904,
+    0 4px 12px rgba(0, 0, 0, 0.5);
+}
+.market-plugin-card.installed:hover {
+  border-color: rgba(120, 180, 100, 0.5);
+}
+
+.market-plugin-card-header {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.market-plugin-icon {
+  font-size: 22px;
+  line-height: 1;
+  flex-shrink: 0;
+  width: 32px;
+  text-align: center;
+}
+.market-plugin-meta {
+  flex: 1;
+  min-width: 0;
+}
+.market-plugin-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: #d0b898;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.market-plugin-author {
+  font-size: 10px;
+  color: #6a5038;
+  margin-top: 2px;
+}
+.market-plugin-installed-badge {
+  color: #78b464;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+}
+.market-plugin-description {
+  margin: 0;
+  font-size: 11px;
+  line-height: 1.55;
+  color: #7a6048;
+  flex: 1;
+}
+.market-plugin-footer {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding-top: 4px;
+  border-top: 1px solid #2a1c0e;
+}
+.market-plugin-stats {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: auto;
+}
+.market-plugin-stats span {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 10px;
+  color: #4a3828;
+}
+.market-plugin-btn {
+  padding: 4px 11px;
+  border-radius: var(--corner-radius-small);
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+  border: 1px solid transparent;
+  flex-shrink: 0;
+}
+.market-plugin-btn.install {
+  background: rgba(196, 137, 74, 0.12);
+  border-color: rgba(196, 137, 74, 0.35);
+  color: #c4894a;
+}
+.market-plugin-btn.install:hover {
+  background: rgba(196, 137, 74, 0.22);
+  border-color: #c4894a;
+}
+.market-plugin-btn.remove {
+  background: rgba(120, 180, 100, 0.07);
+  border-color: rgba(120, 180, 100, 0.2);
+  color: #5a7848;
+}
+.market-plugin-btn.remove:hover {
+  background: rgba(244, 120, 100, 0.1);
+  border-color: rgba(244, 120, 100, 0.35);
+  color: #e47860;
+}
+
+/* ── Empty / end states ── */
+.market-empty {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  padding: 60px 20px;
+  color: #4a3828;
+}
+.market-empty p {
+  margin: 0;
+  font-size: 13px;
+}
+.market-sentinel {
+  grid-column: 1 / -1;
+  height: 1px;
+}
+.market-end {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 20px;
+  font-size: 11px;
+  font-family: var(--app-monospace-font-family);
+  color: #3a2818;
+  letter-spacing: 0.1em;
+}
+
+/* ── Market tab in repo-tabs ── */
+.repo-tab--market {
+  border-left: 1px solid var(--app-primary-border-color);
+  margin-left: 4px;
+  padding-left: 12px;
+}

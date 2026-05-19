@@ -1,0 +1,196 @@
+/* ── Update notification card (floating bottom-right, covers orchestrator FAB) ── */
+.update-card {
+  position: fixed;
+  bottom: 16px;
+  right: 16px;
+  z-index: 1001; /* above the orchestrator FAB at z-index: 1000 */
+  width: 308px;
+  background: var(--app-secondary-background);
+  border: 1px solid #333;
+  border-radius: var(--corner-radius-large);
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.3);
+  overflow: hidden;
+  animation: update-card-in 0.24s cubic-bezier(0.16, 1, 0.3, 1);
+  font-size: 13px;
+  font-family: var(--app-chat-font-family);
+}
+@keyframes update-card-in {
+  from { opacity: 0; transform: translateY(14px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)     scale(1);   }
+}
+
+/* Left accent stripe */
+.update-card--update  { border-left: 3px solid #4a8a4a; }
+.update-card--dirty   { border-left: 3px solid #5b8dd9; }
+.update-card--success { border-left: 3px solid var(--app-success); }
+.update-card--error   { border-left: 3px solid #a06060; }
+
+/* ── Header row ── */
+.update-card__header {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  padding: 12px 10px 10px 12px;
+}
+.update-card__icon-wrap {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.update-card--update  .update-card__icon-wrap { background: rgba(74, 138, 74, 0.18);  color: var(--app-success); }
+.update-card--success .update-card__icon-wrap { background: rgba(74, 138, 74, 0.18);  color: var(--app-success); }
+.update-card--dirty   .update-card__icon-wrap { background: rgba(91, 141, 217, 0.15); color: #7aaee8; }
+.update-card--error   .update-card__icon-wrap { background: rgba(160, 96, 96, 0.15);  color: #c08888; }
+
+.update-card__header-text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.update-card__title {
+  font-weight: 600;
+  font-size: 13px;
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+.update-card__subtitle {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  line-height: 1.3;
+}
+.update-card__dismiss {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 3px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.4;
+  border-radius: 4px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+  transition: opacity 0.1s, background 0.1s;
+}
+.update-card__dismiss:hover { opacity: 1; background: rgba(255, 255, 255, 0.07); }
+
+/* ── Body ── */
+.update-card__body {
+  padding: 0 12px 10px 12px;
+}
+.update-card__desc {
+  margin: 0 0 4px;
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+/* What's new bullet list */
+.update-card__whatsnew {
+  list-style: none;
+  margin: 0 0 2px;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+.update-card__whatsnew-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--app-primary-foreground);
+  line-height: 1.45;
+}
+.update-card__whatsnew-dot {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: #4a8a4a;
+  margin-top: 5px;
+}
+.update-card__toggle {
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 0 0;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.55;
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  transition: opacity 0.1s;
+}
+.update-card__toggle:hover { opacity: 1; }
+
+/* ── Actions row ── */
+.update-card__actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 12px 12px;
+  border-top: 1px solid var(--app-primary-border-color);
+  justify-content: flex-end;
+}
+.update-card__btn {
+  padding: 5px 12px;
+  border-radius: var(--corner-radius-medium);
+  border: 1px solid transparent;
+  font-size: 12px;
+  font-family: var(--app-chat-font-family);
+  cursor: pointer;
+  white-space: nowrap;
+  font-weight: 500;
+  transition: background 0.1s, opacity 0.1s;
+}
+.update-card__btn:disabled { opacity: 0.45; cursor: default; }
+
+.update-card__btn--primary {
+  background: rgba(74, 138, 74, 0.2);
+  border-color: rgba(74, 138, 74, 0.4);
+  color: #a5d4a5;
+}
+.update-card__btn--primary:hover:not(:disabled) { background: rgba(74, 138, 74, 0.32); }
+
+/* Dirty state: soft blue primary */
+.update-card--dirty .update-card__btn--primary {
+  background: rgba(91, 141, 217, 0.15);
+  border-color: rgba(91, 141, 217, 0.35);
+  color: #7aaee8;
+}
+.update-card--dirty .update-card__btn--primary:hover:not(:disabled) { background: rgba(91, 141, 217, 0.25); }
+
+.update-card__btn--ghost {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: var(--app-secondary-foreground);
+}
+.update-card__btn--ghost:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--app-primary-foreground);
+}
+
+.update-card__btn--danger {
+  background: rgba(180, 80, 60, 0.1);
+  border-color: rgba(180, 80, 60, 0.3);
+  color: #d08070;
+}
+.update-card__btn--danger:hover:not(:disabled) { background: rgba(180, 80, 60, 0.2); }
+

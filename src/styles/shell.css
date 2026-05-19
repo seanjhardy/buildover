@@ -1,0 +1,137 @@
+/* ---- App shell ---- */
+.app-shell {
+  display: flex;
+  height: 100%;
+  width: 100%;
+}
+.app {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  min-width: 0;
+}
+.app-shell.with-panel .app {
+  margin-right: 0;
+}
+
+.app-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: var(--app-spacing-large) var(--app-spacing-xlarge);
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+
+.app-header h1 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+}
+
+.brand-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: var(--app-claude-orange);
+}
+
+/* ---- Wake word toggle button ---- */
+.wake-word-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 3px 8px 3px 6px;
+  background: transparent;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 120ms, color 120ms, border-color 120ms;
+  white-space: nowrap;
+}
+.wake-word-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.wake-word-btn.active {
+  border-color: var(--app-claude-orange);
+  color: var(--app-claude-orange);
+}
+.wake-word-btn.error {
+  border-color: var(--app-error);
+  color: var(--app-error);
+}
+.wake-word-label {
+  font-size: 11px;
+}
+/* Animated pulse dot shown while actively listening */
+.wake-word-pulse {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-claude-orange);
+  animation: wake-pulse 1.4s ease-in-out infinite;
+}
+@keyframes wake-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%       { opacity: 0.4; transform: scale(0.7); }
+}
+
+.connection-pill {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: none;
+  border: none;
+  padding: 2px 6px;
+  border-radius: 999px;
+  cursor: default;
+}
+.connection-pill:not(.connected) {
+  cursor: pointer;
+}
+.connection-pill:not(.connected):hover {
+  background: var(--app-input-background);
+}
+.connection-pill .dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--app-secondary-foreground);
+}
+.connection-pill.connected .dot {
+  background: var(--app-success);
+}
+.connection-pill.error .dot {
+  background: var(--app-error);
+}
+
+/* ---- Model selector ---- */
+.model-selector {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-spacing-small);
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  padding: 2px 4px 2px 10px;
+  font-size: 12px;
+}
+.model-selector select {
+  background: transparent;
+  border: 0;
+  color: var(--app-input-foreground);
+  font: inherit;
+  outline: none;
+  padding: 4px 6px;
+  cursor: pointer;
+}

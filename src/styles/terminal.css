@@ -1,0 +1,285 @@
+/* ============================================================ */
+/* Terminal Panel                                               */
+/* ============================================================ */
+
+/* The panel sits as the last flex child of .chat-pane, below
+   .chat-pane-content. Collapsed = just the 33px header strip.
+   Expanded = header + body, with height set by inline style. */
+.terminal-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-primary-background);
+  border-top: 1px solid var(--app-primary-border-color);
+  position: relative;
+  /* Collapsed height — just the header */
+  height: 33px;
+  overflow: hidden;
+  /* Smooth open/close transition when toggling via button */
+  transition: height 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: height;
+}
+
+.terminal-panel--open {
+  /* Height is driven by inline style (drag resize); no CSS height override */
+}
+
+/* Disable height transition while dragging — otherwise every mousemove fights
+   a 180ms ease and the panel feels extremely laggy. */
+.terminal-panel--resizing {
+  transition: none !important;
+}
+
+/* ── Drag-resize handle ─────────────────────────────────────── */
+.terminal-resize-handle {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 5px;
+  cursor: ns-resize;
+  z-index: 10;
+  border-radius: 2px 2px 0 0;
+  transition: background 0.15s;
+}
+.terminal-resize-handle:hover {
+  background: var(--app-claude-orange);
+  opacity: 0.35;
+}
+
+/* ── Header bar ─────────────────────────────────────────────── */
+.terminal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 26px;
+  padding: 0 10px 0 12px;
+  background: var(--app-secondary-background);
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+  user-select: none;
+  cursor: default;
+}
+
+.terminal-header-left {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--app-secondary-foreground);
+}
+
+.terminal-header-label {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-secondary-foreground);
+}
+
+.terminal-header-hint {
+  font-size: 10px;
+  color: rgba(150, 150, 150, 0.7);
+  font-family: var(--app-monospace-font-family);
+  margin-left: 2px;
+}
+
+.terminal-header-right {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.terminal-header-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border: none;
+  background: transparent;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  padding: 0;
+  transition: background 0.12s, color 0.12s;
+}
+.terminal-header-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.terminal-chevron {
+  transition: transform 0.18s cubic-bezier(0.4, 0, 0.2, 1);
+}
+.terminal-chevron--up {
+  transform: rotate(180deg);
+}
+
+/* ── Body: xterm area (left) + tab list (right) ─────────────── */
+.terminal-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+/* xterm.js viewport */
+.terminal-xterm-area {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  padding: 2px 0 2px 4px;
+  position: relative;
+}
+
+.terminal-xterm-container {
+  width: 100%;
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+/* xterm internal overrides — keep backgrounds consistent */
+.terminal-xterm-container .xterm {
+  height: 100%;
+  padding: 4px 6px;
+}
+.terminal-xterm-container .xterm-viewport {
+  overflow-y: auto !important;
+  background-color: var(--app-primary-background) !important;
+}
+.terminal-xterm-container .xterm-screen {
+  background-color: var(--app-primary-background);
+}
+
+.terminal-loading-overlay {
+  position: absolute;
+  inset: 2px 0 2px 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: rgba(24, 24, 24, 0.82);
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  font-family: var(--app-monospace-font-family);
+  pointer-events: auto;
+  z-index: 2;
+}
+
+.terminal-loading-spinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid rgba(217, 119, 87, 0.24);
+  border-top-color: var(--app-claude-orange);
+  border-radius: 50%;
+  animation: terminal-loading-spin 0.8s linear infinite;
+}
+
+@keyframes terminal-loading-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ── Tab list (right column) ────────────────────────────────── */
+.terminal-tab-list {
+  width: 136px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+.terminal-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 8px 0 10px;
+  height: 30px;
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  transition: background 0.1s;
+  flex-shrink: 0;
+}
+.terminal-tab:hover {
+  background: var(--app-list-hover-background);
+}
+.terminal-tab--active {
+  background: var(--app-primary-background);
+  border-left-color: var(--app-claude-orange);
+}
+
+.terminal-tab-icon {
+  color: var(--app-secondary-foreground);
+  flex-shrink: 0;
+  opacity: 0.6;
+}
+.terminal-tab--active .terminal-tab-icon {
+  color: var(--app-claude-orange);
+  opacity: 1;
+}
+
+.terminal-tab-name {
+  flex: 1;
+  font-size: 11px;
+  font-family: var(--app-monospace-font-family);
+  color: var(--app-secondary-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.terminal-tab--active .terminal-tab-name {
+  color: var(--app-primary-foreground);
+}
+
+.terminal-tab-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border: none;
+  background: transparent;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  padding: 0;
+  flex-shrink: 0;
+  opacity: 0;
+  transition: background 0.1s, color 0.1s, opacity 0.1s;
+}
+.terminal-tab:hover .terminal-tab-close {
+  opacity: 1;
+}
+.terminal-tab-close:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-error);
+}
+
+/* "New terminal" button at the bottom of the tab list */
+.terminal-tab-add-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 6px 10px;
+  width: 100%;
+  border: none;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  font-size: 11px;
+  transition: background 0.1s, color 0.1s;
+  flex-shrink: 0;
+  margin-top: auto;
+}
+.terminal-tab-add-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}

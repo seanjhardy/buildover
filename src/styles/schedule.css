@@ -1,0 +1,221 @@
+/* ============================================================ */
+/* Schedule Panel                                                */
+/* ============================================================ */
+
+.schedule-panel {
+  width: 340px;
+  flex-shrink: 0;
+  border-left: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.schedule-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 10px 0 14px;
+  height: 40px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+
+.schedule-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.schedule-panel-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.schedule-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  font-size: 11px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.schedule-add-btn:hover { background: var(--app-claude-clay-button-orange); }
+
+.schedule-form {
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  background: var(--app-primary-background);
+}
+
+.schedule-form-label {
+  display: block;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-secondary-foreground);
+  margin-bottom: 4px;
+}
+
+.schedule-form-row {
+  display: flex;
+  flex-direction: column;
+}
+
+.schedule-cron-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.schedule-cron-input { flex: 1; }
+
+.schedule-cron-hint {
+  font-size: 10px;
+  color: var(--app-claude-orange);
+  white-space: nowrap;
+}
+
+.schedule-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 5px;
+}
+
+.schedule-preset-chip {
+  font-size: 10px;
+  padding: 2px 8px;
+  background: var(--app-tool-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: background 80ms, color 80ms;
+}
+.schedule-preset-chip:hover { background: var(--app-list-hover-background); color: var(--app-primary-foreground); }
+.schedule-preset-chip.active { border-color: var(--app-claude-orange); color: var(--app-claude-orange); }
+
+.schedule-form-selects {
+  flex-direction: row;
+  gap: 10px;
+}
+.schedule-form-selects > div { flex: 1; }
+
+.schedule-form-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.schedule-save-btn {
+  padding: 6px 14px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 100ms;
+}
+.schedule-save-btn:hover:not(:disabled) { background: var(--app-claude-clay-button-orange); }
+.schedule-save-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.schedule-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.schedule-task {
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  padding: 10px 12px 8px;
+  transition: border-color 100ms;
+}
+.schedule-task.enabled { border-left: 3px solid var(--app-success); }
+.schedule-task.disabled { opacity: 0.55; border-left: 3px solid var(--app-secondary-foreground); }
+
+.schedule-task-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 5px;
+}
+
+.schedule-task-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.schedule-task-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.schedule-toggle-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  background: transparent;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  cursor: pointer;
+  transition: background 80ms;
+}
+.schedule-toggle-btn.on { color: var(--app-success); }
+.schedule-toggle-btn.off { color: var(--app-secondary-foreground); }
+.schedule-toggle-btn:hover { background: var(--app-list-hover-background); }
+
+.schedule-task-cron {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+
+.schedule-task-expr {
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  background: var(--app-tool-background);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.schedule-task-desc {
+  font-size: 10px;
+  color: var(--app-claude-orange);
+}
+
+.schedule-task-prompt {
+  font-size: 11px;
+  color: var(--app-primary-foreground);
+  line-height: 1.45;
+  margin-bottom: 5px;
+}
+
+.schedule-task-meta {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+}

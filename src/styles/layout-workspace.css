@@ -1,0 +1,642 @@
+/* ============================================================ */
+/* Multi-repo / multi-chat layout                                */
+/* ============================================================ */
+
+/* ---- Chat pane body: fills the pane and centres the chat-group ---- */
+.chat-pane-body {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* chat-group: centred flex row — [left-rail] [chat-column] [right-rail]
+   Width is capped so the whole group (rails + chat) centres in the pane,
+   with free space going to the outside of the rails, not between them.
+   Max = chat 760px + left-rail todo 190px + right-rail (36px jump + 8px gap + 340px files) + rail paddings (~12px) */
+.chat-pane-body .chat-group {
+  display: flex;
+  flex-direction: row;
+  width: 100%;
+  max-width: 1350px;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden; /* Prevent the flex row from growing past the pane height */
+  margin-left: auto;
+  margin-right: auto;
+}
+
+/* New / quiet chats: no files or todo rails — centre the chat column in the pane.
+   History and composer stay capped at 760px; jump bar pins to the right edge. */
+.chat-pane-body .chat-group--centered {
+  max-width: none;
+  justify-content: center;
+  position: relative;
+}
+
+.chat-pane-body .chat-group--centered .chat-column {
+  flex: 0 1 760px;
+  width: 100%;
+}
+
+.chat-pane-body .chat-group--centered .right-rail {
+  position: absolute;
+  right: 0;
+  top: 0;
+  bottom: 0;
+}
+
+/* chat-column: flex col, no min-width — shrinks freely within the group.
+   max-width caps the column so messages don't span the full window width
+   when no rails are visible. */
+.chat-column {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  max-width: 760px;
+  padding-inline: var(--app-spacing-large);
+}
+
+.chat-column .message-list {
+  flex: 1;
+  min-height: 0;
+}
+
+/* left-rail: sits to the LEFT of chat-column (wide mode only).
+   Holds the todo panel. */
+.left-rail {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  padding: 12px 0 12px 4px;
+}
+
+.left-rail .todo-panel {
+  margin-top: 12px;
+}
+
+/* right-rail: sits to the right of chat-column.
+   Wide: jump bar + panels column (files + todo) side by side.
+   Narrow: column layout so compact strips sit below the jump bar. */
+.right-rail {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: row;
+  align-items: stretch;
+  padding: 12px 4px 12px 0;
+  gap: 8px;
+  position: relative;
+  z-index: 26; /* above chat-obscured-overlay (z-index: 25) so file clicks are not swallowed */
+}
+
+.right-rail--narrow {
+  flex-direction: column;
+  align-items: center;
+}
+
+/* Column container that stacks files + todo panels vertically (wide & narrow) */
+.right-rail-panels {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  flex: 1;
+  min-height: 0;
+  gap: 8px;
+  padding-top: 8px;
+}
+
+/* ---- Repo tabs ---- */
+.repo-tabs {
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  padding: 0 var(--app-spacing-medium);
+}
+
+.repo-tabs-list {
+  display: flex;
+  gap: 2px;
+  align-items: stretch;
+  height: 36px;
+  overflow-x: auto;
+}
+
+.repo-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: 0 var(--app-spacing-large);
+  background: transparent;
+  border: 0;
+  border-right: 1px solid var(--app-primary-border-color);
+  border-radius: 0;
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.1s;
+  position: relative;
+}
+.repo-tab:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.repo-tab.active {
+  background: var(--app-primary-background);
+  color: var(--app-primary-foreground);
+  box-shadow: inset 0 -2px 0 var(--app-claude-orange);
+}
+.repo-tab-name {
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.repo-tab-close {
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--app-secondary-foreground);
+}
+.repo-tab-close:hover {
+  background: var(--app-input-background);
+  color: var(--app-primary-foreground);
+}
+.repo-tab-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  /* Reserve space so the tab width doesn't shift when icon appears/disappears */
+  width: 12px;
+  height: 12px;
+}
+.repo-tab .chat-status-icon {
+  width: 12px;
+  height: 12px;
+}
+.repo-tab .chat-status-icon svg {
+  width: 12px;
+  height: 12px;
+}
+.repo-tab--home {
+  border-right: 1px solid var(--app-primary-border-color);
+  margin-right: 4px;
+  padding-right: 12px;
+  flex-shrink: 0;
+}
+.open-repo-trigger {
+  color: var(--app-claude-orange);
+  border-right: 0;
+}
+
+/* ---- Open-repo popover ---- */
+.open-repo-menu {
+  position: relative;
+  display: inline-flex;
+  align-items: stretch;
+}
+.open-repo-popover {
+  position: fixed;
+  z-index: 1000;
+  min-width: 320px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+  padding: var(--app-spacing-small);
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.open-repo-browse {
+  background: transparent;
+  color: var(--app-claude-orange);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: left;
+}
+.open-repo-browse:hover {
+  background: var(--app-list-hover-background);
+  border-color: var(--app-claude-orange);
+}
+.open-repo-section-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  color: var(--app-secondary-foreground);
+  padding: 8px 8px 4px;
+  letter-spacing: 0.04em;
+}
+.open-repo-recent-row {
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+.open-repo-recent {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  background: transparent;
+  border: 0;
+  padding: 6px 8px;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  text-align: left;
+  min-width: 0;
+}
+.open-repo-recent:hover {
+  background: var(--app-list-hover-background);
+}
+.open-repo-recent-name {
+  font-weight: 500;
+}
+.open-repo-recent-path {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  max-width: 280px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.open-repo-forget {
+  background: transparent;
+  border: 0;
+  color: var(--app-secondary-foreground);
+  padding: 0 8px;
+  border-radius: var(--corner-radius-small);
+  font-size: 14px;
+}
+.open-repo-forget:hover {
+  background: var(--app-input-background);
+  color: var(--app-primary-foreground);
+}
+.open-repo-error {
+  font-size: 11px;
+  color: var(--app-error);
+  padding: 6px 8px;
+}
+
+/* ---- Workspace split ---- */
+.workspace {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  position: relative;
+  overflow: hidden;
+  min-height: 0;
+}
+
+/* ---- Chat sidebar ---- */
+.chat-sidebar {
+  width: 280px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  position: relative;
+  z-index: 1; /* Ensure the sidebar stays on top when workspace-panels slides left */
+  overflow: hidden;
+}
+.chat-sidebar::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Cg transform='translate(40 40) rotate(-45) scale(0.068)' fill='%23c4c4c4'%3E%3Crect x='-165' y='-230' width='330' height='200' rx='28'/%3E%3Crect x='-30' y='-238' width='60' height='38' rx='8'/%3E%3Crect x='-38' y='-30' width='76' height='340' rx='22'/%3E%3C/g%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 80 80'%3E%3Cg transform='translate(40 40) rotate(45) scale(0.068)' fill='%23c4c4c4'%3E%3Crect x='-165' y='-230' width='330' height='200' rx='28'/%3E%3Crect x='-30' y='-238' width='60' height='38' rx='8'/%3E%3Crect x='-38' y='-30' width='76' height='340' rx='22'/%3E%3C/g%3E%3C/svg%3E");
+  background-position:
+    0 0,
+    20px 20px;
+  background-repeat: repeat;
+  background-size:
+    40px 40px,
+    40px 40px;
+  opacity: 0.085;
+  mask-image: linear-gradient(to bottom, transparent 0%, transparent 20%, rgba(0, 0, 0, 0.3) 62%, black 100%);
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, transparent 20%, rgba(0, 0, 0, 0.3) 62%, black 100%);
+}
+.chat-sidebar > * {
+  position: relative;
+  z-index: 1;
+}
+.chat-sidebar-toolbar {
+  display: flex;
+  gap: var(--app-spacing-small);
+  padding: var(--app-spacing-medium);
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+.chat-search {
+  flex: 1;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-input-foreground);
+  font: inherit;
+  font-size: 12px;
+  padding: 6px 8px;
+  outline: none;
+}
+.chat-search:focus {
+  border-color: var(--app-input-active-border);
+}
+.new-chat-btn {
+  background: var(--app-claude-clay-button-orange);
+  color: white;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 500;
+}
+.new-chat-btn:hover {
+  background: var(--app-claude-orange);
+}
+.chat-sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: var(--app-spacing-small) 0;
+  background: transparent;
+}
+.chat-sidebar-empty {
+  padding: var(--app-spacing-large);
+  font-size: 12px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+}
+
+/* ---- Chat group + items (sidebar only — scoped to avoid collision with layout .chat-group) ---- */
+.chat-sidebar .chat-group {
+  margin-bottom: var(--app-spacing-medium);
+}
+.chat-group-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-secondary-foreground);
+  padding: 6px var(--app-spacing-medium);
+}
+.chat-recency-section {
+  margin-bottom: 2px;
+}
+.chat-recency-label {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--app-secondary-foreground);
+  opacity: 0.7;
+  padding: 4px var(--app-spacing-medium) 2px;
+  padding-left: calc(var(--app-spacing-medium) + 6px);
+}
+.chat-item {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-small);
+  padding: 8px var(--app-spacing-medium);
+  cursor: pointer;
+  border-left: 2px solid transparent;
+  position: relative;
+  background: var(--app-secondary-background);
+}
+.chat-item:has(.chat-item-preview) {
+  align-items: flex-start;
+}
+.chat-item:hover {
+  background: var(--app-list-hover-background);
+}
+.chat-item.active {
+  background: rgba(217, 119, 87, 0.12);
+  border-left-color: var(--app-claude-orange);
+}
+.chat-item.active:hover {
+  background: rgba(217, 119, 87, 0.18);
+}
+.chat-item.active .chat-item-title {
+  color: var(--app-claude-orange);
+}
+.chat-item.active .chat-status-icon.idle {
+  color: var(--app-claude-orange);
+}
+.chat-item-body {
+  flex: 1;
+  min-width: 0;
+}
+.chat-item-title,
+.chat-item-preview {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition: -webkit-mask-image 120ms ease, mask-image 120ms ease;
+}
+.chat-item-title {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--app-primary-foreground);
+}
+.chat-item-preview {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  margin-top: 2px;
+}
+.chat-item-draft {
+  font-style: italic;
+  color: var(--app-accent, var(--app-secondary-foreground));
+  opacity: 0.85;
+}
+.chat-item:hover .chat-item-title,
+.chat-item:hover .chat-item-preview {
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 88px),
+    transparent calc(100% - 56px)
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 88px),
+    transparent calc(100% - 56px)
+  );
+}
+.chat-item-actions {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding-right: var(--app-spacing-medium);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 120ms ease;
+}
+.chat-item:hover .chat-item-actions,
+.chat-item-actions:focus-within {
+  opacity: 1;
+  pointer-events: auto;
+}
+.chat-item-action {
+  background: transparent;
+  border: 0;
+  color: var(--app-secondary-foreground);
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.chat-item-action:hover {
+  background: var(--app-input-background);
+  color: var(--app-primary-foreground);
+}
+.chat-item-action.danger:hover {
+  color: var(--app-error);
+}
+
+/* ---- Status icon variants ---- */
+.chat-status-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+}
+.chat-item:has(.chat-item-preview) .chat-status-icon {
+  margin-top: 1px;
+}
+.chat-status-icon.awaiting {
+  color: var(--app-warning);
+}
+.chat-status-icon.running {
+  color: var(--app-claude-orange);
+}
+.chat-status-icon.done {
+  color: var(--app-success);
+}
+.chat-status-icon.idle {
+  color: var(--app-secondary-foreground);
+}
+.chat-status-icon.finished {
+  color: var(--app-secondary-foreground);
+}
+.chat-status-icon.error {
+  color: var(--app-error);
+}
+.chat-status-icon .spin {
+  animation: chat-spin 1s linear infinite;
+  transform-origin: center;
+}
+@keyframes chat-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* ---- Retry banner (shown when a turn was interrupted by a server restart) ---- */
+.retry-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: var(--app-spacing-medium) var(--app-spacing-xlarge);
+  background: color-mix(in srgb, var(--app-error) 12%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--app-error) 30%, transparent);
+  color: var(--app-error);
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.retry-banner svg {
+  flex-shrink: 0;
+}
+.retry-banner-text {
+  flex: 1;
+  line-height: 1.4;
+}
+.retry-banner-text strong {
+  display: block;
+  margin-bottom: 1px;
+}
+
+/* ---- Archive ---- */
+.chat-archive {
+  margin-top: var(--app-spacing-medium);
+  border-top: 1px solid var(--app-primary-border-color);
+  padding-top: var(--app-spacing-small);
+}
+.chat-archive-toggle {
+  background: transparent;
+  border: 0;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-medium);
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chat-archive-toggle:hover {
+  color: var(--app-primary-foreground);
+}
+.chat-archive-caret {
+  width: 10px;
+  display: inline-block;
+}
+
+/* ---- Chat pane ---- */
+.chat-pane {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Wraps everything above the terminal panel (header + body). flex: 1 so the
+   terminal panel gets pushed to the bottom of the chat-pane. */
+.chat-pane-content {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+.chat-pane-header {
+  padding: var(--app-spacing-medium) var(--app-spacing-xlarge);
+  border-bottom: 1px solid var(--app-primary-border-color);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-spacing-large);
+}
+.chat-pane-title {
+  font-size: 13px;
+  font-weight: 600;
+}
+.chat-pane-meta {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  max-width: 50%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

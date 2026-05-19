@@ -1,0 +1,252 @@
+/* ---- Orchestrator FAB (floating mic button + speech bubble panel) ---- */
+/* The old fixed bottom bar is replaced by a floating action button at the
+   bottom-right corner. The FAB itself does not affect layout — the component
+   sets --orch-stack-h to 0px on mount so the workspace no longer reserves
+   bottom padding for a bar. */
+.app-shell {
+  padding-bottom: 0;
+}
+
+/* ── Blur backdrop ────────────────────────────────────────────────────────── */
+.orch-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 900;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  background: rgba(0, 0, 0, 0.18);
+  animation: orch-backdrop-in 0.2s ease;
+}
+@keyframes orch-backdrop-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+
+/* ── Floating action button ──────────────────────────────────────────────── */
+.orch-fab {
+  position: fixed;
+  bottom: 24px;
+  right: 24px;
+  z-index: 1000;
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  border: none;
+  background: linear-gradient(145deg, #e8855f 0%, #c05c38 100%);
+  box-shadow:
+    0 8px 32px rgba(0, 0, 0, 0.45),
+    0 2px 8px rgba(217, 119, 87, 0.4);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.15s ease, box-shadow 0.15s ease;
+  outline: none;
+}
+.orch-fab:hover {
+  transform: scale(1.07);
+  box-shadow:
+    0 12px 40px rgba(0, 0, 0, 0.5),
+    0 4px 14px rgba(217, 119, 87, 0.55);
+}
+.orch-fab:active {
+  transform: scale(0.95);
+}
+.orch-fab.recording {
+  background: linear-gradient(145deg, #f0956a 0%, #d97757 100%);
+  animation: orch-fab-pulse 1.6s ease-in-out infinite;
+}
+@keyframes orch-fab-pulse {
+  0%, 100% {
+    box-shadow:
+      0 8px 32px rgba(0,0,0,0.45),
+      0 0 0 0   rgba(217,119,87,0.55);
+  }
+  50% {
+    box-shadow:
+      0 8px 32px rgba(0,0,0,0.45),
+      0 0 0 14px rgba(217,119,87,0);
+  }
+}
+.orch-fab.transcribing {
+  background: linear-gradient(145deg, #c8a870 0%, #a88040 100%);
+}
+
+/* Recording dot — white blinking square inside the button */
+.orch-fab-rec-indicator {
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+  background: white;
+  animation: orch-rec-blink 0.85s ease-in-out infinite;
+}
+@keyframes orch-rec-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0.35; }
+}
+
+/* Transcribing spinner inside button */
+.orch-fab-spinner {
+  width: 15px;
+  height: 15px;
+  border-radius: 50%;
+  border: 2px solid rgba(255,255,255,0.3);
+  border-top-color: white;
+  animation: orch-fab-spin 0.7s linear infinite;
+}
+@keyframes orch-fab-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Speech bubble panel ─────────────────────────────────────────────────── */
+.orch-bubble-panel {
+  position: fixed;
+  bottom: 78px; /* sits just above the FAB */
+  right: 16px;
+  width: 320px;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  transform-origin: bottom right;
+  animation: orch-panel-in 0.22s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+@keyframes orch-panel-in {
+  from { opacity: 0; transform: scale(0.82) translateY(14px); }
+  to   { opacity: 1; transform: scale(1)    translateY(0);    }
+}
+
+/* Scrollable history area */
+.orch-bubble-history {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-height: 400px;
+  overflow-y: auto;
+  padding: 12px 10px;
+  scrollbar-width: none;
+}
+.orch-bubble-history::-webkit-scrollbar { display: none; }
+
+/* Individual speech bubble */
+.orch-bubble {
+  max-width: 88%;
+  padding: 10px 14px;
+  border-radius: 18px;
+  font-size: 13px;
+  line-height: 1.45;
+  word-break: break-word;
+  animation: orch-bubble-in 0.18s ease;
+}
+@keyframes orch-bubble-in {
+  from { opacity: 0; transform: translateY(6px) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0)   scale(1);    }
+}
+
+/* User bubbles — right-aligned, semi-transparent grey */
+.orch-bubble--user {
+  align-self: flex-end;
+  background: rgba(140, 140, 140, 0.22);
+  color: rgba(255, 255, 255, 0.88);
+  border-bottom-right-radius: 5px;
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  border: 1px solid rgba(255,255,255,0.06);
+}
+
+/* Live (still-being-transcribed) user bubble — more faded */
+.orch-bubble--user.orch-bubble--live {
+  background: rgba(120, 120, 120, 0.14);
+  color: rgba(255, 255, 255, 0.55);
+  font-style: italic;
+  border-style: dashed;
+}
+
+/* Blinking text cursor inside live bubble */
+.orch-bubble-cursor {
+  display: inline-block;
+  width: 2px;
+  height: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  margin-left: 3px;
+  vertical-align: middle;
+  animation: orch-cursor-blink 0.9s ease-in-out infinite;
+}
+@keyframes orch-cursor-blink {
+  0%, 100% { opacity: 1; }
+  50%       { opacity: 0; }
+}
+
+/* AI bubbles — left-aligned, dark glass */
+.orch-bubble--ai {
+  align-self: flex-start;
+  background: rgba(24, 24, 24, 0.88);
+  color: var(--app-primary-foreground);
+  border-bottom-left-radius: 5px;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(255,255,255,0.07);
+}
+
+/* Thinking dots bubble */
+.orch-bubble--thinking {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 13px 16px;
+}
+.orch-thinking-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--app-secondary-foreground);
+  animation: orch-dot-bounce 1.3s ease-in-out infinite;
+}
+.orch-thinking-dot:nth-child(2) { animation-delay: 0.18s; }
+.orch-thinking-dot:nth-child(3) { animation-delay: 0.36s; }
+@keyframes orch-dot-bounce {
+  0%, 80%, 100% { transform: translateY(0);   opacity: 0.4; }
+  40%           { transform: translateY(-6px); opacity: 1;   }
+}
+
+/* Queue label */
+.orch-bubble-queue-label {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-align: right;
+  padding: 4px 10px 0;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+/* Controls row at the bottom of the panel */
+.orch-bubble-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 6px 10px 4px;
+}
+.orch-bubble-ctrl-btn {
+  background: transparent;
+  border: 1px solid var(--app-primary-border-color);
+  color: var(--app-secondary-foreground);
+  border-radius: var(--corner-radius-small, 4px);
+  padding: 3px 9px;
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.12s, border-color 0.12s;
+}
+.orch-bubble-ctrl-btn:hover:not(:disabled) {
+  color: var(--app-primary-foreground);
+  border-color: #4a4a4a;
+}
+.orch-bubble-ctrl-btn:disabled {
+  opacity: 0.38;
+  cursor: not-allowed;
+}
+.orch-bubble-ctrl-btn--close {
+  color: var(--app-secondary-foreground);
+}
+
+/* (message-area removed — MessageJumpBar is now a direct sibling of chat-column) */

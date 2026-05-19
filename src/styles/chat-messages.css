@@ -1,0 +1,745 @@
+/* ---- Message list ---- */
+.message-list {
+  flex: 1;
+  min-height: 0; /* Required for flex children to scroll instead of overflow */
+  overflow-y: auto;
+  /* Virtualizer manages its own inner layout (position:relative + absolute
+     children), so we can't use flex/gap here. Padding and item spacing are
+     applied via .message-list > div (the Virtualizer wrapper) and per-item
+     margin instead. */
+}
+
+.message-list--empty {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+}
+
+/* Virtualizer renders a single position:relative wrapper as a direct child.
+   Give it the same padding the old flex column had. */
+.message-list > div {
+  padding: var(--app-spacing-xlarge);
+}
+
+/* Each virtualised item slot is position:absolute (set inline by virtua), so
+   margin-bottom has no effect on stacking. Instead, give the slot's *content*
+   a padding-bottom so the measured height includes the inter-turn gap. */
+.message-list > div > div > .message,
+.message-list > div > div > [data-turn-kind="user"],
+.message-list > div > div > .result-line,
+.message-list > div > div > .thinking-pulse,
+.message-list > div > div > .tool-group {
+  padding-bottom: 20px;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+.message-list-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  width: min(360px, 80vw);
+  min-height: 220px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  font-size: 13px;
+}
+
+.message-list-empty-logo {
+  width: 168px;
+  height: 168px;
+  border-radius: 38px;
+  background: url("/icon.png") center / contain no-repeat;
+  filter: grayscale(1) saturate(0) contrast(0.9);
+  opacity: 0.055;
+  transform: rotate(-8deg);
+  pointer-events: none;
+}
+
+.message-list-empty p {
+  margin: 0;
+  padding: 7px 12px;
+  color: color-mix(in srgb, var(--app-secondary-foreground) 78%, transparent);
+}
+
+/* ---- Messages ---- */
+.message {
+  display: flex;
+  flex-direction: column;
+  /* No base gap — successive tool calls sit flush against each other.
+     Inter-block spacing is added explicitly below for non-tool combinations. */
+}
+
+/* Breathing room between text/thinking blocks within a message. */
+.message .assistant-text + .assistant-text,
+.message .thinking + .assistant-text,
+.message .assistant-text + .thinking,
+.message .thinking + .thinking {
+  margin-top: var(--app-spacing-large);
+}
+
+/* Space before a tool block that follows text/thinking (intro → first tool). */
+.message .assistant-text + .tool-inline,
+.message .assistant-text + .tool,
+.message .assistant-text + .tool-group,
+.message .assistant-text + .svg-block,
+.message .assistant-text + .table-block,
+.message .assistant-text + .chart-block,
+.message .thinking + .tool-inline,
+.message .thinking + .tool,
+.message .thinking + .tool-group,
+.message .thinking + .svg-block,
+.message .thinking + .table-block,
+.message .thinking + .chart-block {
+  margin-top: var(--app-spacing-medium);
+}
+
+/* Space before a text/thinking block that follows tool calls. */
+.message .tool-inline + .assistant-text,
+.message .tool + .assistant-text,
+.message .tool-group + .assistant-text,
+.message .svg-block + .assistant-text,
+.message .table-block + .assistant-text,
+.message .chart-block + .assistant-text,
+.message .tool-inline + .thinking,
+.message .tool + .thinking,
+.message .tool-group + .thinking,
+.message .svg-block + .thinking,
+.message .table-block + .thinking,
+.message .chart-block + .thinking {
+  margin-top: var(--app-spacing-large);
+}
+
+/* Space between any presentational block and an adjacent tool block. */
+.message .svg-block + .tool-inline,
+.message .svg-block + .tool,
+.message .svg-block + .tool-group,
+.message .svg-block + .svg-block,
+.message .svg-block + .table-block,
+.message .svg-block + .chart-block,
+.message .table-block + .tool-inline,
+.message .table-block + .tool,
+.message .table-block + .tool-group,
+.message .table-block + .svg-block,
+.message .table-block + .table-block,
+.message .table-block + .chart-block,
+.message .chart-block + .tool-inline,
+.message .chart-block + .tool,
+.message .chart-block + .tool-group,
+.message .chart-block + .svg-block,
+.message .chart-block + .table-block,
+.message .chart-block + .chart-block,
+.message .tool-inline + .svg-block,
+.message .tool + .svg-block,
+.message .tool-group + .svg-block,
+.message .tool-inline + .table-block,
+.message .tool + .table-block,
+.message .tool-group + .table-block,
+.message .tool-inline + .chart-block,
+.message .tool + .chart-block,
+.message .tool-group + .chart-block {
+  margin-top: var(--app-spacing-medium);
+}
+
+
+/* User message row: full width so % on children resolves against the container */
+.message.user {
+  width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+}
+
+/* Wrapper: owns the max-width, stacks bubble + action bar vertically */
+.message.user .bubble-wrapper {
+  width: 80%;
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
+.message.user .bubble {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-large);
+  padding: var(--app-spacing-medium) var(--app-spacing-large);
+  white-space: pre-wrap;
+  width: 100%;
+  box-sizing: border-box;
+}
+
+/* ---- Action bar below the bubble — pencil + revert, revealed on hover ---- */
+.bubble-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+  min-height: 20px;
+}
+
+.bubble-wrapper:hover .bubble-actions {
+  opacity: 1;
+}
+
+/* Pencil edit button — in-flow inside .bubble-actions */
+.bubble-edit-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 20px;
+  background: none;
+  border: none;
+  color: var(--app-secondary-foreground);
+  padding: 0;
+  cursor: pointer;
+  transition: color 0.15s;
+  line-height: 1;
+}
+
+.bubble-edit-btn:hover {
+  color: var(--app-primary-foreground);
+}
+
+/* Revert button in the user message action bar */
+.bubble-revert-btn {
+  font-size: 11px;
+  padding: 1px 7px;
+  border-radius: 4px;
+  border: 1px solid var(--app-tool-border);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  white-space: nowrap;
+  line-height: 1.5;
+}
+
+.bubble-revert-btn:hover {
+  background: var(--app-tool-border);
+  color: var(--app-foreground);
+}
+
+/* ---- Inline edit mode ---- */
+.bubble--editing {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-large);
+  padding: var(--app-spacing-medium) var(--app-spacing-large);
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-spacing-small);
+  width: 100%;
+  box-sizing: border-box;
+}
+.bubble-edit-textarea {
+  background: transparent;
+  border: none;
+  outline: none;
+  color: var(--app-primary-foreground);
+  font: inherit;
+  font-size: inherit;
+  line-height: 1.5;
+  resize: none;
+  width: 100%;
+  min-height: 48px;
+  white-space: pre-wrap;
+  padding: 0;
+}
+/* Actions row: branch nav on the left, Cancel/Send on the right */
+.bubble-edit-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-spacing-small);
+  padding-top: 2px;
+}
+.bubble-edit-btns {
+  display: flex;
+  gap: var(--app-spacing-small);
+  margin-left: auto;
+}
+.bubble-edit-submit {
+  background: var(--app-accent-color, #555);
+  border: none;
+  border-radius: var(--corner-radius-small);
+  color: #fff;
+  font-size: 12px;
+  padding: 3px 12px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.bubble-edit-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+.bubble-edit-cancel {
+  background: none;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  padding: 3px 10px;
+  cursor: pointer;
+  line-height: 1.5;
+}
+.bubble-edit-cancel:hover {
+  background: var(--app-secondary-background);
+}
+
+/* ---- Branch navigation (← 1/2 →) inside edit mode ---- */
+.branch-nav {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.branch-nav-arrow {
+  background: none;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  padding: 1px 7px;
+  font-size: 12px;
+  line-height: 1.4;
+  cursor: pointer;
+  transition: opacity 0.1s, background 0.1s;
+}
+.branch-nav-arrow:disabled {
+  opacity: 0.25;
+  cursor: default;
+}
+.branch-nav-arrow:not(:disabled):hover {
+  background: var(--app-secondary-background);
+  color: var(--app-primary-foreground);
+}
+.branch-nav-indicator {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  min-width: 32px;
+  text-align: center;
+  user-select: none;
+}
+
+.assistant-text {
+  line-height: 1.55;
+}
+.assistant-text p {
+  margin: 0 0 var(--app-spacing-medium);
+}
+.assistant-text p:last-child {
+  margin: 0;
+}
+.assistant-text pre {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  padding: var(--app-spacing-large);
+  overflow-x: auto;
+  font-family: var(--app-monospace-font-family);
+  font-size: var(--app-monospace-font-size);
+  margin: var(--app-spacing-medium) 0;
+}
+.assistant-text code {
+  font-family: var(--app-monospace-font-family);
+  font-size: var(--app-monospace-font-size);
+  background: var(--app-secondary-background);
+  padding: 1px 4px;
+  border-radius: var(--corner-radius-small);
+}
+.assistant-text pre code {
+  background: transparent;
+  padding: 0;
+}
+
+/* ---- Thinking block ---- */
+.thinking {
+  border-left: 2px solid var(--app-secondary-foreground);
+  padding: var(--app-spacing-small) var(--app-spacing-large);
+  color: var(--app-secondary-foreground);
+  font-style: italic;
+  font-size: 12px;
+  white-space: pre-wrap;
+  cursor: pointer;
+}
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-small);
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  font-size: 10px;
+  font-weight: 600;
+  user-select: none;
+}
+.thinking-content {
+  margin-top: var(--app-spacing-small);
+}
+.thinking.collapsed .thinking-content {
+  display: none;
+}
+.chevron {
+  display: inline-block;
+  transition: transform 120ms;
+}
+.thinking.collapsed .chevron {
+  transform: rotate(-90deg);
+}
+
+/* ---- Tool blocks (inline / collapsed) ---- */
+.tool-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms;
+  user-select: none;
+  padding: 1px 0;
+}
+.tool-inline:hover {
+  opacity: 1;
+}
+.tool-inline-chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.tool-inline-name {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.tool-inline-summary {
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 420px;
+}
+.tool-inline-status {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+.tool-inline-status.error {
+  color: var(--app-error);
+}
+.tool-inline-status.running {
+  color: var(--app-secondary-foreground);
+}
+.tool-inline.error .tool-inline-name {
+  color: var(--app-error);
+}
+
+/* ---- Tool blocks (expanded / card) ---- */
+.tool {
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-tool-background);
+  overflow: hidden;
+  font-family: var(--app-monospace-font-family);
+  font-size: var(--app-monospace-font-size);
+}
+.tool-header {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: 6px var(--app-spacing-large);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--app-tool-border);
+  font-size: 11px;
+  user-select: none;
+  cursor: pointer;
+}
+.tool-name {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.tool-summary {
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: 1;
+  font-family: var(--app-monospace-font-family);
+}
+.tool-status {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.tool.error .tool-status {
+  color: var(--app-error);
+}
+.tool-body {
+  padding: var(--app-spacing-large);
+  white-space: pre-wrap;
+  max-height: 360px;
+  overflow-y: auto;
+  color: var(--app-primary-foreground);
+}
+.tool-body.input {
+  color: var(--app-secondary-foreground);
+  border-bottom: 1px solid var(--app-tool-border);
+}
+
+/* ---- Tool group (collapses a long run of consecutive tool calls) ---- */
+.tool-group-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  opacity: 0.7;
+  transition: opacity 120ms;
+  user-select: none;
+  padding: 1px 0;
+}
+.tool-group-header:hover {
+  opacity: 1;
+}
+.tool-group-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.tool-group.collapsed .tool-group-header .chevron {
+  transform: rotate(-90deg);
+}
+.tool-group-label {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.tool-group-status {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-left: auto;
+}
+.tool-group-status.error {
+  color: var(--app-error);
+}
+.tool-group-body {
+  display: flex;
+  flex-direction: column;
+  margin-top: var(--app-spacing-small);
+  padding-left: var(--app-spacing-large);
+  border-left: 2px solid var(--app-tool-border);
+}
+
+/* ---- SVG block (RenderSVG skill output) ----
+   The agent's RenderSVG tool produces a sanitized inline <svg>. We wrap
+   it in a card that mirrors the visual weight of a tool block but lets
+   the graphic itself dominate. The header is clickable to collapse so
+   long replays don't drown in big illustrations. */
+.svg-block {
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-tool-background);
+  overflow: hidden;
+}
+.svg-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-large);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--app-tool-border);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.svg-block.collapsed .svg-block-header {
+  border-bottom: none;
+}
+.svg-block-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.svg-block-title {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.svg-block-body {
+  padding: var(--app-spacing-large);
+  /* Center horizontally, give it room to breathe, allow scroll if the
+     SVG explicitly sets a fixed width larger than the chat column. */
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  overflow-x: auto;
+  /* Subtle checker so transparent SVGs are still visible against the
+     dark tool background. Falls back gracefully if the SVG fills its box. */
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%) 0 0/16px 16px,
+    linear-gradient(225deg, rgba(255, 255, 255, 0.015) 25%, transparent 25%) 0 0/16px 16px;
+}
+.svg-block-body > svg {
+  /* Force responsive sizing regardless of what the model emitted. */
+  max-width: 100%;
+  height: auto;
+  display: block;
+}
+.svg-block-caption {
+  padding: 0 var(--app-spacing-large) var(--app-spacing-medium);
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  font-style: italic;
+}
+.svg-block.error .svg-block-title {
+  color: var(--app-error);
+}
+.svg-block.error .svg-block-body {
+  color: var(--app-error);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  background: none;
+}
+
+/* ---- TableBlock ---- */
+.table-block {
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-tool-background);
+  overflow: hidden;
+}
+.table-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-large);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--app-tool-border);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.table-block.collapsed .table-block-header {
+  border-bottom: none;
+}
+.table-block-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.table-block-title {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.table-block-meta {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.table-block-body {
+  overflow-x: auto;
+  overflow-y: auto;
+  max-height: 480px;
+}
+.table-block-body table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-family: var(--app-chat-font-family);
+}
+.table-block-body thead {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+.table-block-body th {
+  padding: 6px var(--app-spacing-large);
+  text-align: left;
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  background: rgba(255, 255, 255, 0.04);
+  border-bottom: 1px solid var(--app-tool-border);
+  white-space: nowrap;
+}
+.table-block-body td {
+  padding: 5px var(--app-spacing-large);
+  color: var(--app-primary-foreground);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  vertical-align: top;
+}
+.table-block-body tr:last-child td {
+  border-bottom: none;
+}
+.table-block-body tr:hover td {
+  background: rgba(255, 255, 255, 0.02);
+}
+.table-block-caption {
+  padding: 0 var(--app-spacing-large) var(--app-spacing-medium);
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  font-style: italic;
+  border-top: 1px solid var(--app-tool-border);
+}
+
+/* ---- ChartBlock ---- */
+.chart-block {
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-tool-background);
+  overflow: hidden;
+}
+.chart-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-large);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--app-tool-border);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.chart-block.collapsed .chart-block-header {
+  border-bottom: none;
+}
+.chart-block-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.chart-block-title {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.chart-block-type {
+  margin-left: auto;
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.chart-block-body {
+  padding: var(--app-spacing-large);
+  overflow-x: auto;
+}
+.chart-block-body svg {
+  width: 70%;
+  display: block;
+  margin: 0 auto;
+}
+.chart-block-caption {
+  padding: 0 var(--app-spacing-large) var(--app-spacing-medium);
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  font-style: italic;
+  border-top: 1px solid var(--app-tool-border);
+}

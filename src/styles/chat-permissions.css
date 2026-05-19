@@ -1,0 +1,380 @@
+/* ---- Permission prompt shell ----
+   Matches the extension's permissionRequestContainer: per-tool body up top,
+   numeric shortcut chips on each button, optional reject-input row, and an
+   "Esc to cancel" hint at the bottom. */
+.permission {
+  border-top: 1px solid var(--app-primary-border-color);
+  padding: var(--app-spacing-large) var(--app-spacing-xlarge);
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-spacing-medium);
+  outline: none;
+  position: relative;
+}
+.permission[data-tool="ExitPlanMode"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(217, 119, 87, 0.04);
+  pointer-events: none;
+}
+.permission[data-tool="RequestUserAttention"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: rgba(87, 153, 217, 0.04);
+  pointer-events: none;
+}
+.permission-header {
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  position: relative;
+}
+.permission-path {
+  color: var(--app-claude-orange);
+  font-family: var(--app-monospace-font-family);
+  font-size: 13px;
+  font-weight: 500;
+}
+.permission-body {
+  position: relative;
+}
+.permission-input,
+.permission-bash {
+  margin: 0;
+  padding: var(--app-spacing-medium);
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  font-family: var(--app-monospace-font-family);
+  font-size: 12px;
+  white-space: pre-wrap;
+  max-height: 280px;
+  overflow-y: auto;
+  color: var(--app-primary-foreground);
+}
+.permission-bash {
+  font-size: 13px;
+  color: var(--app-claude-orange);
+  background: rgba(0, 0, 0, 0.25);
+}
+.permission-details summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  user-select: none;
+  margin-bottom: 4px;
+}
+.permission-reject-input {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  padding: 8px 12px;
+  color: var(--app-input-foreground);
+  font: inherit;
+  font-size: 12px;
+  outline: none;
+}
+.permission-reject-input:focus {
+  border-color: var(--app-input-active-border);
+}
+.permission-actions {
+  display: flex;
+  gap: var(--app-spacing-small);
+  flex-wrap: wrap;
+}
+.permission-hints {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-align: right;
+  margin-top: -2px;
+}
+
+/* Buttons + shortcut chips */
+.btn {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  color: var(--app-primary-foreground);
+  border-radius: var(--corner-radius-medium);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.btn:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+}
+.btn-primary {
+  background: var(--app-claude-orange);
+  border-color: var(--app-claude-orange);
+  color: white;
+}
+.btn-primary:hover:not(:disabled) {
+  background: var(--app-claude-clay-button-orange);
+}
+.btn-danger {
+  background: transparent;
+  border-color: var(--app-error);
+  color: var(--app-error);
+}
+.btn-danger:hover:not(:disabled) {
+  background: rgba(244, 135, 113, 0.1);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.shortcut-num {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.12);
+  color: inherit;
+  font-size: 10px;
+  font-family: var(--app-monospace-font-family);
+  font-weight: 600;
+}
+.btn-primary .shortcut-num {
+  background: rgba(255, 255, 255, 0.2);
+}
+
+/* ---- AskUserQuestion ---- */
+.ask {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-spacing-medium);
+}
+.ask-tabs {
+  display: flex;
+  gap: 2px;
+  border-bottom: 1px solid var(--app-input-border);
+}
+.ask-tab {
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  color: var(--app-secondary-foreground);
+  padding: 6px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ask-tab.answered {
+  color: var(--app-success);
+}
+.ask-tab.active {
+  color: var(--app-claude-orange);
+  border-bottom-color: var(--app-claude-orange);
+}
+.ask-question-text {
+  font-size: 14px;
+  font-weight: 500;
+  margin: var(--app-spacing-small) 0 var(--app-spacing-medium);
+}
+.ask-options {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.ask-option {
+  display: flex;
+  gap: var(--app-spacing-medium);
+  padding: 10px 12px;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  cursor: pointer;
+  transition: border-color 100ms, background 100ms;
+  align-items: flex-start;
+}
+.ask-option:hover {
+  background: var(--app-list-hover-background);
+}
+.ask-option.selected {
+  border-color: var(--app-claude-orange);
+  background: rgba(217, 119, 87, 0.05);
+}
+.ask-option-content {
+  flex: 1;
+  min-width: 0;
+}
+.ask-option-label {
+  font-size: 13px;
+  font-weight: 500;
+}
+.ask-option-desc {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  margin-top: 2px;
+}
+.ask-other-input {
+  margin-top: 6px;
+  width: 100%;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-input-foreground);
+  font: inherit;
+  font-size: 12px;
+  padding: 5px 8px;
+  outline: none;
+}
+.ask-other-input:focus {
+  border-color: var(--app-input-active-border);
+}
+.ask-actions {
+  margin-top: var(--app-spacing-small);
+}
+
+/* Indicator (radio/checkbox custom) */
+.indicator {
+  width: 16px;
+  height: 16px;
+  border: 1.5px solid var(--app-secondary-foreground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  margin-top: 2px;
+}
+.indicator.radio {
+  border-radius: 50%;
+}
+.indicator.checkbox {
+  border-radius: 3px;
+}
+.indicator.checked {
+  border-color: var(--app-claude-orange);
+  color: var(--app-claude-orange);
+}
+.indicator .radio-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--app-claude-orange);
+}
+
+/* ---- Plan card body ---- */
+.plan-body {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  padding: var(--app-spacing-large);
+  font-size: 13px;
+  max-height: 480px;
+  overflow-y: auto;
+}
+
+/* ---- Mode picker popup ---- */
+.mode-picker-wrap {
+  position: relative;
+}
+.mode-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  width: 320px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: var(--app-spacing-medium);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.mode-popup-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 4px 6px var(--app-spacing-small);
+  font-size: 12px;
+  font-weight: 600;
+}
+.mode-popup-hint {
+  color: var(--app-secondary-foreground);
+  font-weight: 400;
+  font-size: 10px;
+}
+.mode-popup-hint kbd {
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: 3px;
+  padding: 0 4px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+}
+.mode-popup-item {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-spacing-medium);
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: 8px 8px;
+  border-radius: var(--corner-radius-small);
+  color: inherit;
+}
+.mode-popup-item:hover {
+  background: var(--app-list-hover-background);
+}
+.mode-popup-item.active {
+  background: rgba(217, 119, 87, 0.06);
+}
+.mode-popup-icon {
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  background: var(--app-input-background);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.mode-popup-item.active .mode-popup-icon {
+  background: var(--app-claude-orange);
+  color: white;
+}
+.mode-popup-body {
+  flex: 1;
+  min-width: 0;
+}
+.mode-popup-label {
+  font-size: 12px;
+  font-weight: 600;
+}
+.mode-popup-desc {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  margin-top: 2px;
+  line-height: 1.35;
+}
+.mode-popup-check {
+  color: var(--app-claude-orange);
+  font-weight: 700;
+}
+
+/* Composer permission-mode coloring (data-attr matches extension). */
+.composer[data-permission-mode="plan"] textarea {
+  border-color: var(--app-claude-orange);
+}
+.composer[data-permission-mode="plan"] {
+  background: linear-gradient(
+    to bottom,
+    rgba(217, 119, 87, 0.04),
+    transparent 40%
+  );
+}
+.composer[data-permission-mode="acceptEdits"] textarea {
+  border-color: var(--app-success);
+}
+.composer[data-permission-mode="bypassPermissions"] textarea {
+  border-color: var(--app-warning);
+}

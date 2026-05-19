@@ -1,0 +1,212 @@
+/* ============================================================ */
+/* Highlight.js — VS Code Dark+ theme colours                   */
+/* ============================================================ */
+
+.hljs                     { color: #d4d4d4; background: transparent; }
+.hljs-keyword             { color: #569cd6; }
+.hljs-built_in            { color: #4ec9b0; }
+.hljs-type                { color: #4ec9b0; }
+.hljs-literal             { color: #569cd6; }
+.hljs-number              { color: #b5cea8; }
+.hljs-regexp              { color: #d16969; }
+.hljs-string              { color: #ce9178; }
+.hljs-subst               { color: #d4d4d4; }
+.hljs-symbol              { color: #d4d4d4; }
+.hljs-class               { color: #4ec9b0; }
+.hljs-function            { color: #dcdcaa; }
+.hljs-title               { color: #dcdcaa; }
+.hljs-title.class_        { color: #4ec9b0; }
+.hljs-title.function_     { color: #dcdcaa; }
+.hljs-params              { color: #d4d4d4; }
+.hljs-comment             { color: #6a9955; font-style: italic; }
+.hljs-doctag              { color: #608b4e; }
+.hljs-meta                { color: #9b9b9b; }
+.hljs-section             { color: #569cd6; }
+.hljs-tag                 { color: #808080; }
+.hljs-name                { color: #569cd6; }
+.hljs-attr                { color: #9cdcfe; }
+.hljs-attribute           { color: #9cdcfe; }
+.hljs-variable            { color: #9cdcfe; }
+.hljs-variable.language_  { color: #569cd6; }
+.hljs-bullet              { color: #6796e6; }
+.hljs-code                { color: #d7ba7d; }
+.hljs-emphasis            { font-style: italic; }
+.hljs-strong              { font-weight: bold; }
+.hljs-formula             { color: #d4d4d4; }
+.hljs-link                { color: #ce9178; text-decoration: underline; }
+.hljs-quote               { color: #6a9955; font-style: italic; }
+.hljs-selector-tag        { color: #d7ba7d; }
+.hljs-selector-id         { color: #d7ba7d; }
+.hljs-selector-class      { color: #d7ba7d; }
+.hljs-selector-attr       { color: #d7ba7d; }
+.hljs-selector-pseudo     { color: #d7ba7d; }
+
+/* ── Sidebar semantic search ─────────────────────────────────────────────────── */
+
+/* Search input wrapper — adds an icon inside the existing input */
+.chat-search-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.chat-search-icon {
+  position: absolute;
+  left: 7px;
+  color: var(--app-secondary-foreground);
+  pointer-events: none;
+  flex-shrink: 0;
+}
+
+/* Override the existing input to make room for the icon */
+.chat-search-wrap .chat-search {
+  width: 100%;
+  padding-left: 26px;
+  padding-right: 24px; /* room for spinner */
+  box-sizing: border-box;
+}
+
+.chat-search-spinner {
+  position: absolute;
+  right: 7px;
+  width: 11px;
+  height: 11px;
+  border: 1.5px solid #383838;
+  border-top-color: var(--app-claude-orange);
+  border-radius: 50%;
+  flex-shrink: 0;
+  animation: sidebar-search-spin 0.65s linear infinite;
+  pointer-events: none;
+}
+
+@keyframes sidebar-search-spin {
+  to { transform: rotate(360deg); }
+}
+
+.chat-search-clear {
+  position: absolute;
+  right: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--app-secondary-foreground);
+  opacity: 0.55;
+  transition: opacity 0.15s, background 0.15s;
+}
+
+.chat-search-clear:hover {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ── Result cards ── */
+
+.sidebar-search-result {
+  display: flex;
+  align-items: stretch;
+  width: calc(100% - 16px);
+  text-align: left;
+  background: #242424;
+  border: 1px solid #303030;
+  border-radius: var(--corner-radius-medium);
+  cursor: pointer;
+  padding: 0;
+  overflow: hidden;
+  color: inherit;
+  transition: background 0.1s, border-color 0.1s;
+  margin: 0 8px 6px;
+}
+
+.sidebar-search-result:hover {
+  background: #2b2b2b;
+  border-color: #383838;
+}
+
+.sidebar-search-result--active {
+  background: color-mix(in srgb, var(--app-claude-orange) 18%, #242424);
+  border-color: color-mix(in srgb, var(--app-claude-orange) 38%, #303030);
+}
+
+.sidebar-search-result--active:hover {
+  background: color-mix(in srgb, var(--app-claude-orange) 24%, #242424);
+  border-color: color-mix(in srgb, var(--app-claude-orange) 48%, #303030);
+}
+
+.sidebar-search-result-bar {
+  width: 3px;
+  flex-shrink: 0;
+  border-radius: 3px 0 0 3px;
+  min-height: 100%;
+}
+
+.sidebar-search-result-body {
+  flex: 1;
+  padding: 12px 16px 12px 14px;
+  min-width: 0;
+}
+
+.sidebar-search-result-text {
+  font-size: 11px;
+  color: var(--app-primary-foreground);
+  line-height: 1.55;
+
+  /* 3 lines max with trailing ellipsis */
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+
+  word-break: break-word;
+  white-space: pre-wrap;
+}
+
+.sidebar-search-result-divider {
+  height: 1px;
+  margin: 10px 0;
+  background: #333;
+}
+
+.sidebar-search-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 6px;
+  font-size: 10px;
+  color: #666;
+  min-width: 0;
+}
+
+.sidebar-search-result-title {
+  font-weight: 500;
+  color: #888;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  /* allow title to shrink so time always shows */
+  min-width: 0;
+  flex-shrink: 1;
+}
+
+.sidebar-search-result-sep {
+  color: #3a3a3a;
+  flex-shrink: 0;
+}
+
+.sidebar-search-result-time {
+  color: #555;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.hljs-template-tag        { color: #569cd6; }
+.hljs-template-variable   { color: #9cdcfe; }
+.hljs-addition            { color: #b5cea8; }
+.hljs-deletion            { color: #ce9178; }

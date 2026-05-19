@@ -1,4 +1,12 @@
 import { useState } from "react";
+import {
+  Sparkles,
+  Info,
+  Check,
+  X,
+  ChevronDown,
+  ChevronUp,
+} from "lucide-react";
 import type { SelfUpdateStatus } from "../lib/api.js";
 
 interface UpdateBannerProps {
@@ -11,14 +19,21 @@ interface UpdateBannerProps {
   onDismiss: () => void;
 }
 
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 60) return `${mins}m ago`;
-  const hrs = Math.floor(mins / 60);
-  if (hrs < 24) return `${hrs}h ago`;
-  return `${Math.floor(hrs / 24)}d ago`;
+// Strip conventional commit prefixes so bullets read naturally.
+// "feat: add dark mode" → "Add dark mode"
+// "fix(chat): broken scroll" → "Fixed broken scroll"
+function formatCommitMessage(msg: string): string {
+  const conventional = msg.match(/^(feat|fix|chore|refactor|docs|style|test|perf|ci|build)(?:\([^)]*\))?!?:\s*(.+)/i);
+  if (conventional) {
+    const [, type, body] = conventional;
+    const prefix = /^fix/i.test(type) ? "Fixed" : null;
+    const cleaned = body.charAt(0).toUpperCase() + body.slice(1);
+    return prefix ? `${prefix} ${cleaned.charAt(0).toLowerCase()}${cleaned.slice(1)}` : cleaned;
+  }
+  return msg.charAt(0).toUpperCase() + msg.slice(1);
 }
+
+const MAX_VISIBLE = 4;
 
 export function UpdateBanner({
   status,
@@ -30,20 +45,35 @@ export function UpdateBanner({
   onDismiss,
 }: UpdateBannerProps) {
   const [expanded, setExpanded] = useState(false);
-  const { commits, isDirty, localDiff } = status;
+  const { commits, isDirty } = status;
   const count = commits.length;
+  const visibleCommits = expanded ? commits : commits.slice(0, MAX_VISIBLE);
+  const hiddenCount = count - MAX_VISIBLE;
 
-  // ── Pull-result state (after a successful or failed pull) ──────────────────
+  // ── Post-pull result ───────────────────────────────────────────────────────
   if (pullResult) {
     return (
-      <div className={`update-banner update-banner--${pullResult.success ? "success" : "error"}`}>
-        <span className="update-banner__icon">{pullResult.success ? "✓" : "✕"}</span>
-        <span className="update-banner__text">
-          {pullResult.success
-            ? "Update applied — tsx watch and Vite HMR are reloading the changes."
-            : `Pull failed: ${pullResult.output.split("\n")[0]}`}
-        </span>
-        <button className="update-banner__dismiss" onClick={onDismiss} aria-label="Dismiss">×</button>
+      <div className={`update-card update-card--${pullResult.success ? "success" : "error"}`}>
+        <div className="update-card__header">
+          <div className="update-card__icon-wrap">
+            {pullResult.success
+              ? <Check size={12} strokeWidth={2.5} />
+              : <X size={12} strokeWidth={2.5} />}
+          </div>
+          <div className="update-card__header-text">
+            <span className="update-card__title">
+              {pullResult.success ? "You're all set!" : "Update Failed"}
+            </span>
+            <span className="update-card__subtitle">
+              {pullResult.success
+                ? "Buildover is reloading with your new features."
+                : pullResult.output.split("\n")[0]}
+            </span>
+          </div>
+          <button className="update-card__dismiss" onClick={onDismiss} aria-label="Dismiss">
+            <X size={13} />
+          </button>
+        </div>
       </div>
     );
   }
@@ -51,109 +81,105 @@ export function UpdateBanner({
   // ── Dirty-repo warning ─────────────────────────────────────────────────────
   if (isDirty) {
     return (
-      <div className="update-banner update-banner--dirty">
-        <span className="update-banner__icon">⚠</span>
-        <div className="update-banner__body">
-          <span className="update-banner__text">
-            {count > 0
-              ? `${count} update${count !== 1 ? "s" : ""} available, but you have local changes.`
-              : "Update available, but you have local changes."}
-          </span>
-          <div className="update-banner__actions">
-            <button
-              className="update-banner__btn update-banner__btn--primary"
-              onClick={onOpenAiChat}
-              disabled={isPulling}
-              title={localDiff ? "Open an AI chat to intelligently rebase your local changes onto main" : "Open an AI chat to help resolve local changes"}
-            >
-              Fix with AI
-            </button>
-            <button
-              className="update-banner__btn update-banner__btn--danger"
-              onClick={onForcePull}
-              disabled={isPulling}
-              title="Discard all local changes and pull the latest main"
-            >
-              {isPulling ? "Pulling…" : "Discard & Pull"}
-            </button>
+      <div className="update-card update-card--dirty">
+        <div className="update-card__header">
+          <div className="update-card__icon-wrap">
+            <Info size={12} strokeWidth={2.5} />
           </div>
+          <div className="update-card__header-text">
+            <span className="update-card__title">Update Ready ✦</span>
+            <span className="update-card__subtitle">
+              {count > 0
+                ? `${count} ${count === 1 ? "improvement" : "improvements"} waiting to land`
+                : "Fresh improvements waiting to land"}
+            </span>
+          </div>
+          <button className="update-card__dismiss" onClick={onDismiss} aria-label="Dismiss">
+            <X size={13} />
+          </button>
         </div>
-        <button className="update-banner__dismiss" onClick={onDismiss} aria-label="Dismiss">×</button>
+        <div className="update-card__body">
+          <p className="update-card__desc">
+            You have some local changes — no problem! Let AI merge everything together, or discard and start fresh.
+          </p>
+        </div>
+        <div className="update-card__actions">
+          <button
+            className="update-card__btn update-card__btn--ghost"
+            onClick={onForcePull}
+            disabled={isPulling}
+            title="Discard all local changes and pull the latest main"
+          >
+            {isPulling ? "Pulling…" : "Discard & Pull"}
+          </button>
+          <button
+            className="update-card__btn update-card__btn--primary"
+            onClick={onOpenAiChat}
+            disabled={isPulling}
+            title="Open an AI chat to intelligently rebase your local changes onto main"
+          >
+            Fix with AI
+          </button>
+        </div>
       </div>
     );
   }
 
   // ── Normal update available ────────────────────────────────────────────────
-  const newestCommit = commits[0];
-
   return (
-    <div className="update-banner update-banner--update">
-      <span className="update-banner__icon">↑</span>
-      <div className="update-banner__body">
-        <div className="update-banner__summary">
-          <span className="update-banner__label">
-            {count > 0
-              ? `${count} new commit${count !== 1 ? "s" : ""} on main`
-              : "New commits on main"}
-          </span>
-          {newestCommit && (
-            <span className="update-banner__preview">
-              — {newestCommit.message}
-              {newestCommit.date && (
-                <span className="update-banner__meta"> · {timeAgo(newestCommit.date)}</span>
-              )}
-            </span>
-          )}
-          {count > 1 && (
-            <button
-              className="update-banner__toggle"
-              onClick={() => setExpanded((v) => !v)}
-            >
-              {expanded ? "hide" : `+${count - 1} more`}
-            </button>
-          )}
+    <div className="update-card update-card--update">
+      <div className="update-card__header">
+        <div className="update-card__icon-wrap">
+          <Sparkles size={12} strokeWidth={2} />
         </div>
+        <div className="update-card__header-text">
+          <span className="update-card__title">What's New</span>
+          <span className="update-card__subtitle">
+            {count === 1
+              ? "A fresh update just landed"
+              : `${count} fresh updates just landed`}
+          </span>
+        </div>
+        <button className="update-card__dismiss" onClick={onDismiss} aria-label="Dismiss">
+          <X size={13} />
+        </button>
+      </div>
 
-        {expanded && (
-          <ul className="update-banner__commits">
-            {commits.map((c) => (
-              <li key={c.sha} className="update-banner__commit">
-                <code className="update-banner__sha">{c.sha}</code>
-                <span className="update-banner__commit-msg">{c.message}</span>
-                <span className="update-banner__commit-meta">{c.author}</span>
-                {c.url && (
-                  <a
-                    href={c.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="update-banner__commit-link"
-                    onClick={(e) => {
-                      e.preventDefault();
-                      // Open in system browser if running in Electron
-                      const shell = (window as unknown as { electronShell?: { openExternal: (url: string) => void } }).electronShell;
-                      if (shell) shell.openExternal(c.url);
-                      else window.open(c.url, "_blank");
-                    }}
-                  >
-                    ↗
-                  </a>
-                )}
+      {count > 0 && (
+        <div className="update-card__body">
+          <ul className="update-card__whatsnew">
+            {visibleCommits.map((c) => (
+              <li key={c.sha} className="update-card__whatsnew-item">
+                <span className="update-card__whatsnew-dot" />
+                <span className="update-card__whatsnew-text">
+                  {formatCommitMessage(c.message)}
+                </span>
               </li>
             ))}
           </ul>
-        )}
-      </div>
 
-      <div className="update-banner__actions">
+          {count > MAX_VISIBLE && (
+            <button
+              className="update-card__toggle"
+              onClick={() => setExpanded((v) => !v)}
+            >
+              {expanded
+                ? <><ChevronUp size={11} /> Show less</>
+                : <><ChevronDown size={11} /> {hiddenCount} more {hiddenCount === 1 ? "change" : "changes"}</>}
+            </button>
+          )}
+        </div>
+      )}
+
+      <div className="update-card__actions">
         <button
-          className="update-banner__btn update-banner__btn--primary"
+          className="update-card__btn update-card__btn--primary"
           onClick={onPull}
           disabled={isPulling}
         >
-          {isPulling ? "Pulling…" : "Update"}
+          {isPulling ? "Updating…" : "Update Now →"}
         </button>
       </div>
-      <button className="update-banner__dismiss" onClick={onDismiss} aria-label="Dismiss">×</button>
     </div>
   );
 }

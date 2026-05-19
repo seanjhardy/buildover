@@ -1,0 +1,330 @@
+/* ============================================================ */
+/* Workspace — file-viewer open state                           */
+/* ============================================================ */
+
+/* workspace-panels: wraps only the chat-pane (not the sidebar).
+   Fills the remaining space in the .workspace flex row.
+   When the file viewer opens it slides left as one solid unit —
+   the chat content disappears behind the sidebar on the left. */
+.workspace-panels {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  overflow: hidden;
+  transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+  will-change: transform;
+}
+
+.workspace--file-open .workspace-panels {
+  transform: translateX(calc(-50vw + 200px));
+}
+
+/* Gradient fade anchored to the sidebar's right wall.
+   left: 280px keeps it pinned to the sidebar edge — it never moves
+   even when workspace-panels slides. Fades from the chat background
+   colour (fully opaque) → transparent rightwards so the chat content
+   softly dissolves as it disappears behind the sidebar.
+   opacity transitions in/out with the same easing as the panel slide. */
+.chat-sidebar-fade {
+  position: absolute;
+  top: 0;
+  left: 280px; /* sidebar width — anchored to sidebar's right edge */
+  bottom: 0;
+  width: 120px;
+  background: linear-gradient(
+    to right,
+    var(--app-primary-background) 0%,
+    transparent 100%
+  );
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.workspace--file-open .chat-sidebar-fade {
+  opacity: 1;
+}
+
+/* When a file is open, clicking the chat strip closes the viewer. */
+.workspace--file-open .workspace-panels {
+  cursor: pointer;
+}
+
+/* ============================================================ */
+/* File Viewer                                                   */
+/* ============================================================ */
+
+/* Absolutely positioned on the right edge of .workspace, full height.
+   Lives outside workspace-panels so it never compresses or displaces
+   anything inside the flex layout. */
+.file-viewer {
+  position: absolute;
+  top: 0;
+  right: 0;
+  bottom: 0;
+  width: 50vw;
+  min-width: 420px;
+  max-width: 900px;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-primary-background);
+  border-left: 1px solid var(--app-primary-border-color);
+  animation: viewer-slide-in 0.32s cubic-bezier(0.4, 0, 0.2, 1) both;
+  overflow: hidden;
+  z-index: 30; /* above overlay (z-index: 10) */
+}
+
+@keyframes viewer-slide-in {
+  from { transform: translateX(100%); opacity: 0; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* --- Header / tab bar --- */
+.file-viewer-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 35px;
+  padding: 0 12px 0 0;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  flex-shrink: 0;
+  gap: 8px;
+  user-select: none;
+}
+
+.file-viewer-tab {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  overflow: hidden;
+  padding: 0 14px;
+  height: 100%;
+  border-right: 1px solid var(--app-primary-border-color);
+  border-bottom: 2px solid var(--app-claude-orange);
+  background: var(--app-primary-background);
+}
+
+.file-viewer-tab-name {
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.file-viewer-tab-path {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 240px;
+}
+
+.file-viewer-header-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.file-viewer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+}
+
+.file-viewer-close:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* --- Main area: editor body + minimap side by side --- */
+.file-viewer-main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+/* --- Body / editor area --- */
+.file-viewer-body {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  position: relative;
+}
+
+.file-viewer-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 24px 20px;
+  color: var(--app-secondary-foreground);
+  font-size: 13px;
+}
+
+.file-viewer-state--error {
+  color: var(--app-error);
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.file-viewer-spinner {
+  animation: spin 0.9s linear infinite;
+  flex-shrink: 0;
+}
+
+/* Editor layout: gutter + code side by side.
+   Use min-content height so the editor expands to fit ALL lines —
+   not capped to the viewport height of the scroll container. */
+.file-viewer-editor {
+  display: flex;
+  min-height: min-content;
+}
+
+/* Gutter column — one div per display row (real + ghost deleted lines) */
+.file-viewer-gutter {
+  flex-shrink: 0;
+  width: 52px;
+  padding: 14px 0;
+  background: var(--app-primary-background);
+  border-right: 1px solid var(--app-primary-border-color);
+  user-select: none;
+  position: sticky;
+  left: 0;
+  z-index: 1;
+}
+
+.file-viewer-gutter-row {
+  display: block;
+  height: 20px;
+  line-height: 20px;
+  text-align: right;
+  padding-right: 10px;
+  font-family: var(--app-monospace-font-family);
+  font-size: 12px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.45;
+  white-space: pre;
+}
+
+.file-viewer-gutter-row--deleted {
+  opacity: 1;
+  color: rgba(248, 81, 73, 0.80);
+  background: rgba(248, 81, 73, 0.10);
+}
+
+/* ── Code content column ─────────────────────────────────────────────── */
+.file-viewer-content-wrap {
+  flex: 1;
+  min-width: 0;
+}
+
+.file-viewer-pre {
+  margin: 0;
+  padding: 14px 0;
+  overflow: visible;
+  background: transparent;
+  tab-size: 2;
+}
+
+/* Each display row — one div per line (real or ghost) */
+.file-viewer-row {
+  display: block;
+  height: 20px;
+  line-height: 20px;
+  padding: 0 20px;
+  white-space: pre;
+  font-family: var(--app-monospace-font-family);
+  font-size: 12.5px;
+  color: var(--app-foreground, #d4d4d4);
+  min-width: 100%;
+}
+
+.file-viewer-row--added {
+  background: rgba(46, 160, 67, 0.13);
+  border-left: 3px solid rgba(46, 160, 67, 0.70);
+  padding-left: 17px; /* 20 - 3px border */
+}
+
+.file-viewer-row--deleted {
+  background: rgba(248, 81, 73, 0.13);
+  border-left: 3px solid rgba(248, 81, 73, 0.70);
+  padding-left: 17px;
+  color: rgba(248, 81, 73, 0.90);
+}
+
+/* ── Minimap sidebar ──────────────────────────────────────────────────── */
+/* Container sits outside the scrollable body — full height of .file-viewer-main */
+.file-viewer-minimap-wrap {
+  flex-shrink: 0;
+  width: 18px;
+  display: flex;
+  flex-direction: column;
+  background: var(--app-secondary-background);
+  border-left: 1px solid var(--app-primary-border-color);
+  cursor: pointer;
+}
+
+/* Canvas fills the full height of the wrap */
+.file-viewer-minimap {
+  display: block;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ── Status bar diff counts ───────────────────────────────────────────── */
+.file-viewer-diff-stat {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.file-viewer-diff-stat--add    { color: #9fefb4; font-weight: 600; }
+.file-viewer-diff-stat--remove { color: #ffb3a7; font-weight: 600; }
+
+/* --- Status bar --- */
+.file-viewer-statusbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 22px;
+  padding: 0 14px;
+  background: var(--app-claude-orange);
+  color: rgba(255,255,255,0.92);
+  font-size: 11px;
+  font-family: var(--app-monospace-font-family);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.file-viewer-op {
+  margin-left: auto;
+  font-weight: 600;
+  text-transform: uppercase;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+}
+
+.file-viewer-op--write   { color: #9fefb4; }
+.file-viewer-op--edit    { color: #ffe0b0; }
+.file-viewer-op--delete  { color: #ffb3a7; }

@@ -12,7 +12,12 @@ import {
   ShieldOff,
   Square,
 } from "lucide-react";
-import { type Attachment, type ContextUsage, type Model, type PermissionMode } from "../types.js";
+import {
+  type Attachment,
+  type ContextUsage,
+  type Model,
+  type PermissionMode,
+} from "../types.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 import { ContextRing } from "./ContextRing.js";
 import { useTranscription } from "../hooks/useTranscription.js";
@@ -180,7 +185,9 @@ export function Composer(props: Props) {
   });
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const draftTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const draftNotifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const draftNotifyTimerRef = useRef<ReturnType<typeof setTimeout> | null>(
+    null,
+  );
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modePopupOpen, setModePopupOpen] = useState(false);
@@ -251,7 +258,8 @@ export function Composer(props: Props) {
 
   // Close popups on outside click.
   useEffect(() => {
-    if (!modePopupOpen && !plusPopupOpen && !atPopupOpen && !slashPopupOpen) return;
+    if (!modePopupOpen && !plusPopupOpen && !atPopupOpen && !slashPopupOpen)
+      return;
     const onDoc = (e: MouseEvent) => {
       const target = e.target as Node;
       if (modePopupOpen && !modeWrapRef.current?.contains(target)) {
@@ -282,8 +290,11 @@ export function Composer(props: Props) {
   // Lazy-load file list the first time the @ popup opens.
   useEffect(() => {
     if (!atPopupOpen || !repoPath || atFiles.length > 0) return;
-    fileApi.listFiles(repoPath).then(setAtFiles).catch(() => {});
-  // eslint-disable-next-line react-hooks/exhaustive-deps
+    fileApi
+      .listFiles(repoPath)
+      .then(setAtFiles)
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [atPopupOpen, repoPath]);
 
   // Focus the search input when the @ popup opens.
@@ -292,8 +303,12 @@ export function Composer(props: Props) {
   }, [atPopupOpen]);
 
   // Reset highlight indices when queries change.
-  useEffect(() => { setAtHighlightIndex(0); }, [atQuery]);
-  useEffect(() => { setSlashHighlightIndex(0); }, [slashQuery]);
+  useEffect(() => {
+    setAtHighlightIndex(0);
+  }, [atQuery]);
+  useEffect(() => {
+    setSlashHighlightIndex(0);
+  }, [slashQuery]);
 
   const cycleMode = () => {
     const idx = MODE_CYCLE.indexOf(permissionMode);
@@ -400,7 +415,9 @@ export function Composer(props: Props) {
 
   // Derived filtered lists (computed at render time for use in JSX + keyboard handlers).
   const atFilesFiltered = atFiles
-    .filter((f) => atQuery === "" || f.toLowerCase().includes(atQuery.toLowerCase()))
+    .filter(
+      (f) => atQuery === "" || f.toLowerCase().includes(atQuery.toLowerCase()),
+    )
     .slice(0, 50);
   const slashCommandsFiltered = SLASH_COMMANDS.filter((c) =>
     c.key.startsWith(slashQuery.toLowerCase()),
@@ -440,7 +457,12 @@ export function Composer(props: Props) {
       <div className="composer-input-wrap">
         {/* ---- @ file search popup ---- */}
         {atPopupOpen && (
-          <div ref={atWrapRef} className="at-popup" role="listbox" aria-label="File search">
+          <div
+            ref={atWrapRef}
+            className="at-popup"
+            role="listbox"
+            aria-label="File search"
+          >
             <input
               ref={atSearchRef}
               className="at-popup-search"
@@ -450,7 +472,9 @@ export function Composer(props: Props) {
               onKeyDown={(e) => {
                 if (e.key === "ArrowDown") {
                   e.preventDefault();
-                  setAtHighlightIndex((i) => Math.min(i + 1, atFilesFiltered.length - 1));
+                  setAtHighlightIndex((i) =>
+                    Math.min(i + 1, atFilesFiltered.length - 1),
+                  );
                 } else if (e.key === "ArrowUp") {
                   e.preventDefault();
                   setAtHighlightIndex((i) => Math.max(i - 1, 0));
@@ -488,7 +512,9 @@ export function Composer(props: Props) {
                     onMouseEnter={() => setAtHighlightIndex(i)}
                   >
                     <span className="inline-popup-item-name">{basename}</span>
-                    {dir && <span className="inline-popup-item-path">{dir}</span>}
+                    {dir && (
+                      <span className="inline-popup-item-path">{dir}</span>
+                    )}
                   </button>
                 );
               })}
@@ -498,7 +524,12 @@ export function Composer(props: Props) {
 
         {/* ---- / command popup ---- */}
         {slashPopupOpen && (
-          <div ref={slashWrapRef} className="slash-popup" role="listbox" aria-label="Commands">
+          <div
+            ref={slashWrapRef}
+            className="slash-popup"
+            role="listbox"
+            aria-label="Commands"
+          >
             {slashCommandsFiltered.length === 0 && (
               <div className="at-popup-empty">No matching commands</div>
             )}
@@ -584,7 +615,9 @@ export function Composer(props: Props) {
             if (atPopupOpen) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setAtHighlightIndex((i) => Math.min(i + 1, atFilesFiltered.length - 1));
+                setAtHighlightIndex((i) =>
+                  Math.min(i + 1, atFilesFiltered.length - 1),
+                );
                 return;
               }
               if (e.key === "ArrowUp") {
@@ -609,7 +642,9 @@ export function Composer(props: Props) {
             if (slashPopupOpen) {
               if (e.key === "ArrowDown") {
                 e.preventDefault();
-                setSlashHighlightIndex((i) => Math.min(i + 1, slashCommandsFiltered.length - 1));
+                setSlashHighlightIndex((i) =>
+                  Math.min(i + 1, slashCommandsFiltered.length - 1),
+                );
                 return;
               }
               if (e.key === "ArrowUp") {
@@ -664,7 +699,9 @@ export function Composer(props: Props) {
                     fileInputRef.current?.click();
                   }}
                 >
-                  <span className="popup-item-icon"><Paperclip size={13} /></span>
+                  <span className="popup-item-icon">
+                    <Paperclip size={13} />
+                  </span>
                   <div>
                     <div className="popup-item-label">Add context</div>
                     <div className="popup-item-desc">
@@ -679,7 +716,9 @@ export function Composer(props: Props) {
                     onToggleMcp();
                   }}
                 >
-                  <span className="popup-item-icon"><Settings size={13} /></span>
+                  <span className="popup-item-icon">
+                    <Settings size={13} />
+                  </span>
                   <div>
                     <div className="popup-item-label">View tools</div>
                     <div className="popup-item-desc">

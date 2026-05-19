@@ -562,18 +562,18 @@ export default function App() {
 
   return (
     <div className={`app-shell ${mcpOpen ? "with-panel" : ""}`}>
+      {selfUpdate.showBanner && selfUpdate.status && (
+        <UpdateBanner
+          status={selfUpdate.status}
+          isPulling={selfUpdate.isPulling}
+          pullResult={selfUpdate.pullResult}
+          onPull={selfUpdate.pull}
+          onForcePull={selfUpdate.forcePull}
+          onOpenAiChat={handleOpenRebaseChat}
+          onDismiss={selfUpdate.dismiss}
+        />
+      )}
       <div className="app">
-        {selfUpdate.showBanner && selfUpdate.status && (
-          <UpdateBanner
-            status={selfUpdate.status}
-            isPulling={selfUpdate.isPulling}
-            pullResult={selfUpdate.pullResult}
-            onPull={selfUpdate.pull}
-            onForcePull={selfUpdate.forcePull}
-            onOpenAiChat={handleOpenRebaseChat}
-            onDismiss={selfUpdate.dismiss}
-          />
-        )}
         <header className="app-header">
           <h1>
             <span className="brand-dot" />
