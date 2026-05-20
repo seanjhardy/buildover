@@ -1,8 +1,8 @@
 /* ============================================================ */
-/* Market Panel                                                  */
+/* Market Panel — clean grey/orange theme                       */
 /* ============================================================ */
 
-/* ── Market panel ──────────────────────────────────────────────────────────── */
+/* ── Panel shell ── */
 
 .market-panel {
   flex: 1;
@@ -10,431 +10,789 @@
   flex-direction: column;
   min-height: 0;
   overflow: hidden;
-  background: #16110c;
+  background: var(--app-primary-background);
   position: relative;
 }
 
-/* ── Close button ── */
+/* ── Header ── */
+
+.market-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 42px;
+  padding: 0 10px 0 14px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: var(--app-primary-background);
+  gap: 10px;
+}
+
+.market-header-left {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex: 1;
+  min-width: 0;
+}
+
+.market-header-icon {
+  color: var(--app-claude-orange);
+  flex-shrink: 0;
+}
+
+.market-header-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+}
+
+.market-header-sep {
+  color: var(--app-primary-border-color);
+  font-size: 14px;
+}
+
+.market-header-subtitle {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.market-header-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.market-add-plugin-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border-radius: var(--corner-radius-medium);
+  border: none;
+  background: var(--app-claude-orange);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s;
+}
+
+.market-add-plugin-btn:hover {
+  background: var(--app-claude-clay-button-orange);
+}
+
 .market-close-btn {
-  position: absolute;
-  top: 10px;
-  right: 14px;
-  z-index: 20;
   display: flex;
   align-items: center;
   justify-content: center;
   width: 24px;
   height: 24px;
-  border: 1px solid #3a2818;
   border-radius: var(--corner-radius-small);
-  background: rgba(22, 17, 12, 0.92);
-  color: #7a6248;
+  border: 1px solid var(--app-primary-border-color);
+  background: transparent;
+  color: var(--app-secondary-foreground);
   cursor: pointer;
   transition: background 0.1s, color 0.1s;
 }
+
 .market-close-btn:hover {
-  background: #2a1e12;
-  color: #d0b898;
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
 }
 
-/* ── Awning ── */
-.market-awning-wrap {
+/* ── Toolbar ── */
+
+.market-toolbar {
   flex-shrink: 0;
-  position: relative;
-  line-height: 0;
-}
-.market-awning-svg {
-  width: 100%;
-  height: 150px;
-  display: block;
-}
-.market-awning-sign {
-  position: absolute;
-  inset: 0;
   display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 10px 0 0;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: var(--app-primary-background);
+  min-height: 38px;
+}
+
+.market-toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-left: auto;
+  flex-shrink: 0;
+}
+
+/* ── Tabs ── */
+
+.market-tabs {
+  display: flex;
+  align-items: stretch;
+  height: 100%;
+}
+
+.market-tab {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0 14px;
+  border: none;
+  border-bottom: 2px solid transparent;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.1s, border-color 0.1s;
+  white-space: nowrap;
+}
+
+.market-tab:hover {
+  color: var(--app-primary-foreground);
+}
+
+.market-tab.active {
+  color: var(--app-claude-orange);
+  border-bottom-color: var(--app-claude-orange);
+}
+
+.market-tab-badge {
+  display: inline-flex;
   align-items: center;
   justify-content: center;
-  pointer-events: none;
-}
-.market-awning-sign-inner {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 3px;
-  background: #1a1008;
-  border: 1.5px solid #4a3020;
-  border-radius: 5px;
-  padding: 8px 24px 9px;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 190, 120, 0.05),
-    0 2px 8px rgba(0, 0, 0, 0.5);
-}
-.market-awning-sign-title {
-  font-family: var(--app-chat-font-family);
-  font-size: 14px;
-  font-weight: 700;
-  letter-spacing: 0.35em;
-  color: #c4a472;
-  text-transform: uppercase;
-}
-.market-awning-sign-sub {
-  font-family: var(--app-monospace-font-family);
-  font-size: 9px;
-  letter-spacing: 0.25em;
-  color: #5a4030;
-  text-transform: uppercase;
-}
-
-/* ── Body layout ── */
-.market-body {
-  flex: 1;
-  display: flex;
-  min-height: 0;
-  overflow: hidden;
-}
-
-/* ── Owner pane ── */
-.market-owner-pane {
-  width: 228px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 14px 12px;
-  border-right: 1px solid #2a1c10;
-  background: #1c1510;
-  overflow-y: auto;
-  gap: 10px;
-}
-
-.market-owner-figure {
-  width: 80px;
-  flex-shrink: 0;
-}
-.market-owner-svg {
-  width: 80px;
-  height: 120px;
-  display: block;
-}
-
-/* ── Dialogue box ── */
-.market-dialogue-box {
-  width: 100%;
-  border: 1.5px solid #3a2818;
-  border-radius: var(--corner-radius-medium);
-  background: #201508;
-  padding: 10px 12px;
-  position: relative;
-}
-.market-dialogue-box::before {
-  content: "";
-  position: absolute;
-  top: -7px;
-  left: 50%;
-  transform: translateX(-50%);
-  width: 12px;
-  height: 7px;
-  background: #201508;
-  clip-path: polygon(0% 100%, 50% 0%, 100% 100%);
-}
-.market-dialogue-name {
-  font-family: var(--app-monospace-font-family);
-  font-size: 9px;
-  font-weight: 700;
-  color: #c4894a;
-  letter-spacing: 0.14em;
-  text-transform: uppercase;
-  margin-bottom: 6px;
-}
-.market-dialogue-text {
-  font-family: var(--app-monospace-font-family);
-  font-size: 11px;
-  line-height: 1.6;
-  color: #a08060;
-  margin: 0;
-}
-
-/* ── Dialogue choices ── */
-.market-dialogue-choices {
-  width: 100%;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.market-choice-btn {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  padding: 7px 10px;
-  border: 1.5px solid #2e2010;
-  border-radius: var(--corner-radius-small);
-  background: transparent;
-  color: #6a5038;
-  font-family: var(--app-monospace-font-family);
-  font-size: 11px;
-  cursor: pointer;
-  text-align: left;
-  transition: background 0.12s, border-color 0.12s, color 0.12s;
-}
-.market-choice-btn:hover {
-  background: #221808;
-  border-color: #4a3020;
-  color: #a08060;
-}
-.market-choice-btn.active {
-  border-color: #c4894a;
-  background: rgba(196, 137, 74, 0.1);
-  color: #c4894a;
-}
-.market-choice-btn.active .market-choice-arrow {
-  color: #c4894a;
-}
-.market-choice-arrow {
-  font-size: 8px;
-  color: #4a3828;
-  flex-shrink: 0;
-  transition: color 0.12s;
-}
-.market-choice-badge {
-  margin-left: auto;
-  background: #c4894a;
-  color: #100a04;
-  font-size: 9px;
-  font-weight: 700;
-  border-radius: 8px;
-  padding: 1px 5px;
   min-width: 16px;
-  text-align: center;
+  height: 16px;
+  padding: 0 4px;
+  border-radius: 8px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  font-size: 9px;
+  font-weight: 700;
 }
 
-/* ── Search (in owner pane) ── */
+/* ── Spinner ── */
+
+.market-spinner {
+  color: var(--app-secondary-foreground);
+  animation: market-spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+@keyframes market-spin {
+  to { transform: rotate(360deg); }
+}
+
+/* ── Search ── */
+
 .market-search-wrap {
   position: relative;
   display: flex;
   align-items: center;
-  width: 100%;
-  margin-top: 2px;
+  width: 240px;
 }
+
 .market-search-icon {
   position: absolute;
   left: 8px;
-  color: #5a4030;
+  color: var(--app-secondary-foreground);
   pointer-events: none;
 }
+
 .market-search-input {
   width: 100%;
-  padding: 7px 10px 7px 26px;
-  border: 1.5px solid #2e2010;
+  height: 26px;
+  padding: 0 10px 0 28px;
+  border: 1px solid var(--app-input-border);
   border-radius: var(--corner-radius-medium);
-  background: #201508;
-  color: #c4b090;
+  background: var(--app-input-background);
+  color: var(--app-input-foreground);
   font-size: 11px;
-  font-family: var(--app-monospace-font-family);
+  font-family: var(--app-chat-font-family);
   outline: none;
-  transition: border-color 0.12s;
+  transition: border-color 0.1s;
 }
+
 .market-search-input::placeholder {
-  color: #4a3828;
+  color: var(--app-input-placeholder-foreground);
 }
+
 .market-search-input:focus {
-  border-color: #7a5030;
+  border-color: var(--app-input-active-border);
 }
 
-/* ── Plant columns ── */
-.market-plant-col {
-  width: 68px;
-  flex-shrink: 0;
-  background: #16110c;
-  overflow: hidden;
-}
+/* ── Content area ── */
 
-/* ── Grid pane ── */
-.market-grid-pane {
+.market-content {
   flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-  background: #140f0a;
+  overflow-y: auto;
+  min-height: 0;
+}
+
+.market-content-inner {
+  padding: 14px 14px 24px;
 }
 
 /* ── Plugin grid ── */
+
 .market-grid {
-  flex: 1;
-  overflow-y: auto;
-  padding: 16px 14px;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
-  gap: 12px;
-  align-content: start;
+  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+  gap: 8px;
 }
 
-/* ── Plugin card — skeuomorphic warm style ── */
+/* ── Plugin card ── */
+
 .market-plugin-card {
   display: flex;
   flex-direction: column;
-  gap: 10px;
-  padding: 14px 15px 12px;
-  border: 1px solid #4a3018;
-  border-radius: 10px;
-  background: linear-gradient(165deg, #2e2010 0%, #241608 60%, #1e1206 100%);
-  box-shadow:
-    inset 0 1px 0 rgba(255, 190, 120, 0.07),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
-    0 1px 0 #0e0904,
-    0 4px 12px rgba(0, 0, 0, 0.5),
-    0 1px 3px rgba(0, 0, 0, 0.3);
-  transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s;
-  position: relative;
-}
-.market-plugin-card:hover {
-  transform: translateY(-2px);
-  border-color: #6a4828;
-  box-shadow:
-    inset 0 1px 0 rgba(255, 190, 120, 0.1),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.3),
-    0 2px 0 #0e0904,
-    0 8px 24px rgba(0, 0, 0, 0.55),
-    0 3px 6px rgba(0, 0, 0, 0.35);
-}
-.market-plugin-card.featured {
-  border-color: #5a3a20;
-}
-.market-plugin-card.installed {
-  border-color: rgba(120, 180, 100, 0.3);
-  box-shadow:
-    inset 0 1px 0 rgba(180, 255, 160, 0.05),
-    inset 0 -1px 0 rgba(0, 0, 0, 0.25),
-    0 1px 0 #0e0904,
-    0 4px 12px rgba(0, 0, 0, 0.5);
-}
-.market-plugin-card.installed:hover {
-  border-color: rgba(120, 180, 100, 0.5);
+  gap: 8px;
+  padding: 11px 12px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  background: var(--app-secondary-background);
+  transition: border-color 0.12s, background 0.12s;
 }
 
-.market-plugin-card-header {
+.market-plugin-card:hover {
+  border-color: #3c3c3c;
+  background: var(--app-list-hover-background);
+}
+
+.market-plugin-card.installed {
+  border-top: 2px solid rgba(137, 209, 133, 0.4);
+}
+
+.market-plugin-card-top {
   display: flex;
   align-items: flex-start;
-  gap: 10px;
+  gap: 9px;
 }
-.market-plugin-icon {
-  font-size: 22px;
-  line-height: 1;
+
+/* ── Plugin icon ── */
+
+.market-plugin-icon-img {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--corner-radius-small);
+  object-fit: contain;
   flex-shrink: 0;
-  width: 32px;
-  text-align: center;
+  background: rgba(255, 255, 255, 0.04);
 }
+
+.market-plugin-icon-fallback {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--corner-radius-small);
+  background: rgba(217, 119, 87, 0.12);
+  border: 1px solid rgba(217, 119, 87, 0.2);
+  color: var(--app-claude-orange);
+  font-size: 13px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  line-height: 1;
+  font-family: var(--app-chat-font-family);
+}
+
+/* ── Plugin meta ── */
+
 .market-plugin-meta {
   flex: 1;
   min-width: 0;
 }
+
+.market-plugin-name-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+}
+
 .market-plugin-name {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 600;
-  color: #d0b898;
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+
+.market-plugin-verified {
+  color: #5b9bd5;
+  flex-shrink: 0;
+}
+
+.market-plugin-check {
+  color: var(--app-success);
+  flex-shrink: 0;
+}
+
+.market-plugin-author {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  margin-top: 1px;
+  display: block;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.market-plugin-author {
-  font-size: 10px;
-  color: #6a5038;
-  margin-top: 2px;
-}
-.market-plugin-installed-badge {
-  color: #78b464;
-  flex-shrink: 0;
+
+.market-plugin-ext-link {
   display: flex;
   align-items: center;
+  color: #444;
+  flex-shrink: 0;
+  transition: color 0.1s;
+  padding: 2px;
+  margin-top: 1px;
 }
+
+.market-plugin-ext-link:hover {
+  color: var(--app-secondary-foreground);
+}
+
+/* ── Plugin description ── */
+
 .market-plugin-description {
   margin: 0;
   font-size: 11px;
   line-height: 1.55;
-  color: #7a6048;
+  color: var(--app-secondary-foreground);
   flex: 1;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
 }
+
+/* ── Plugin footer ── */
+
 .market-plugin-footer {
   display: flex;
   align-items: center;
   gap: 6px;
-  padding-top: 4px;
-  border-top: 1px solid #2a1c0e;
+  padding-top: 6px;
+  border-top: 1px solid var(--app-primary-border-color);
 }
+
 .market-plugin-stats {
   display: flex;
   align-items: center;
   gap: 8px;
   margin-right: auto;
 }
+
 .market-plugin-stats span {
   display: flex;
   align-items: center;
   gap: 3px;
   font-size: 10px;
-  color: #4a3828;
+  color: #555;
 }
+
+/* ── Install / Remove buttons ── */
+
 .market-plugin-btn {
-  padding: 4px 11px;
+  padding: 3px 10px;
   border-radius: var(--corner-radius-small);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
-  transition: background 0.12s, color 0.12s, border-color 0.12s;
   border: 1px solid transparent;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
   flex-shrink: 0;
 }
+
 .market-plugin-btn.install {
-  background: rgba(196, 137, 74, 0.12);
-  border-color: rgba(196, 137, 74, 0.35);
-  color: #c4894a;
-}
-.market-plugin-btn.install:hover {
-  background: rgba(196, 137, 74, 0.22);
-  border-color: #c4894a;
-}
-.market-plugin-btn.remove {
-  background: rgba(120, 180, 100, 0.07);
-  border-color: rgba(120, 180, 100, 0.2);
-  color: #5a7848;
-}
-.market-plugin-btn.remove:hover {
-  background: rgba(244, 120, 100, 0.1);
-  border-color: rgba(244, 120, 100, 0.35);
-  color: #e47860;
+  background: rgba(217, 119, 87, 0.12);
+  border-color: rgba(217, 119, 87, 0.3);
+  color: var(--app-claude-orange);
 }
 
-/* ── Empty / end states ── */
+.market-plugin-btn.install:hover {
+  background: rgba(217, 119, 87, 0.22);
+  border-color: var(--app-claude-orange);
+}
+
+.market-plugin-btn.remove {
+  background: rgba(137, 209, 133, 0.07);
+  border-color: rgba(137, 209, 133, 0.2);
+  color: var(--app-success);
+}
+
+.market-plugin-btn.remove:hover {
+  background: rgba(244, 135, 113, 0.1);
+  border-color: rgba(244, 135, 113, 0.3);
+  color: var(--app-error);
+}
+
+/* ── Skeleton loading cards ── */
+
+.market-skeleton-card {
+  pointer-events: none;
+}
+
+.market-skel {
+  border-radius: var(--corner-radius-small);
+  background: linear-gradient(
+    90deg,
+    #2a2a2a 25%,
+    #333333 50%,
+    #2a2a2a 75%
+  );
+  background-size: 200% 100%;
+  animation: market-shimmer 1.4s ease infinite;
+}
+
+@keyframes market-shimmer {
+  0%   { background-position: 200% center; }
+  100% { background-position: -200% center; }
+}
+
+.market-skel-icon {
+  width: 28px;
+  height: 28px;
+  border-radius: var(--corner-radius-small);
+  flex-shrink: 0;
+}
+
+.market-skel-title {
+  height: 11px;
+  width: 60%;
+  margin-bottom: 5px;
+}
+
+.market-skel-author {
+  height: 9px;
+  width: 40%;
+}
+
+.market-skel-desc {
+  height: 9px;
+  width: 100%;
+}
+
+.market-skel-desc--short {
+  width: 70%;
+}
+
+/* ── Empty & end states ── */
+
 .market-empty {
-  grid-column: 1 / -1;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 12px;
+  gap: 10px;
   padding: 60px 20px;
-  color: #4a3828;
+  color: var(--app-secondary-foreground);
 }
+
 .market-empty p {
   margin: 0;
   font-size: 13px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
 }
+
+.market-empty-cta {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 14px;
+  border-radius: var(--corner-radius-medium);
+  border: 1px solid rgba(217, 119, 87, 0.3);
+  background: rgba(217, 119, 87, 0.1);
+  color: var(--app-claude-orange);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.1s, border-color 0.1s;
+  margin-top: 4px;
+}
+
+.market-empty-cta:hover {
+  background: rgba(217, 119, 87, 0.18);
+  border-color: var(--app-claude-orange);
+}
+
 .market-sentinel {
-  grid-column: 1 / -1;
   height: 1px;
+  margin: 8px 0;
 }
+
 .market-end {
-  grid-column: 1 / -1;
   text-align: center;
   padding: 20px;
-  font-size: 11px;
+  font-size: 10px;
   font-family: var(--app-monospace-font-family);
-  color: #3a2818;
-  letter-spacing: 0.1em;
+  color: #444;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* ── Add plugin view ── */
+
+.market-add-view {
+  flex: 1;
+  overflow-y: auto;
+  padding: 20px 20px 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+}
+
+.market-add-header {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.market-back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  cursor: pointer;
+  transition: color 0.1s;
+  align-self: flex-start;
+  margin-bottom: 4px;
+}
+
+.market-back-btn:hover {
+  color: var(--app-primary-foreground);
+}
+
+.market-add-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.market-add-subtitle {
+  margin: 0;
+  font-size: 12px;
+  color: var(--app-secondary-foreground);
+  line-height: 1.55;
+}
+
+.market-add-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.market-add-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--app-primary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.07em;
+}
+
+.market-add-hint {
+  margin: 0;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  line-height: 1.5;
+}
+
+.market-add-hint code {
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  background: rgba(255, 255, 255, 0.06);
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: var(--app-primary-foreground);
+}
+
+/* ── URL input row ── */
+
+.market-url-row {
+  display: flex;
+  gap: 8px;
+}
+
+.market-url-input-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+  align-items: center;
+}
+
+.market-url-icon {
+  position: absolute;
+  left: 10px;
+  color: var(--app-secondary-foreground);
+  pointer-events: none;
+}
+
+.market-url-input {
+  width: 100%;
+  height: 32px;
+  padding: 0 12px 0 30px;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-input-background);
+  color: var(--app-input-foreground);
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  outline: none;
+  transition: border-color 0.1s;
+}
+
+.market-url-input::placeholder {
+  color: var(--app-input-placeholder-foreground);
+  font-family: var(--app-chat-font-family);
+}
+
+.market-url-input:focus {
+  border-color: var(--app-input-active-border);
+}
+
+.market-fetch-btn {
+  flex-shrink: 0;
+  padding: 0 16px;
+  height: 32px;
+  border-radius: var(--corner-radius-medium);
+  border: none;
+  background: var(--app-claude-orange);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+}
+
+.market-fetch-btn:hover:not(:disabled) {
+  background: var(--app-claude-clay-button-orange);
+}
+
+.market-fetch-btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.market-url-feedback {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  font-size: 11px;
+}
+
+.market-url-feedback--error { color: var(--app-error); }
+.market-url-feedback--success { color: var(--app-success); }
+
+/* ── Registry grid ── */
+
+.market-registry-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 8px;
+}
+
+.market-registry-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  background: var(--app-secondary-background);
+  text-decoration: none;
+  transition: border-color 0.12s, background 0.12s;
+  cursor: pointer;
+}
+
+.market-registry-card:hover {
+  border-color: rgba(217, 119, 87, 0.4);
+  background: var(--app-list-hover-background);
+}
+
+.market-registry-icon {
+  font-size: 18px;
+  flex-shrink: 0;
+}
+
+.market-registry-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.market-registry-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.market-registry-desc {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.market-registry-link-icon {
+  color: var(--app-secondary-foreground);
+  flex-shrink: 0;
+}
+
+/* ── Plugin type explainer cards ── */
+
+.market-type-cards {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.market-type-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 11px 13px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  background: var(--app-secondary-background);
+}
+
+.market-type-icon {
+  color: var(--app-claude-orange);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+
+.market-type-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  margin-bottom: 3px;
+}
+
+.market-type-desc {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  line-height: 1.5;
 }
 
 /* ── Market tab in repo-tabs ── */
+
 .repo-tab--market {
   border-left: 1px solid var(--app-primary-border-color);
   margin-left: 4px;
