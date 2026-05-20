@@ -1,0 +1,10 @@
+[
+  {
+    "id": "github",
+    "name": "GitHub",
+    "description": "Connect your AI agents to GitHub — manage repos, issues, PRs, workflows, and more",
+    "type": "http",
+    "url": "https://server.smithery.ai/github",
+    "headers": {}
+  }
+]

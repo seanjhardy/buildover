@@ -35,6 +35,14 @@ import {
   gitFileDiff,
   gitLog,
   gitCreateBranch,
+  gitCherryPick,
+  gitRevert,
+  gitMerge,
+  gitRebase,
+  gitReset,
+  gitDeleteBranch,
+  gitCommitDiffStat,
+  gitCommitFileDiff,
 } from "./git.js";
 import {
   readDashboard,
@@ -53,6 +61,11 @@ import {
   startScheduler,
 } from "./schedules.js";
 import { attachTerminalWss } from "./terminal.js";
+import {
+  readInstalledServers,
+  writeInstalledServers,
+} from "./mcp-config.js";
+import type { InstalledMcpServer } from "../src/types.js";
 import { searchMessages, removeIndexedChat, getIndexStatus } from "./embeddings.js";
 import {
   checkForUpdates,
@@ -530,6 +543,156 @@ app.get("/api/git/diff-stat", async (req, res) => {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+});
+
+// ---- Installed MCP servers ----
+
+app.get("/api/mcp-servers", (_req, res) => {
+  res.json(readInstalledServers());
+});
+
+app.post("/api/mcp-servers", (req, res) => {
+  const entry = req.body as InstalledMcpServer;
+  if (!entry?.id || !entry?.type) {
+    return res.status(400).json({ error: "id and type are required" });
+  }
+  const servers = readInstalledServers();
+  const idx = servers.findIndex((s) => s.id === entry.id);
+  if (idx >= 0) servers[idx] = entry;
+  else servers.push(entry);
+  writeInstalledServers(servers);
+  res.json({ ok: true });
+});
+
+app.delete("/api/mcp-servers", (req, res) => {
+  const id = String(req.query.id ?? "");
+  if (!id) return res.status(400).json({ error: "id required" });
+  writeInstalledServers(readInstalledServers().filter((s) => s.id !== id));
+  res.json({ ok: true });
+});
+
+// ---- MCP server config ----
+
+app.get("/api/mcp-servers", (_req, res) => {
+  res.json(readInstalledServers());
+});
+
+app.post("/api/mcp-servers", (req, res) => {
+  const entry = req.body as InstalledMcpServer;
+  if (!entry?.id || !entry?.type) {
+    return res.status(400).json({ error: "id and type are required" });
+  }
+  const servers = readInstalledServers();
+  const idx = servers.findIndex((s) => s.id === entry.id);
+  if (idx >= 0) servers[idx] = entry;
+  else servers.push(entry);
+  writeInstalledServers(servers);
+  res.json({ ok: true });
+});
+
+app.delete("/api/mcp-servers/:id", (req, res) => {
+  const id = decodeURIComponent(req.params.id);
+  writeInstalledServers(readInstalledServers().filter((s) => s.id !== id));
+  res.json({ ok: true });
+});
+
+app.post("/api/git/cherry-pick", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const hash = String(req.body?.hash ?? "");
+    if (!hash) throw new Error("hash required");
+    await gitCherryPick(repoPath, hash);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/git/revert", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const hash = String(req.body?.hash ?? "");
+    if (!hash) throw new Error("hash required");
+    await gitRevert(repoPath, hash);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/git/merge", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const ref = String(req.body?.ref ?? "");
+    if (!ref) throw new Error("ref required");
+    await gitMerge(repoPath, ref);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/git/rebase", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const onto = String(req.body?.onto ?? "");
+    if (!onto) throw new Error("onto required");
+    await gitRebase(repoPath, onto);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/git/reset", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const hash = String(req.body?.hash ?? "");
+    const mode = (req.body?.mode ?? "mixed") as "soft" | "mixed" | "hard";
+    if (!hash) throw new Error("hash required");
+    await gitReset(repoPath, hash, mode);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.delete("/api/git/branch", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const name = String(req.body?.name ?? "").trim();
+    if (!name) throw new Error("name required");
+    await gitDeleteBranch(repoPath, name);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/git/commit-diff", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const hash = String(req.query.hash ?? "");
+    if (!hash) throw new Error("hash required");
+    const files = await gitCommitDiffStat(repoPath, hash);
+    res.json({ files });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/git/commit-file-diff", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const hash = String(req.query.hash ?? "");
+    const file = String(req.query.file ?? "");
+    if (!hash) throw new Error("hash required");
+    if (!file) throw new Error("file required");
+    const diff = await gitCommitFileDiff(repoPath, hash, file);
+    res.json({ diff });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 

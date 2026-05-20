@@ -538,6 +538,341 @@
   text-transform: uppercase;
 }
 
+/* ── Installed list (detailed rows) ── */
+
+.market-installed-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.market-installed-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--app-primary-border-color);
+  border-top: 2px solid rgba(137, 209, 133, 0.4);
+  border-radius: var(--corner-radius-large);
+  background: var(--app-secondary-background);
+}
+
+.market-installed-row-left {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+}
+
+.market-installed-icon {
+  font-size: 12px !important;
+  width: 28px !important;
+  height: 28px !important;
+}
+
+.market-installed-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.market-installed-name {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.market-installed-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+}
+
+.market-installed-type {
+  font-size: 9px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  flex-shrink: 0;
+}
+
+.market-installed-type--stdio {
+  background: rgba(217, 119, 87, 0.12);
+  color: var(--app-claude-orange);
+}
+
+.market-installed-type--sse,
+.market-installed-type--http {
+  background: rgba(91, 155, 213, 0.12);
+  color: #5b9bd5;
+}
+
+.market-installed-detail {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* ── Configure & install view ── */
+
+.market-cfg-wrap {
+  padding: 16px 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.market-cfg-view {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  margin-top: 12px;
+}
+
+.market-cfg-plugin-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.market-cfg-plugin-name {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.market-cfg-plugin-author {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  margin-top: 2px;
+}
+
+.market-cfg-plugin-desc {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--app-secondary-foreground);
+}
+
+.market-cfg-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.market-cfg-type-row {
+  display: flex;
+  gap: 6px;
+}
+
+.market-cfg-type-btn {
+  padding: 4px 14px;
+  border-radius: var(--corner-radius-medium);
+  border: 1px solid var(--app-primary-border-color);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  font-family: var(--app-monospace-font-family);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s, border-color 0.1s;
+}
+
+.market-cfg-type-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.market-cfg-type-btn.active {
+  background: rgba(217, 119, 87, 0.14);
+  border-color: rgba(217, 119, 87, 0.4);
+  color: var(--app-claude-orange);
+}
+
+.market-cfg-hint-inline {
+  font-weight: 400;
+  color: var(--app-secondary-foreground);
+  text-transform: none;
+  letter-spacing: 0;
+  font-size: 10px;
+}
+
+.market-cfg-input {
+  width: 100%;
+  height: 30px;
+  padding: 0 10px;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-input-background);
+  color: var(--app-input-foreground);
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  outline: none;
+  transition: border-color 0.1s;
+  box-sizing: border-box;
+}
+
+.market-cfg-input::placeholder {
+  color: var(--app-input-placeholder-foreground);
+}
+
+.market-cfg-input:focus {
+  border-color: var(--app-input-active-border);
+}
+
+.market-cfg-textarea {
+  width: 100%;
+  padding: 7px 10px;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-input-background);
+  color: var(--app-input-foreground);
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  outline: none;
+  resize: vertical;
+  transition: border-color 0.1s;
+  box-sizing: border-box;
+  line-height: 1.6;
+}
+
+.market-cfg-textarea::placeholder {
+  color: var(--app-input-placeholder-foreground);
+}
+
+.market-cfg-textarea:focus {
+  border-color: var(--app-input-active-border);
+}
+
+/* ── KV editor ── */
+
+.market-kv-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.market-kv-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.market-kv-add-btn {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 8px;
+  border-radius: var(--corner-radius-small);
+  border: 1px solid var(--app-primary-border-color);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.market-kv-add-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.market-kv-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.market-kv-row {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.market-kv-row .market-cfg-input {
+  flex: 1;
+}
+
+.market-kv-del-btn {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--corner-radius-small);
+  border: 1px solid var(--app-primary-border-color);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.market-kv-del-btn:hover {
+  background: rgba(244, 135, 113, 0.1);
+  border-color: rgba(244, 135, 113, 0.3);
+  color: var(--app-error);
+}
+
+/* ── Config actions ── */
+
+.market-cfg-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+  border-top: 1px solid var(--app-primary-border-color);
+}
+
+.market-cfg-cancel-btn {
+  padding: 5px 14px;
+  border-radius: var(--corner-radius-medium);
+  border: 1px solid var(--app-primary-border-color);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.market-cfg-cancel-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.market-cfg-install-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 16px;
+  border-radius: var(--corner-radius-medium);
+  border: none;
+  background: var(--app-claude-orange);
+  color: #fff;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.1s, opacity 0.1s;
+}
+
+.market-cfg-install-btn:hover:not(:disabled) {
+  background: var(--app-claude-clay-button-orange);
+}
+
+.market-cfg-install-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 /* ── Add plugin view ── */
 
 .market-add-view {

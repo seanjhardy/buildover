@@ -3,6 +3,7 @@ import {
   createCustomToolsServer,
   type RequestAttentionAck,
 } from "./customTools.js";
+import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
 import type {
   AgentEvent,
   Attachment,
@@ -165,6 +166,9 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       // knows about them and routes them through canUseTool → requestPermission.
       mcpServers: {
         "buildover-custom-tools": customToolsServer,
+        // User-installed servers from mcp-servers.json — re-read on every
+        // turn so installs/removals take effect without a server restart.
+        ...toSdkMcpConfig(readInstalledServers()),
       },
     },
   });

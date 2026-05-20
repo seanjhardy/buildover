@@ -88,7 +88,14 @@ export default function App() {
   const [mcpOpen, setMcpOpen] = useState(false);
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
-  const [gitGraphOpen, setGitGraphOpen] = useState(false);
+  // Per-repo git graph open state — preserves view when switching repos
+  const [gitGraphOpenByRepo, setGitGraphOpenByRepo] = useState<Record<string, boolean>>({});
+  const gitGraphOpen = activeRepo ? (gitGraphOpenByRepo[activeRepo.path] ?? false) : false;
+  const setGitGraphOpen = useCallback((open: boolean) => {
+    const path = activeRepo?.path;
+    if (!path) return;
+    setGitGraphOpenByRepo((prev) => ({ ...prev, [path]: open }));
+  }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [marketOpen, setMarketOpen] = useState(false);
   const [homeOpen, setHomeOpen] = useState(false);
   // File viewer: null = hidden, FileEntry = open
@@ -420,8 +427,9 @@ export default function App() {
 
   const handleSelectChat = useCallback((id: string) => {
     setOpenFile(null);
+    setGitGraphOpen(false); // clicking a chat always exits the git graph
     workspace.setActiveChat(id);
-  }, [workspace]);
+  }, [workspace, setGitGraphOpen]);
 
   const handleToggleFinished = useCallback((id: string, finished: boolean) => {
     void chats.setUserFinished(id, finished);
@@ -495,10 +503,7 @@ export default function App() {
     }
   }, [selfUpdate.status?.localDiff, workspace, model, permissionMode]);
 
-  // Close the git graph when the active repo changes
-  useEffect(() => {
-    setGitGraphOpen(false);
-  }, [activeRepo?.path]);
+  // (git graph open state is now per-repo, no reset needed on repo change)
 
 
   const handleGitCheckout = useCallback(
@@ -717,7 +722,7 @@ export default function App() {
             {/* Sidebar stays fixed — only workspace-panels (chat-pane) slides */}
             <ChatSidebar
               chats={chats.chats}
-              activeChatId={activeChatId}
+              activeChatId={gitGraphOpen ? null : activeChatId}
               onSelect={handleSelectChat}
               onCreate={handleCreateChat}
               onToggleFinished={handleToggleFinished}

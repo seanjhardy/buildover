@@ -46,6 +46,25 @@ export interface McpServerInfo {
   status: string;
 }
 
+// ---- User-installed MCP servers (persisted to mcp-servers.json) ----
+
+export type McpServerType = "stdio" | "sse" | "http";
+
+export interface InstalledMcpServer {
+  /** Unique stable ID — use Smithery qualifiedName or any slug */
+  id: string;
+  name: string;
+  description?: string;
+  type: McpServerType;
+  // stdio
+  command?: string;
+  args?: string[];
+  env?: Record<string, string>;
+  // sse / http
+  url?: string;
+  headers?: Record<string, string>;
+}
+
 // ---- Chats / repos ----
 
 export type ChatStatus =

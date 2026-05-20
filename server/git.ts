@@ -256,6 +256,79 @@ export async function gitDiffStat(
   return stats;
 }
 
+export async function gitCherryPick(repoPath: string, hash: string): Promise<void> {
+  await execFileAsync("git", ["cherry-pick", hash], { cwd: repoPath });
+}
+
+export async function gitRevert(repoPath: string, hash: string): Promise<void> {
+  await execFileAsync("git", ["revert", "--no-edit", hash], { cwd: repoPath });
+}
+
+export async function gitMerge(repoPath: string, ref: string): Promise<void> {
+  await execFileAsync("git", ["merge", ref], { cwd: repoPath });
+}
+
+export async function gitRebase(repoPath: string, onto: string): Promise<void> {
+  await execFileAsync("git", ["rebase", onto], { cwd: repoPath });
+}
+
+export async function gitReset(
+  repoPath: string,
+  hash: string,
+  mode: "soft" | "mixed" | "hard" = "mixed",
+): Promise<void> {
+  await execFileAsync("git", ["reset", `--${mode}`, hash], { cwd: repoPath });
+}
+
+export async function gitDeleteBranch(repoPath: string, name: string): Promise<void> {
+  await execFileAsync("git", ["branch", "-d", name], { cwd: repoPath });
+}
+
+export interface CommitDiffFile {
+  filename: string;
+  added: number;
+  removed: number;
+}
+
+/** Returns the list of files changed in a specific commit with +/- stats. */
+export async function gitCommitDiffStat(
+  repoPath: string,
+  hash: string,
+): Promise<CommitDiffFile[]> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["show", "--numstat", "--format=", hash],
+    { cwd: repoPath },
+  );
+  return stdout
+    .trim()
+    .split("\n")
+    .filter(Boolean)
+    .map((line) => {
+      const parts = line.split("\t");
+      return {
+        filename: parts[2] ?? "",
+        added:    parts[0] === "-" ? 0 : parseInt(parts[0] ?? "0", 10) || 0,
+        removed:  parts[1] === "-" ? 0 : parseInt(parts[1] ?? "0", 10) || 0,
+      };
+    })
+    .filter((f) => f.filename);
+}
+
+/** Returns the raw unified diff for a single file in a specific commit. */
+export async function gitCommitFileDiff(
+  repoPath: string,
+  hash: string,
+  file: string,
+): Promise<string> {
+  const { stdout } = await execFileAsync(
+    "git",
+    ["show", "--unified=3", hash, "--", file],
+    { cwd: repoPath, maxBuffer: 10 * 1024 * 1024 },
+  );
+  return stdout;
+}
+
 export interface FileDiffResult {
   /** Sorted new-file line numbers that are additions */
   addedLines: number[];

@@ -221,6 +221,12 @@ export interface FileDiffStat {
   removed: number;
 }
 
+export interface CommitDiffFile {
+  filename: string;
+  added: number;
+  removed: number;
+}
+
 export const fileApi = {
   readFile: (filePath: string) =>
     getJson<{ content: string }>(
@@ -271,6 +277,34 @@ export const gitApi = {
 
   createBranch: (repoPath: string, name: string, fromHash?: string) =>
     send<{ ok: boolean }>("POST", `/api/git/branch`, { repoPath, name, fromHash }),
+
+  deleteBranch: (repoPath: string, name: string) =>
+    send<{ ok: boolean }>("DELETE", `/api/git/branch`, { repoPath, name }),
+
+  cherryPick: (repoPath: string, hash: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/cherry-pick`, { repoPath, hash }),
+
+  revert: (repoPath: string, hash: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/revert`, { repoPath, hash }),
+
+  merge: (repoPath: string, ref: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/merge`, { repoPath, ref }),
+
+  rebase: (repoPath: string, onto: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/rebase`, { repoPath, onto }),
+
+  reset: (repoPath: string, hash: string, mode: "soft" | "mixed" | "hard") =>
+    send<{ ok: boolean }>("POST", `/api/git/reset`, { repoPath, hash, mode }),
+
+  getCommitDiff: (repoPath: string, hash: string) =>
+    getJson<{ files: CommitDiffFile[] }>(
+      `/api/git/commit-diff?repoPath=${encodeURIComponent(repoPath)}&hash=${encodeURIComponent(hash)}`,
+    ).then((r) => r.files),
+
+  getCommitFileDiff: (repoPath: string, hash: string, file: string) =>
+    getJson<{ diff: string }>(
+      `/api/git/commit-file-diff?repoPath=${encodeURIComponent(repoPath)}&hash=${encodeURIComponent(hash)}&file=${encodeURIComponent(file)}`,
+    ).then((r) => r.diff),
 };
 
 // ── Self-update ────────────────────────────────────────────────────────────────

@@ -371,6 +371,30 @@
 
 /* ---- Git Graph View (full-page) ---- */
 
+/* ---- Op error banner ---- */
+.ggraph-op-error {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 14px;
+  background: rgba(224, 49, 49, 0.15);
+  border-bottom: 1px solid rgba(224, 49, 49, 0.35);
+  color: #ff8080;
+  font-size: 11px;
+  flex-shrink: 0;
+  gap: 8px;
+}
+.ggraph-op-error-close {
+  background: transparent;
+  border: 0;
+  color: inherit;
+  cursor: pointer;
+  flex-shrink: 0;
+  opacity: 0.7;
+  font-size: 12px;
+}
+.ggraph-op-error-close:hover { opacity: 1; }
+
 .git-graph-view {
   display: flex;
   flex-direction: column;
@@ -392,24 +416,6 @@
   flex-shrink: 0;
 }
 
-.ggraph-back-btn {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-  padding: 4px 8px;
-  background: transparent;
-  border: 1px solid var(--app-input-border);
-  border-radius: var(--corner-radius-small);
-  color: var(--app-secondary-foreground);
-  font-size: 11px;
-  transition: background 80ms, color 80ms, border-color 80ms;
-  flex-shrink: 0;
-}
-.ggraph-back-btn:hover {
-  background: var(--app-list-hover-background);
-  border-color: var(--app-input-active-border);
-  color: var(--app-primary-foreground);
-}
 
 .ggraph-toolbar-title {
   display: flex;
@@ -500,7 +506,7 @@
   animation: ggraph-spin 0.7s linear infinite;
 }
 
-/* Body layout */
+/* ── Body / scroll layout ── */
 .git-graph-body {
   display: flex;
   flex: 1;
@@ -508,193 +514,177 @@
   overflow: hidden;
 }
 
-.git-graph-main {
+/* Full-width scroll container — tree + resize + rows side-by-side */
+.git-graph-scroll {
   display: flex;
-  flex-direction: column;
   flex: 1;
-  min-width: 0;
-  max-width: 100%;
-  overflow: hidden;
+  min-height: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  align-items: flex-start; /* children are their natural height so SVG and rows stay in sync */
 }
 
-/* Column header */
-.git-graph-cols-header {
+/* ── Column header (pinned above scroll) ── */
+.git-graph-col-header {
   display: flex;
   align-items: center;
-  padding: 0 0 0 8px;
+  height: 28px;
+  flex-shrink: 0;
   border-bottom: 1px solid var(--app-primary-border-color);
   background: var(--app-secondary-background);
-  flex-shrink: 0;
   user-select: none;
 }
 
-.ggraph-col-graph {
+/* ── Tree section ── */
+.git-graph-tree {
   flex-shrink: 0;
-}
-
-.ggraph-col-hash {
-  width: 52px;
-  flex-shrink: 0;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--app-secondary-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.ggraph-col-refs {
-  width: 120px;
-  flex-shrink: 0;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--app-secondary-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.ggraph-col-subject {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--app-secondary-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.ggraph-col-author {
-  width: 110px;
-  flex-shrink: 0;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--app-secondary-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.ggraph-col-date {
-  width: 80px;
-  flex-shrink: 0;
-  padding: 4px 6px;
-  font-size: 10px;
-  font-weight: 600;
-  color: var(--app-secondary-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-/* Graph canvas + rows scroll together */
-.git-graph-canvas {
-  display: flex;
-  flex: 1;
-  overflow-y: auto;
-  overflow-x: auto;
-  min-height: 0;
-  min-width: 0;
-  position: relative;
+  /* overflow: hidden prevents the SVG from creating an independent scroll context.
+     The parent .git-graph-scroll handles all vertical scrolling so tree + rows
+     always scroll in lockstep. */
+  overflow: hidden;
+  background: rgba(255,255,255,0.025);
 }
 
 .git-graph-svg {
-  flex-shrink: 0;
-  position: sticky;
-  left: 0;
-  z-index: 1;
-  pointer-events: none;
+  display: block;
 }
 
+/* ── Resize handle ── */
+.git-graph-resize-handle {
+  flex-shrink: 0;
+  align-self: stretch;
+  cursor: ew-resize;
+  background: var(--app-primary-border-color);
+  transition: background 100ms;
+  position: relative;
+}
+.git-graph-resize-handle:hover,
+.git-graph-resize-handle:active {
+  background: var(--app-input-active-border);
+}
+
+/* ── Rows section ── */
 .git-graph-rows {
   flex: 1;
-  min-width: 600px;
+  min-width: 0;
 }
 
-/* Commit row */
+/* ── Column header labels ── */
+.ggraph-col-subject {
+  flex: 1;
+  min-width: 0;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ggraph-col-author {
+  width: 120px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ggraph-col-date {
+  width: 80px;
+  flex-shrink: 0;
+  padding: 0 8px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+/* ── Commit rows ── */
+.ggraph-row-wrap { display: flex; flex-direction: column; }
+.ggraph-row-wrap--expanded { background: rgba(255,255,255,0.02); }
+
 .git-graph-row {
   display: flex;
   align-items: center;
-  height: 34px;
   cursor: pointer;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.03);
+  /* NO border-bottom — solid surface */
   transition: background 60ms;
   user-select: none;
+  gap: 0;
 }
-.git-graph-row:hover {
-  background: var(--app-list-hover-background);
-}
-.git-graph-row--selected {
-  background: rgba(217, 119, 87, 0.1) !important;
-}
-.git-graph-row--head {
-  background: rgba(217, 119, 87, 0.04);
-}
+.git-graph-row:hover { background: var(--app-list-hover-background); }
+.git-graph-row--selected { background: rgba(255,255,255,0.06) !important; }
+.git-graph-row--head { background: rgba(255,255,255,0.03); }
 
-.ggraph-hash {
-  width: 52px;
-  flex-shrink: 0;
-  padding: 0 6px;
-  font-family: var(--app-monospace-font-family);
-  font-size: 10px;
-  color: var(--app-secondary-foreground);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.ggraph-refs {
-  width: 120px;
-  flex-shrink: 0;
-  padding: 0 4px;
+/* Combined refs + message cell */
+.ggraph-refs-msg {
+  flex: 1;
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 3px;
+  flex-wrap: nowrap;
+  gap: 4px;
   overflow: hidden;
+  padding: 0 4px;
 }
 
-.ggraph-badge {
+/* ── Branch / ref pills ── */
+.ggraph-ref-pill {
   display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  padding: 1px 5px;
-  border-radius: 3px;
-  font-size: 9px;
+  align-items: stretch;
+  border-radius: 4px;
+  font-size: 10px;
   font-family: var(--app-monospace-font-family);
-  font-weight: 600;
-  line-height: 1.5;
-  flex-shrink: 0;
-  max-width: 108px;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-weight: 500;
   white-space: nowrap;
-  border: 1px solid transparent;
-}
-.ggraph-badge--head {
-  background: rgba(217, 119, 87, 0.2);
-  color: var(--app-claude-orange);
-  border-color: rgba(217, 119, 87, 0.45);
-}
-.ggraph-badge--local {
-  background: rgba(100, 160, 255, 0.15);
-  color: #7eb8ff;
-  border-color: rgba(100, 160, 255, 0.3);
-}
-.ggraph-badge--remote {
-  background: rgba(137, 209, 133, 0.12);
-  color: var(--app-success);
-  border-color: rgba(137, 209, 133, 0.25);
-}
-.ggraph-badge--tag {
-  background: rgba(204, 167, 0, 0.12);
-  color: var(--app-warning);
-  border-color: rgba(204, 167, 0, 0.25);
+  flex-shrink: 0;
+  overflow: hidden;
+  background: rgba(255,255,255,0.06);
+  color: #fff;
+  cursor: default;
+  line-height: 1;
 }
 
+/* Coloured icon strip — full height */
+.ggraph-ref-pill-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 5px;
+  align-self: stretch;
+  flex-shrink: 0;
+}
+
+/* Branch name text */
+.ggraph-ref-pill-text {
+  padding: 3px 6px 3px 5px;
+  color: rgba(255,255,255,0.9);
+}
+
+/* Thin divider before remote name */
+.ggraph-ref-pill-divider {
+  width: 1px;
+  background: rgba(255,255,255,0.15);
+  margin: 3px 0;
+  flex-shrink: 0;
+}
+
+/* "origin" italic suffix */
+.ggraph-ref-pill-remote {
+  padding: 3px 6px;
+  color: rgba(255,255,255,0.5);
+  font-style: italic;
+  font-size: 9px;
+  align-self: center;
+}
+
+/* Subject — inside the combined refs+msg cell; shrinks to let pills show */
 .ggraph-subject {
   flex: 1;
   min-width: 0;
-  padding: 0 6px;
+  padding: 0 4px;
   font-size: 12px;
   color: var(--app-primary-foreground);
   overflow: hidden;
@@ -702,10 +692,11 @@
   white-space: nowrap;
 }
 
+/* Author */
 .ggraph-author {
-  width: 110px;
+  width: 120px;
   flex-shrink: 0;
-  padding: 0 6px;
+  padding: 0 8px;
   font-size: 11px;
   color: var(--app-secondary-foreground);
   overflow: hidden;
@@ -713,16 +704,98 @@
   white-space: nowrap;
 }
 
+/* Date */
 .ggraph-date {
   width: 80px;
   flex-shrink: 0;
-  padding: 0 6px;
+  padding: 0 8px;
   font-size: 10px;
   color: var(--app-secondary-foreground);
   white-space: nowrap;
 }
 
-/* Footer */
+/* ── Expanded diff panel ── */
+.ggraph-diff-wrap {
+  display: flex;
+  overflow: hidden;
+  border-top: 1px solid rgba(255,255,255,0.06);
+  border-bottom: 1px solid rgba(255,255,255,0.06);
+}
+
+.ggraph-diff-panel {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+/* File tree sidebar — uses shared .files-tree-* classes from panels-rail.css */
+.ggraph-diff-files {
+  width: 240px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  overflow-x: hidden;
+  border-right: 1px solid rgba(255,255,255,0.07);
+  background: rgba(0,0,0,0.12);
+  display: flex;
+  flex-direction: column;
+}
+/* Override files-tree styles slightly for the darker diff panel background */
+.ggraph-diff-files .files-tree {
+  padding: 4px 0;
+  overflow: visible; /* parent handles overflow */
+}
+.ggraph-diff-files .files-tree-dir:hover,
+.ggraph-diff-files .files-tree-file:hover {
+  background: rgba(255,255,255,0.07);
+}
+.ggraph-diff-files .files-tree-file--active {
+  background: rgba(255,255,255,0.14) !important;
+}
+.ggraph-diff-files .files-tree-name { color: rgba(255,255,255,0.85); }
+.ggraph-diff-files .files-tree-dir-name { color: rgba(255,255,255,0.85); }
+
+/* Diff content */
+.ggraph-diff-content {
+  flex: 1;
+  min-width: 0;
+  overflow: auto;
+  background: rgba(0,0,0,0.1);
+}
+
+.ggraph-diff-loading,
+.ggraph-diff-placeholder {
+  padding: 20px 16px;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.ggraph-diff-error {
+  padding: 10px 12px;
+  font-size: 11px;
+  color: #ff8080;
+}
+
+.ggraph-diff-pre {
+  margin: 0;
+  padding: 8px 0;
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre;
+}
+
+.ggraph-diff-line { padding: 0 12px; display: block; }
+.ggraph-diff-line--add  { background: rgba(64,192,87,0.15);  color: #7ce09a; }
+.ggraph-diff-line--del  { background: rgba(224,49,49,0.15);  color: #ff9a9a; }
+.ggraph-diff-line--hunk { color: #4dabf7; background: rgba(59,158,255,0.07); }
+.ggraph-diff-line--meta { color: rgba(255,255,255,0.3); }
+
+/* ── Footer ── */
 .git-graph-footer {
   display: flex;
   align-items: center;
@@ -734,169 +807,12 @@
   flex-shrink: 0;
   gap: 6px;
 }
-
 .ggraph-footer-more {
   color: var(--app-claude-orange);
   font-style: italic;
 }
 
-/* Detail panel */
-.git-graph-detail {
-  width: 280px;
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  border-left: 1px solid var(--app-primary-border-color);
-  background: var(--app-secondary-background);
-  overflow-y: auto;
-}
-
-.ggraph-detail-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 8px 10px;
-  border-bottom: 1px solid var(--app-primary-border-color);
-  flex-shrink: 0;
-}
-
-.ggraph-detail-header span {
-  font-size: 11px;
-  font-weight: 600;
-  color: var(--app-primary-foreground);
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-}
-
-.ggraph-detail-body {
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.ggraph-detail-section {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.ggraph-detail-label {
-  font-size: 9px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.06em;
-  color: var(--app-secondary-foreground);
-}
-
-.ggraph-detail-hash-row {
-  display: flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.ggraph-detail-hash {
-  font-family: var(--app-monospace-font-family);
-  font-size: 11px;
-  color: var(--app-primary-foreground);
-  word-break: break-all;
-  flex: 1;
-}
-
-.ggraph-detail-message {
-  font-size: 12px;
-  color: var(--app-primary-foreground);
-  line-height: 1.5;
-  word-break: break-word;
-}
-
-.ggraph-detail-meta {
-  font-size: 11px;
-  color: var(--app-secondary-foreground);
-}
-
-.ggraph-detail-value {
-  font-size: 11px;
-  color: var(--app-primary-foreground);
-}
-
-.ggraph-detail-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
-}
-
-.ggraph-detail-parent {
-  font-family: var(--app-monospace-font-family);
-  font-size: 10px;
-  color: var(--app-secondary-foreground);
-  background: var(--app-input-background);
-  border: 1px solid var(--app-input-border);
-  border-radius: 3px;
-  padding: 1px 5px;
-}
-
-.ggraph-detail-branch-form {
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.ggraph-branch-input {
-  height: 26px;
-  padding: 0 8px;
-  background: var(--app-input-background);
-  border: 1px solid var(--app-input-border);
-  border-radius: var(--corner-radius-small);
-  color: var(--app-primary-foreground);
-  font-size: 11px;
-  transition: border-color 100ms;
-}
-.ggraph-branch-input:focus {
-  outline: none;
-  border-color: var(--app-input-active-border);
-}
-
-.ggraph-action-btn {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 5px;
-  padding: 5px 10px;
-  border-radius: var(--corner-radius-small);
-  font-size: 11px;
-  font-weight: 500;
-  border: 1px solid var(--app-input-border);
-  background: var(--app-input-background);
-  color: var(--app-primary-foreground);
-  transition: background 80ms, border-color 80ms;
-  cursor: pointer;
-}
-.ggraph-action-btn:hover:not(:disabled) {
-  background: var(--app-list-hover-background);
-  border-color: var(--app-input-active-border);
-}
-.ggraph-action-btn:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-.ggraph-action-primary {
-  background: rgba(217, 119, 87, 0.15);
-  border-color: rgba(217, 119, 87, 0.4);
-  color: var(--app-claude-orange);
-}
-.ggraph-action-primary:hover:not(:disabled) {
-  background: rgba(217, 119, 87, 0.25);
-  border-color: var(--app-claude-orange);
-}
-
-.ggraph-detail-error {
-  font-size: 10px;
-  color: var(--app-error);
-  margin-top: 2px;
-}
-
-/* Status messages */
+/* ── Status messages ── */
 .ggraph-error {
   display: flex;
   align-items: center;
@@ -904,10 +820,9 @@
   padding: 16px;
   font-size: 12px;
   color: var(--app-error);
-  background: rgba(244, 135, 113, 0.08);
-  border-bottom: 1px solid rgba(244, 135, 113, 0.15);
+  background: rgba(244,135,113,0.08);
+  border-bottom: 1px solid rgba(244,135,113,0.15);
 }
-
 .ggraph-loading,
 .ggraph-empty {
   display: flex;
@@ -918,3 +833,124 @@
   font-size: 12px;
   color: var(--app-secondary-foreground);
 }
+
+/* ── Context menu ── */
+.git-ctx-menu {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: 4px;
+  min-width: 210px;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+.git-ctx-item {
+  display: block;
+  width: 100%;
+  padding: 6px 10px;
+  background: transparent;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+  transition: background 60ms;
+}
+.git-ctx-item:hover { background: var(--app-list-hover-background); }
+.git-ctx-item--danger { color: #ff6b6b; }
+.git-ctx-item--danger:hover { background: rgba(224,49,49,0.12); }
+.git-ctx-divider {
+  height: 1px;
+  background: var(--app-primary-border-color);
+  margin: 3px 4px;
+}
+
+/* ── Create-branch modal ── */
+.git-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10000;
+}
+.git-modal {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: 20px;
+  width: 320px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  box-shadow: 0 16px 48px rgba(0,0,0,0.5);
+}
+.git-modal-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+.git-modal-sub {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  margin-top: -6px;
+}
+.git-modal-input {
+  height: 28px;
+  padding: 0 8px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  outline: none;
+  transition: border-color 100ms;
+}
+.git-modal-input:focus { border-color: var(--app-input-active-border); }
+.git-modal-error {
+  font-size: 11px;
+  color: #ff6b6b;
+}
+.git-modal-actions {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  margin-top: 4px;
+}
+.git-modal-btn {
+  padding: 5px 14px;
+  border-radius: var(--corner-radius-small);
+  font-size: 12px;
+  cursor: pointer;
+  border: 1px solid var(--app-input-border);
+  transition: background 80ms, border-color 80ms;
+}
+.git-modal-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+.git-modal-btn--secondary {
+  background: transparent;
+  color: var(--app-secondary-foreground);
+}
+.git-modal-btn--secondary:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+}
+.git-modal-btn--primary {
+  background: rgba(217,119,87,0.18);
+  border-color: rgba(217,119,87,0.5);
+  color: var(--app-claude-orange);
+}
+.git-modal-btn--primary:hover:not(:disabled) {
+  background: rgba(217,119,87,0.3);
+  border-color: var(--app-claude-orange);
+}
+
+/* ── Spin animation ── */
+@keyframes ggraph-spin-inner {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.ggraph-spin { animation: ggraph-spin-inner 0.7s linear infinite; }
