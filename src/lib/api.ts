@@ -239,11 +239,43 @@ export const fileApi = {
     ).then((r) => r.files),
 };
 
+export interface ChangedFile {
+  path: string;
+  staged: boolean;
+  unstaged: boolean;
+  statusCode: string;
+}
+
+export interface GitHubPR {
+  number: number;
+  title: string;
+  state: 'OPEN' | 'CLOSED' | 'MERGED';
+  isDraft: boolean;
+  author: string;
+  headRefName: string;
+  baseRefName: string;
+  url: string;
+  body: string;
+  createdAt: string;
+  updatedAt: string;
+  additions: number;
+  deletions: number;
+  reviewDecision: string | null;
+  statusCheckRollup: 'SUCCESS' | 'FAILURE' | 'PENDING' | null;
+  mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
+  comments: Array<{ id: string; author: string; body: string; createdAt: string }>;
+}
+
 export const gitApi = {
   getStatus: (repoPath: string) =>
     getJson<GitStatus>(
       `/api/git/status?repoPath=${encodeURIComponent(repoPath)}`,
     ),
+
+  getStatusFiles: (repoPath: string) =>
+    getJson<{ files: ChangedFile[] }>(
+      `/api/git/status-files?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.files),
 
   checkout: (repoPath: string, branch: string) =>
     send<{ ok: boolean }>("POST", `/api/git/checkout`, { repoPath, branch }),
@@ -305,6 +337,27 @@ export const gitApi = {
     getJson<{ diff: string }>(
       `/api/git/commit-file-diff?repoPath=${encodeURIComponent(repoPath)}&hash=${encodeURIComponent(hash)}&file=${encodeURIComponent(file)}`,
     ).then((r) => r.diff),
+};
+
+export const githubApi = {
+  listPRs: (repoPath: string) =>
+    getJson<{ prs: GitHubPR[] }>(
+      `/api/github/prs?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.prs),
+
+  getPR: (repoPath: string, number: number) =>
+    getJson<{ pr: GitHubPR }>(
+      `/api/github/pr?repoPath=${encodeURIComponent(repoPath)}&number=${number}`,
+    ).then((r) => r.pr),
+
+  mergePR: (repoPath: string, number: number, method: 'merge' | 'squash' | 'rebase') =>
+    send<{ ok: boolean }>('POST', '/api/github/pr/merge', { repoPath, number, method }),
+
+  addComment: (repoPath: string, number: number, body: string) =>
+    send<{ ok: boolean }>('POST', '/api/github/pr/comment', { repoPath, number, body }),
+
+  updateBranch: (repoPath: string, number: number) =>
+    send<{ ok: boolean }>('POST', '/api/github/pr/update-branch', { repoPath, number }),
 };
 
 // ── Self-update ────────────────────────────────────────────────────────────────

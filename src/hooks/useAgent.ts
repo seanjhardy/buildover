@@ -384,6 +384,12 @@ export function useAgent(
       } else if (event.type === "turn_end") {
         turnCountRef.current = Math.max(0, turnCountRef.current - 1);
         setIsStreaming(turnCountRef.current > 0);
+      } else if (event.type === "pending_attention") {
+        // The agent is blocked waiting for user input — hide the streaming
+        // indicator. We do NOT touch the turn counter here because the turn is
+        // still in progress; turn_end will decrement it when the turn finishes.
+        // respondAttention() re-enables streaming when the user responds.
+        setIsStreaming(false);
       } else if (event.type === "chat_replay") {
         // A chat_replay is the initial history snapshot sent when we (re)subscribe.
         // Use it to authoritatively sync the turn counter with ground truth:
@@ -503,6 +509,12 @@ export function useAgent(
       setPendingAttention((p) =>
         p?.attentionId === attentionId ? undefined : p,
       );
+      // If continuing (not stopping), flip back to streaming so the "..."
+      // indicator reappears while the agent processes the response.
+      if (!interrupt) {
+        setIsStreaming(true);
+        setStatus("running");
+      }
     },
     [],
   );
@@ -637,8 +649,23 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
             }
           : undefined,
       );
-      s.setStatus(event.record.status);
-      s.setIsStreaming(event.record.status === "running");
+      // Restore any in-flight RequestUserAttention the server is blocking on.
+      const firstAttn = event.pendingAttentions?.[0];
+      s.setPendingAttention(
+        firstAttn
+          ? {
+              attentionId: firstAttn.attentionId,
+              message: firstAttn.message,
+              summary: firstAttn.summary,
+            }
+          : undefined,
+      );
+      // If attention is pending, show "awaiting_input" regardless of what the
+      // persisted record says (no permission_request is stored for this tool,
+      // so computeStatus would otherwise report "running").
+      const hasPendingAttention = (event.pendingAttentions?.length ?? 0) > 0;
+      s.setStatus(hasPendingAttention ? "awaiting_input" : event.record.status);
+      s.setIsStreaming(!hasPendingAttention && event.record.status === "running");
       // Expose this chat's saved permission mode so App.tsx can sync its UI.
       s.setChatPermissionMode(event.record.permissionMode);
       // Compute branch navigation metadata from the replayed record.
@@ -747,20 +774,13 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         message: event.message,
         summary: event.summary,
       });
-      // Also add a persistent turn so the message stays visible after dismissal.
-      s.setTurns((prev) => [
-        ...prev,
-        {
-          kind: "assistant",
-          id: `attn-${event.attentionId}`,
-          content: [
-            {
-              type: "text",
-              text: `**Attention needed:** ${event.message}${event.summary ? `\n\n${event.summary}` : ""}`,
-            },
-          ],
-        },
-      ]);
+      // Pause the streaming indicator — the agent is blocked waiting for the
+      // user, not actively generating output.
+      s.setIsStreaming(false);
+      s.setStatus("awaiting_input");
+      // No synthetic turn needed: the SDK's tool_use block in the preceding
+      // assistant message already records the call in history, and the
+      // AttentionPrompt card shows the message/summary in the UI.
       break;
     case "turn_end":
       s.setIsStreaming(false);

@@ -463,8 +463,8 @@
 .slash-token {
   background: rgba(255, 255, 255, 0.1);
   border-radius: 5px;
-  padding: 1px 4px;
-  margin: -1px -4px;
+  padding: 2px 7px 2px 11px;
+  margin: -2px -7px -2px -11px;
 }
 
 .at-popup {

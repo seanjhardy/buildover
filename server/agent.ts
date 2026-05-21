@@ -97,7 +97,11 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
 
   // Tools that must always surface a UI prompt regardless of permission mode,
   // because they are user-interaction checkpoints, not dangerous operations.
-  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention", "AskUserQuestion"]);
+  // Note: RequestUserAttention is intentionally absent — it blocks inside its
+  // own MCP tool handler (via requestAttentionAck), not via the permission
+  // system. Routing it through requestPermission would deadlock because the
+  // client ignores permission_request events for this tool.
+  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"]);
 
   // Tool names that modify files — we snapshot before these run.
   const FILE_MODIFYING_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
@@ -112,11 +116,18 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       });
     }
 
+    // RequestUserAttention is always auto-allowed at the canUseTool stage.
+    // The MCP tool handler blocks the turn itself by awaiting requestAttentionAck,
+    // which only resolves when the client sends an attention_ack WebSocket message.
+    if (toolName === "RequestUserAttention") {
+      return { behavior: "allow", updatedInput: input };
+    }
+
     // In bypassPermissions mode, the SDK still calls canUseTool for every
     // tool when the callback is supplied — so the mode alone won't suppress
     // prompts. Short-circuit here to honor the user's choice.
-    // Exception: ExitPlanMode and RequestUserAttention must always go
-    // through the permission UI so their answers/plans are shown to the user.
+    // Exception: ExitPlanMode must always go through the permission UI so
+    // its plan is shown to the user.
     const currentMode = getPermissionMode?.() ?? permissionMode;
     if (currentMode === "bypassPermissions" && !ALWAYS_PROMPT_TOOLS.has(toolName)) {
       return { behavior: "allow", updatedInput: input };

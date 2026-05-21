@@ -59,6 +59,11 @@
   color: var(--app-claude-orange);
   background: rgba(0, 0, 0, 0.25);
 }
+.permission-bash-description {
+  margin: 0 0 8px 0;
+  font-size: 13px;
+  color: var(--app-secondary-foreground);
+}
 .permission-details summary {
   cursor: pointer;
   font-size: 11px;

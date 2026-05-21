@@ -11,6 +11,10 @@ import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt
 import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
 import { GitGraphView } from "./components/GitGraphView.js";
+import { ActivityBar, type WorkspaceView } from "./components/ActivityBar.js";
+import { SourceControlSidebar } from "./components/SourceControlSidebar.js";
+import { PullRequestSidebar } from "./components/PullRequestSidebar.js";
+import { PullRequestView } from "./components/PullRequestView.js";
 import { RepoTabs } from "./components/RepoTabs.js";
 import { MarketPanel } from "./components/MarketPanel.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
@@ -31,7 +35,7 @@ import { useWorkspace } from "./hooks/useWorkspace.js";
 import { TerminalPanel } from "./components/TerminalPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
 import { agentSocket } from "./lib/agentSocket.js";
-import { api, gitApi, selfUpdateApi } from "./lib/api.js";
+import { api, gitApi, githubApi, selfUpdateApi } from "./lib/api.js";
 import { useSelfUpdate } from "./hooks/useSelfUpdate.js";
 import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
@@ -85,6 +89,48 @@ export default function App() {
     } catch { /* ignore */ }
     return "bypassPermissions";
   });
+  const [activeView, setActiveView] = useState<WorkspaceView>('chat');
+  const [activePrNumber, setActivePrNumber] = useState<number | null>(null);
+  const [prBadge, setPrBadge] = useState(0);
+  const [scBadge, setScBadge] = useState(0);
+
+  // Poll git status for sc badge count (changed files + ahead/behind)
+  useEffect(() => {
+    if (!activeRepo) { setScBadge(0); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const [status, files] = await Promise.all([
+          gitApi.getStatus(activeRepo.path),
+          gitApi.getStatusFiles(activeRepo.path).catch(() => []),
+        ]);
+        if (!cancelled) {
+          setScBadge((status.ahead ?? 0) + (status.behind ?? 0) + files.length);
+        }
+      } catch { /* ignore */ }
+    };
+    void poll();
+    const interval = setInterval(() => void poll(), 15_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Poll open PR count for pr badge
+  useEffect(() => {
+    if (!activeRepo) { setPrBadge(0); return; }
+    let cancelled = false;
+    const poll = async () => {
+      try {
+        const prs = await githubApi.listPRs(activeRepo.path);
+        if (!cancelled) {
+          setPrBadge(prs.filter((p) => p.state === 'OPEN').length);
+        }
+      } catch { /* gh not available or not authenticated — suppress badge */ }
+    };
+    void poll();
+    const interval = setInterval(() => void poll(), 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const [mcpOpen, setMcpOpen] = useState(false);
   const [dashboardOpen, setDashboardOpen] = useState(false);
   const [scheduleOpen, setScheduleOpen] = useState(false);
@@ -719,161 +765,226 @@ export default function App() {
                 onClose={() => setOpenFile(null)}
               />
             )}
-            {/* Sidebar stays fixed — only workspace-panels (chat-pane) slides */}
-            <ChatSidebar
-              chats={chats.chats}
-              activeChatId={gitGraphOpen ? null : activeChatId}
-              onSelect={handleSelectChat}
-              onCreate={handleCreateChat}
-              onToggleFinished={handleToggleFinished}
-              onDelete={handleDeleteChat}
-              repoPath={activeRepo.path}
-              chatDrafts={chatDrafts}
-              onOpenGraph={() => setGitGraphOpen(true)}
+
+            {/* Activity bar — always visible, leftmost column */}
+            <ActivityBar
+              activeView={activeView}
+              onViewChange={setActiveView}
+              scBadge={scBadge}
+              prBadge={prBadge}
             />
-            {/* Gradient fade — anchored to the sidebar's right edge, always
-                in the DOM so the opacity transition plays on both open and close. */}
-            <div className="chat-sidebar-fade" />
-            {/* workspace-panels: wraps only the chat-pane so it slides left
+
+            {/* Conditional sidebar based on active view */}
+            {activeView === 'chat' && (
+              <ChatSidebar
+                chats={chats.chats}
+                activeChatId={gitGraphOpen ? null : activeChatId}
+                onSelect={handleSelectChat}
+                onCreate={handleCreateChat}
+                onToggleFinished={handleToggleFinished}
+                onDelete={handleDeleteChat}
+                repoPath={activeRepo.path}
+                chatDrafts={chatDrafts}
+                onOpenGraph={() => setGitGraphOpen(true)}
+              />
+            )}
+            {activeView === 'source-control' && (
+              <SourceControlSidebar
+                repoPath={activeRepo.path}
+                onOpenGraph={() => setGitGraphOpen(true)}
+              />
+            )}
+            {activeView === 'pr' && (
+              <PullRequestSidebar
+                repoPath={activeRepo.path}
+                activePrNumber={activePrNumber}
+                onSelectPr={(num) => setActivePrNumber(num)}
+              />
+            )}
+
+            {/* Gradient fade — only shown in chat view */}
+            {activeView === 'chat' && <div className="chat-sidebar-fade" />}
+
+            {/* workspace-panels: wraps only the main area so it slides left
                 when the file viewer opens, while the sidebar stays put.
-                When a file is open, clicking the exposed chat strip closes it. */}
+                When a file is open, clicking the exposed strip closes it. */}
             <div
               className="workspace-panels"
               onClick={openFile ? () => setOpenFile(null) : undefined}
             >
-
-            <main className="chat-pane" ref={chatPaneRef}>
-              {/* chat-pane-content: everything above the terminal panel */}
-              <div className="chat-pane-content">
-                {gitGraphOpen ? (
+            {activeView === 'source-control' ? (
+              /* Source control view: show GitGraphView directly */
+              <main className="chat-pane" ref={chatPaneRef}>
+                <div className="chat-pane-content">
                   <GitGraphView
                     repoPath={activeRepo.path}
-                    onClose={() => setGitGraphOpen(false)}
+                    onClose={() => setActiveView('chat')}
                     onCheckout={(branch) => void handleGitCheckout(branch)}
                   />
-                ) : !activeChat ? (
-                  <EmptyChat onCreate={handleCreateChat} />
-                ) : (
-                  <>
-                    <div className="chat-pane-header">
-                      <div className="chat-pane-title">{activeChat.title}</div>
-                      <div className="chat-pane-meta">
-                        {activeRepo.path}
+                </div>
+                {workspace.openRepos.map((repo) => (
+                  <TerminalPanel
+                    key={repo.path}
+                    repoPath={repo.path}
+                    defaultCwd={repo.path}
+                    hidden={repo.path !== activeRepo.path}
+                  />
+                ))}
+              </main>
+            ) : activeView === 'pr' ? (
+              /* Pull request view */
+              <main className="chat-pane" ref={chatPaneRef}>
+                <div className="chat-pane-content">
+                  <PullRequestView
+                    repoPath={activeRepo.path}
+                    prNumber={activePrNumber}
+                    onClose={() => setActivePrNumber(null)}
+                  />
+                </div>
+                {workspace.openRepos.map((repo) => (
+                  <TerminalPanel
+                    key={repo.path}
+                    repoPath={repo.path}
+                    defaultCwd={repo.path}
+                    hidden={repo.path !== activeRepo.path}
+                  />
+                ))}
+              </main>
+            ) : (
+              /* Chat view — original layout */
+              <main className="chat-pane" ref={chatPaneRef}>
+                {/* chat-pane-content: everything above the terminal panel */}
+                <div className="chat-pane-content">
+                  {gitGraphOpen ? (
+                    <GitGraphView
+                      repoPath={activeRepo.path}
+                      onClose={() => setGitGraphOpen(false)}
+                      onCheckout={(branch) => void handleGitCheckout(branch)}
+                    />
+                  ) : !activeChat ? (
+                    <EmptyChat onCreate={handleCreateChat} />
+                  ) : (
+                    <>
+                      <div className="chat-pane-header">
+                        <div className="chat-pane-title">{activeChat.title}</div>
+                        <div className="chat-pane-meta">
+                          {activeRepo.path}
+                        </div>
                       </div>
-                    </div>
-                    <div className="chat-pane-body">
-                      <div
-                        className={`chat-group${hasSidePanels ? "" : " chat-group--centered"}`}
-                      >
-                        <div className="chat-column">
-                          <MessageList
-                            turns={agent.turns}
-                            isStreaming={agent.isStreaming}
-                            cwd={agent.cwd ?? activeRepo.path}
-                            scrollRef={msgScrollRef}
-                            jumpBarRef={jumpBarRef}
-                            branchInfo={agent.branchInfo}
-                            onForkMessage={(userMessageId, newText) =>
-                              agent.forkMessage(userMessageId, newText, { model, permissionMode })
-                            }
-                            onSwitchBranch={agent.switchBranch}
-                            onRevert={agent.revertToCheckpoint}
-                            chatId={activeChatId ?? undefined}
-                          />
-                          {agent.pendingAttention && (
-                            <AttentionPrompt
-                              pending={agent.pendingAttention}
-                              onRespond={agent.respondAttention}
-                            />
-                          )}
-                          {agent.pendingPermission && !agent.pendingAttention && (
-                            <PermissionPrompt
-                              pending={agent.pendingPermission}
-                              onRespond={agent.respondPermission}
-                            />
-                          )}
-                          <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
-                            <QueuedMessages
-                              queue={messageQueue}
-                              onRemove={removeFromQueue}
-                              onFastForward={fastForwardQueued}
-                            />
-                            <Composer
-                              key={activeChatId ?? "none"}
-                              chatId={activeChatId ?? ""}
-                              onSend={(text, attachments) =>
-                                agent.send(text, {
-                                  model,
-                                  permissionMode,
-                                  attachments,
-                                })
-                              }
-                              onQueueMessage={addToQueue}
-                              onInterrupt={agent.interrupt}
-                              onDraftChange={handleDraftChange}
-                              disabled={
-                                agent.isStreaming || agent.connection !== "connected"
-                              }
+                      <div className="chat-pane-body">
+                        <div
+                          className={`chat-group${hasSidePanels ? "" : " chat-group--centered"}`}
+                        >
+                          <div className="chat-column">
+                            <MessageList
+                              turns={agent.turns}
                               isStreaming={agent.isStreaming}
-                              model={model}
-                              permissionMode={permissionMode}
-                              onPermissionModeChange={(m) => {
-                                setPermissionMode(m);
-                                // Push the change to the in-flight turn so toggling
-                                // bypass mid-turn auto-resolves pending prompts and
-                                // suppresses future ones.
-                                agent.setPermissionMode(m);
-                              }}
-                              onToggleMcp={() => setMcpOpen((v) => !v)}
-                              contextUsage={agent.contextUsage}
-                              repoPath={activeRepo?.path}
-                              sdkSlashCommands={agent.slashCommands}
+                              cwd={agent.cwd ?? activeRepo.path}
+                              scrollRef={msgScrollRef}
+                              jumpBarRef={jumpBarRef}
+                              branchInfo={agent.branchInfo}
+                              onForkMessage={(userMessageId, newText) =>
+                                agent.forkMessage(userMessageId, newText, { model, permissionMode })
+                              }
+                              onSwitchBranch={agent.switchBranch}
+                              onRevert={agent.revertToCheckpoint}
+                              chatId={activeChatId ?? undefined}
                             />
+                            {agent.pendingAttention && (
+                              <AttentionPrompt
+                                pending={agent.pendingAttention}
+                                onRespond={agent.respondAttention}
+                              />
+                            )}
+                            {agent.pendingPermission && !agent.pendingAttention && (
+                              <PermissionPrompt
+                                pending={agent.pendingPermission}
+                                onRespond={agent.respondPermission}
+                              />
+                            )}
+                            <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
+                              <QueuedMessages
+                                queue={messageQueue}
+                                onRemove={removeFromQueue}
+                                onFastForward={fastForwardQueued}
+                              />
+                              <Composer
+                                key={activeChatId ?? "none"}
+                                chatId={activeChatId ?? ""}
+                                onSend={(text, attachments) =>
+                                  agent.send(text, {
+                                    model,
+                                    permissionMode,
+                                    attachments,
+                                  })
+                                }
+                                onQueueMessage={addToQueue}
+                                onInterrupt={agent.interrupt}
+                                onDraftChange={handleDraftChange}
+                                disabled={
+                                  agent.isStreaming || agent.connection !== "connected"
+                                }
+                                isStreaming={agent.isStreaming}
+                                model={model}
+                                permissionMode={permissionMode}
+                                onPermissionModeChange={(m) => {
+                                  setPermissionMode(m);
+                                  // Push the change to the in-flight turn so toggling
+                                  // bypass mid-turn auto-resolves pending prompts and
+                                  // suppresses future ones.
+                                  agent.setPermissionMode(m);
+                                }}
+                                onToggleMcp={() => setMcpOpen((v) => !v)}
+                                contextUsage={agent.contextUsage}
+                                repoPath={activeRepo?.path}
+                                sdkSlashCommands={agent.slashCommands}
+                              />
+                            </div>
+                          </div>
+                          {/* right-rail: jump bar always; files panel + todo panel stacked (wide); compact todo strip (narrow) */}
+                          {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
+                          <div ref={rightRailRef} className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
+                            <MessageJumpBar
+                              jumpBarRef={jumpBarRef}
+                            />
+                            {!todoNarrow && (filesChanged.length > 0 || todos.length > 0) && (
+                              <div className="right-rail-panels">
+                                {filesChanged.length > 0 && (
+                                  <FilesPanel
+                                    files={filesChanged}
+                                    onFileOpen={setOpenFile}
+                                    activeFilePath={openFile?.path ?? null}
+                                  />
+                                )}
+                                {todos.length > 0 && (
+                                  <TodoPanel todos={todos} compact={false} />
+                                )}
+                              </div>
+                            )}
+                            {todoNarrow && todos.length > 0 && (
+                              <div className="right-rail-panels">
+                                <TodoPanel todos={todos} compact={true} />
+                              </div>
+                            )}
                           </div>
                         </div>
-                        {/* right-rail: jump bar always; files panel + todo panel stacked (wide); compact todo strip (narrow) */}
-                        {/* eslint-disable-next-line jsx-a11y/click-events-have-key-events, jsx-a11y/no-static-element-interactions */}
-                        <div ref={rightRailRef} className={`right-rail${todoNarrow ? " right-rail--narrow" : ""}`} onClick={(e) => e.stopPropagation()}>
-                          <MessageJumpBar
-                            jumpBarRef={jumpBarRef}
-                          />
-                          {!todoNarrow && (filesChanged.length > 0 || todos.length > 0) && (
-                            <div className="right-rail-panels">
-                              {filesChanged.length > 0 && (
-                                <FilesPanel
-                                  files={filesChanged}
-                                  onFileOpen={setOpenFile}
-                                  activeFilePath={openFile?.path ?? null}
-                                />
-                              )}
-                              {todos.length > 0 && (
-                                <TodoPanel todos={todos} compact={false} />
-                              )}
-                            </div>
-                          )}
-                          {todoNarrow && todos.length > 0 && (
-                            <div className="right-rail-panels">
-                              <TodoPanel todos={todos} compact={true} />
-                            </div>
-                          )}
-                        </div>
                       </div>
-                    </div>
-                  </>
-                )}
-              </div>
-              {/* One terminal panel per open repo — kept mounted so PTY sessions
-                  survive repo switches. Non-active panels are hidden via
-                  display:none and stay alive in the background. */}
-              {workspace.openRepos.map((repo) => (
-                <TerminalPanel
-                  key={repo.path}
-                  repoPath={repo.path}
-                  defaultCwd={repo.path}
-                  hidden={repo.path !== activeRepo.path}
-                />
-              ))}
-            </main>
+                    </>
+                  )}
+                </div>
+                {/* One terminal panel per open repo — kept mounted so PTY sessions
+                    survive repo switches. Non-active panels are hidden via
+                    display:none and stay alive in the background. */}
+                {workspace.openRepos.map((repo) => (
+                  <TerminalPanel
+                    key={repo.path}
+                    repoPath={repo.path}
+                    defaultCwd={repo.path}
+                    hidden={repo.path !== activeRepo.path}
+                  />
+                ))}
+              </main>
+            )}
             </div>{/* end workspace-panels */}
           </div>
         )}

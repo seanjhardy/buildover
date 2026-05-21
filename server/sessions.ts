@@ -43,6 +43,8 @@ interface PendingPermission {
 
 interface PendingAttention {
   attentionId: string;
+  message: string;
+  summary?: string;
   resolve: (result: { feedback?: string; interrupt?: boolean }) => void;
 }
 
@@ -100,6 +102,14 @@ class AgentSession {
       toolName: p.toolName,
       input: p.input,
       suggestions: p.suggestions,
+    }));
+  }
+
+  pendingAttentionList(): { attentionId: string; message: string; summary?: string }[] {
+    return Array.from(this.pendingAttentions.values()).map((p) => ({
+      attentionId: p.attentionId,
+      message: p.message,
+      summary: p.summary,
     }));
   }
 
@@ -198,6 +208,16 @@ class AgentSession {
     if (!pending) return false;
     this.pendingAttentions.delete(attentionId);
     pending.resolve(result);
+    // Transition the status back to "running" now that the user has responded
+    // and the turn is continuing. If the user clicked Stop, the turn is about
+    // to end and the finally block in runTurn will push the correct final status.
+    if (!result.interrupt) {
+      this.broadcast({
+        type: "chat_status",
+        chatId: this.chatId,
+        status: "running",
+      });
+    }
     return true;
   }
 
@@ -438,6 +458,8 @@ class AgentSession {
           new Promise((resolve) => {
             this.pendingAttentions.set(req.attentionId, {
               attentionId: req.attentionId,
+              message: req.message,
+              summary: req.summary,
               resolve,
             });
             const ev: AgentEvent = {
@@ -448,6 +470,15 @@ class AgentSession {
               summary: req.summary,
             };
             this.broadcast(ev);
+            // Transition the sidebar/tab status to "awaiting_input" while we
+            // wait for the user to respond. This is a live-only signal — no
+            // persistence needed because the record's computeStatus will
+            // correctly reflect the running/idle state after the turn ends.
+            this.broadcast({
+              type: "chat_status",
+              chatId: this.chatId,
+              status: "awaiting_input",
+            });
             void this.persistAgentEvent(ev);
           }),
         abortController: this.abort,

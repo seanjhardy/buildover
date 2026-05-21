@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ContextUsage } from "../types.js";
 
 interface Props {
@@ -91,13 +92,13 @@ export function ContextRing({ contextUsage }: Props) {
         {Math.round(pct)}
       </span>
 
-      {hovered && (
+      {hovered && createPortal(
         <div
           className="context-ring-tooltip"
           role="tooltip"
           style={{
-            // Use fixed positioning so the tooltip escapes any overflow:hidden
-            // or stacking-context parent (e.g. the sidebar or composer wrapper).
+            // Portal into document.body so position:fixed resolves against the
+            // real viewport, not a will-change:transform ancestor (workspace-panels).
             position: "fixed",
             left: `${tooltipPos.x}px`,
             top: `${tooltipPos.y}px`,
@@ -149,7 +150,8 @@ export function ContextRing({ contextUsage }: Props) {
               Auto-compaction will trigger shortly
             </div>
           )}
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

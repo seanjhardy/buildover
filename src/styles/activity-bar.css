@@ -1,0 +1,94 @@
+/* ============================================================ */
+/* Activity Bar                                                  */
+/* ============================================================ */
+
+.activity-bar {
+  width: 44px;
+  flex-shrink: 0;
+  background: var(--app-secondary-background);
+  border-right: 1px solid var(--app-primary-border-color);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0;
+  gap: 2px;
+  z-index: 10;
+  position: relative;
+}
+
+.activity-bar-item {
+  width: 44px;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: transparent;
+  border: 0;
+  border-left: 3px solid transparent;
+  cursor: pointer;
+  color: var(--app-secondary-foreground);
+  transition: background 100ms, color 100ms;
+  position: relative;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.activity-bar-item:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.activity-bar-item.active {
+  border-left-color: var(--app-claude-orange);
+  color: var(--app-claude-orange);
+}
+
+.activity-bar-item.active:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-claude-orange);
+}
+
+.activity-bar-badge {
+  position: absolute;
+  top: 6px;
+  right: 4px;
+  min-width: 14px;
+  height: 14px;
+  background: var(--app-claude-orange);
+  color: white;
+  border-radius: 999px;
+  font-size: 9px;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.activity-bar-tooltip {
+  position: fixed;
+  background: #1a1a1a;
+  color: white;
+  border-radius: 4px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.05);
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 9999;
+  transform: translateY(-50%);
+  letter-spacing: 0.01em;
+}
+
+/* Spin utility used on RefreshCw SVG icons in sidebars */
+@keyframes sc-spin {
+  to { transform: rotate(360deg); }
+}
+
+.spin {
+  animation: sc-spin 1s linear infinite;
+  transform-origin: center;
+}

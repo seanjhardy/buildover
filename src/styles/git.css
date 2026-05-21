@@ -916,6 +916,18 @@
   font-size: 11px;
   color: #ff6b6b;
 }
+.git-modal-warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  font-size: 11px;
+  color: #f59f00;
+  background: rgba(245, 159, 0, 0.08);
+  border: 1px solid rgba(245, 159, 0, 0.25);
+  border-radius: var(--corner-radius-small);
+  padding: 8px 10px;
+  line-height: 1.5;
+}
 .git-modal-actions {
   display: flex;
   gap: 8px;

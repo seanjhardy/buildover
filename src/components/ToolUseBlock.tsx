@@ -32,7 +32,7 @@ function summarize(name: string, input: unknown, cwd?: string): string {
     case "Edit":
       return relativizePath(String(i.file_path ?? ""), cwd);
     case "Bash":
-      return String(i.command ?? "");
+      return String(i.description ?? i.command ?? "");
     case "Glob":
       return String(i.pattern ?? "");
     case "Grep":
@@ -44,6 +44,9 @@ function summarize(name: string, input: unknown, cwd?: string): string {
     case "Task":
     case "Agent":
       return String(i.description ?? i.prompt ?? "");
+    case "RequestUserAttention":
+    case "mcp__buildover-custom-tools__RequestUserAttention":
+      return String(i.message ?? "Attention needed");
     case "RenderSVG":
     case "mcp__buildover-custom-tools__RenderSVG":
       return String(i.title ?? "inline SVG");

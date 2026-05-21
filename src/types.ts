@@ -418,6 +418,7 @@ export type AgentEvent =
       chatId: string;
       record: ChatRecord;
       pendingPermissions: { requestId: string; toolName: string; input: Record<string, unknown>; suggestions?: unknown[] }[];
+      pendingAttentions: { attentionId: string; message: string; summary?: string }[];
     }
   // Emitted after a fork_message succeeds. A full chat_replay follows.
   | {

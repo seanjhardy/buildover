@@ -362,7 +362,6 @@ export function ChatSidebar({
         )}
       </div>
 
-      <GitPanel repoPath={repoPath} onOpenGraph={onOpenGraph} />
     </aside>
   );
 }

@@ -13,6 +13,7 @@ import {
   Tag,
   ChevronRight,
   ChevronDown,
+  AlertTriangle,
 } from "lucide-react";
 import { gitApi, type CommitDiffFile, type GitCommit, type GitLogResult } from "../lib/api.js";
 
@@ -452,13 +453,14 @@ function GraphSvg({ nodes, maxLane, rowCenters, svgHeight, selectedHash, onSelec
 // ─── branch pill ─────────────────────────────────────────────────────────────
 
 interface RefPillProps {
-  label:         RefLabel;
-  color:         string;          // lane colour for the icon strip
+  label:           RefLabel;
+  color:           string;          // lane colour for the icon strip
   isCurrentBranch: boolean;
-  onContextMenu?: (e: React.MouseEvent) => void;
+  onContextMenu?:  (e: React.MouseEvent) => void;
+  onDoubleClick?:  (e: React.MouseEvent) => void;
 }
 
-function RefPill({ label, color, isCurrentBranch, onContextMenu }: RefPillProps) {
+function RefPill({ label, color, isCurrentBranch, onContextMenu, onDoubleClick }: RefPillProps) {
   if (label.kind === "head") return null; // HEAD arrow handled separately
 
   const borderStyle = isCurrentBranch
@@ -475,6 +477,7 @@ function RefPill({ label, color, isCurrentBranch, onContextMenu }: RefPillProps)
       style={borderStyle}
       title={label.kind === "remote" ? `${label.remoteName ?? "origin"}/${label.text}` : label.text}
       onContextMenu={onContextMenu}
+      onDoubleClick={onDoubleClick}
     >
       {/* Coloured icon strip */}
       <span className="ggraph-ref-pill-icon" style={{ background: color }}>
@@ -764,13 +767,14 @@ function CommitDiffPanel({ diffState, onSelectFile }: CommitDiffPanelProps) {
 // ─── commit row ───────────────────────────────────────────────────────────────
 
 interface CommitRowProps {
-  node:          GraphNode;
-  isExpanded:    boolean;
-  currentBranch: string;
-  diffState:     DiffState | null;
-  onToggle:      () => void;
-  onContextMenu: (e: React.MouseEvent, target: CtxTarget) => void;
-  onSelectFile:  (filename: string) => void;
+  node:           GraphNode;
+  isExpanded:     boolean;
+  currentBranch:  string;
+  diffState:      DiffState | null;
+  onToggle:       () => void;
+  onContextMenu:  (e: React.MouseEvent, target: CtxTarget) => void;
+  onSelectFile:   (filename: string) => void;
+  onDoubleClick:  (branchLabel?: RefLabel) => void;
 }
 
 type CtxTarget =
@@ -778,7 +782,7 @@ type CtxTarget =
   | { type: "branch"; label: RefLabel; color: string };
 
 function CommitRow({
-  node, isExpanded, currentBranch, diffState, onToggle, onContextMenu, onSelectFile,
+  node, isExpanded, currentBranch, diffState, onToggle, onContextMenu, onSelectFile, onDoubleClick,
 }: CommitRowProps) {
   const { commit, refLabels } = node;
 
@@ -796,6 +800,7 @@ function CommitRow({
         className={`git-graph-row${isExpanded ? " git-graph-row--selected" : ""}${node.isHead ? " git-graph-row--head" : ""}`}
         style={{ height: ROW_H }}
         onClick={onToggle}
+        onDoubleClick={() => onDoubleClick()}
         onContextMenu={handleRowCtx}
       >
         {/* Refs + Subject combined into one flex cell */}
@@ -810,6 +815,10 @@ function CommitRow({
                 e.preventDefault();
                 e.stopPropagation();
                 onContextMenu(e, { type: "branch", label, color: node.color });
+              }}
+              onDoubleClick={(e) => {
+                e.stopPropagation();
+                onDoubleClick(label);
               }}
             />
           ))}
@@ -890,6 +899,49 @@ function CreateBranchModal({ hash, repoPath, onDone, onClose }: CreateBranchModa
   );
 }
 
+// ─── checkout warning modal ───────────────────────────────────────────────────
+
+interface CheckoutWarningModalProps {
+  label:     string;
+  onConfirm: () => void;
+  onClose:   () => void;
+  loading:   boolean;
+}
+
+function CheckoutWarningModal({ label, onConfirm, onClose, loading }: CheckoutWarningModalProps) {
+  return (
+    <div className="git-modal-backdrop" onMouseDown={onClose}>
+      <div className="git-modal" onMouseDown={(e) => e.stopPropagation()}>
+        <div className="git-modal-title">Checkout "{label}"</div>
+        <div className="git-modal-warning">
+          <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+          <span>
+            You have uncommitted changes. Switching branches may overwrite or
+            conflict with your working tree. Stash or commit your changes first,
+            or proceed anyway.
+          </span>
+        </div>
+        <div className="git-modal-actions">
+          <button
+            className="git-modal-btn git-modal-btn--secondary"
+            onClick={onClose}
+            disabled={loading}
+          >
+            Cancel
+          </button>
+          <button
+            className="git-modal-btn git-modal-btn--primary"
+            onClick={onConfirm}
+            disabled={loading}
+          >
+            {loading ? "Checking out…" : "Checkout anyway"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── main component ───────────────────────────────────────────────────────────
 
 interface Props {
@@ -912,6 +964,8 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   const [ctxMenu,     setCtxMenu]     = useState<{ x: number; y: number; items: CtxMenuEntry[] } | null>(null);
   const [createBranchHash, setCreateBranchHash] = useState<string | null>(null);
   const [opError,     setOpError]     = useState<string | null>(null);
+  const [checkoutModal, setCheckoutModal] = useState<{ target: string; label: string } | null>(null);
+  const [checkoutLoading, setCheckoutLoading] = useState(false);
 
   const resizingRef    = useRef(false);
   const resizeStartX   = useRef(0);
@@ -936,15 +990,16 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
       if (e.key === "Escape") {
-        if (ctxMenu)       { setCtxMenu(null); return; }
+        if (checkoutModal)    { setCheckoutModal(null); return; }
+        if (ctxMenu)          { setCtxMenu(null); return; }
         if (createBranchHash) { setCreateBranchHash(null); return; }
-        if (expandedHash)  { setExpandedHash(null); return; }
+        if (expandedHash)     { setExpandedHash(null); return; }
         onClose();
       }
     };
     document.addEventListener("keydown", h);
     return () => document.removeEventListener("keydown", h);
-  }, [ctxMenu, createBranchHash, expandedHash, onClose]);
+  }, [checkoutModal, ctxMenu, createBranchHash, expandedHash, onClose]);
 
   // ── Graph layout ──
   const nodes = useMemo(() => {
@@ -1041,6 +1096,52 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
 
   // ── Context-menu builder ──
   const currentBranch = logResult?.currentBranch ?? "";
+
+  // ── Double-click checkout ──
+  // Checks git status first: if dirty, shows warning modal; if clean, checks out directly.
+  const initiateCheckout = useCallback(async (target: string, label: string) => {
+    try {
+      const status = await gitApi.getStatus(repoPath);
+      if (status.isDirty) {
+        setCheckoutModal({ target, label });
+      } else {
+        onCheckout(target);
+        void fetchLog(limit);
+      }
+    } catch {
+      // Status check failed — show modal as a safety fallback
+      setCheckoutModal({ target, label });
+    }
+  }, [repoPath, onCheckout, fetchLog, limit]);
+
+  const handleDoubleClick = useCallback((node: GraphNode, branchLabel?: RefLabel) => {
+    let target: string;
+    let displayLabel: string;
+
+    if (branchLabel) {
+      // Double-clicked a specific branch pill — only local branches are checkable by name
+      if (branchLabel.kind !== "local") return;
+      target       = branchLabel.text;
+      displayLabel = branchLabel.text;
+    } else {
+      // Double-clicked the row — prefer the first local branch on this commit
+      const localBranch = node.refLabels.find((r) => r.kind === "local")?.text ?? null;
+      target       = localBranch ?? node.commit.hash;
+      displayLabel = localBranch ?? node.commit.shortHash;
+    }
+
+    if (target === currentBranch) return; // already here
+    void initiateCheckout(target, displayLabel);
+  }, [currentBranch, initiateCheckout]);
+
+  const confirmCheckout = useCallback(() => {
+    if (!checkoutModal) return;
+    setCheckoutLoading(true);
+    onCheckout(checkoutModal.target);
+    setCheckoutModal(null);
+    setCheckoutLoading(false);
+    void fetchLog(limit);
+  }, [checkoutModal, onCheckout, fetchLog, limit]);
 
   const openCommitCtx = useCallback((e: React.MouseEvent, node: GraphNode) => {
     const hash = node.commit.hash;
@@ -1237,6 +1338,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
                   onToggle={() => handleToggleExpand(node.commit.hash)}
                   onContextMenu={handleContextMenu}
                   onSelectFile={handleSelectDiffFile}
+                  onDoubleClick={(branchLabel) => handleDoubleClick(node, branchLabel)}
                 />
               );
             })}
@@ -1272,6 +1374,16 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
           repoPath={repoPath}
           onDone={() => { setCreateBranchHash(null); void fetchLog(limit); }}
           onClose={() => setCreateBranchHash(null)}
+        />
+      )}
+
+      {/* ── Checkout warning modal ── */}
+      {checkoutModal && (
+        <CheckoutWarningModal
+          label={checkoutModal.label}
+          onConfirm={confirmCheckout}
+          onClose={() => setCheckoutModal(null)}
+          loading={checkoutLoading}
         />
       )}
     </div>

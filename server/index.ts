@@ -74,6 +74,14 @@ import {
   pullLatestMain,
   startSelfUpdateChecker,
 } from "./selfUpdate.js";
+import {
+  listGitHubPRs,
+  getGitHubPR,
+  mergePR,
+  addPRComment,
+  updatePRBranch,
+  getStatusFiles,
+} from "./github.js";
 import type {
   AgentEvent,
   ClientMessage,
@@ -696,6 +704,84 @@ app.get("/api/git/commit-file-diff", async (req, res) => {
   }
 });
 
+// ---- Git status files (porcelain) ----
+app.get("/api/git/status-files", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const files = await getStatusFiles(repoPath);
+    res.json({ files });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- GitHub PR routes ----
+app.get("/api/github/prs", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const prs = await listGitHubPRs(repoPath);
+    res.json({ prs });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.get("/api/github/pr", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const number = parseInt(String(req.query.number ?? ""), 10);
+    if (!number || isNaN(number)) throw new Error("number required");
+    const pr = await getGitHubPR(repoPath, number);
+    res.json({ pr });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.post("/api/github/pr/merge", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const number = parseInt(String(req.body?.number ?? ""), 10);
+    if (!number || isNaN(number)) throw new Error("number required");
+    const method = (req.body?.method ?? "merge") as 'merge' | 'squash' | 'rebase';
+    await mergePR(repoPath, number, method);
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.post("/api/github/pr/comment", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const number = parseInt(String(req.body?.number ?? ""), 10);
+    if (!number || isNaN(number)) throw new Error("number required");
+    const body = String(req.body?.body ?? "").trim();
+    if (!body) throw new Error("body required");
+    await addPRComment(repoPath, number, body);
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+app.post("/api/github/pr/update-branch", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const number = parseInt(String(req.body?.number ?? ""), 10);
+    if (!number || isNaN(number)) throw new Error("number required");
+    await updatePRBranch(repoPath, number);
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
 // ---- File read ----
 app.get("/api/file/read", async (req, res) => {
   try {
@@ -971,15 +1057,21 @@ wss.on("connection", (ws: WebSocket) => {
           chatId,
           record,
           pendingPermissions: session.pendingPermissionList(),
+          pendingAttentions: session.pendingAttentionList(),
         });
         // Always push chat_status after a replay so any sidebar subscriber
         // on this same WS connection (withReplay: false) picks up the current
         // status immediately — especially important after stale recovery where
         // the status just changed from "running" or "error" to a new value.
+        //
+        // Use "awaiting_input" when the session has a pending attention, because
+        // that state is never written to the DB record (it's a live-only signal)
+        // so record.status would otherwise emit a misleading "running" status.
+        const hasPendingAttention = session.pendingAttentionList().length > 0;
         send({
           type: "chat_status",
           chatId,
-          status: record.status,
+          status: hasPendingAttention ? "awaiting_input" : record.status,
           sessionId: record.sessionId,
         });
       }

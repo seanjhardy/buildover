@@ -232,7 +232,12 @@ function GenericBody({
 
   if (toolName === "Bash") {
     return (
-      <pre className="permission-bash">{String(i.command ?? "")}</pre>
+      <>
+        {i.description && (
+          <p className="permission-bash-description">{String(i.description)}</p>
+        )}
+        <pre className="permission-bash">{String(i.command ?? "")}</pre>
+      </>
     );
   }
   if (toolName === "Write" || toolName === "Edit" || toolName === "MultiEdit") {
