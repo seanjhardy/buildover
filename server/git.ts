@@ -119,7 +119,12 @@ export async function gitLog(
 
   const { stdout } = await execFileAsync(
     "git",
-    ["log", "--all", "--parents", `--format=${format}`, "--decorate=full", `-n`, String(limit)],
+    // --topo-order ensures parents always follow all their children in the
+    // output — a hard requirement for the lane-assignment algorithm in the
+    // frontend.  Without it git can emit a parent before some of its children
+    // when branches diverge, which breaks lane tracking and produces phantom
+    // connections.
+    ["log", "--all", "--topo-order", "--parents", `--format=${format}`, "--decorate=full", `-n`, String(limit)],
     { cwd: repoPath },
   );
 

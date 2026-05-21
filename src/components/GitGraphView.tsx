@@ -167,24 +167,52 @@ export function buildGraphLayout(commits: GitCommit[], currentBranch: string): G
       return [{ fromRow: startRow, fromX: startX, toRow: endRow, toX: endX }];
     }
     const r0 = startRow + 1, r1 = endRow - 1;
+    // Adjacent rows: single diagonal segment.
     if (r0 > r1)
       return [{ fromRow: startRow, fromX: startX, toRow: endRow, toX: endX }];
 
-    let tX: number, usedFresh = false;
-    if (isXFreeInRange(endX, r0, r1))        tX = endX;
-    else if (isXFreeInRange(startX, r0, r1)) tX = startX;
-    else { tX = allocateFreshX(r0, r1); usedFresh = true; }
+    // Choose a "trunk" x to travel along through intermediate rows.
+    // Prefer startX (late elbow: stay in our lane, bend at the bottom) so the
+    // line doesn't wander.  Fall back to endX, then allocate a fresh column.
+    let tX: number;
+    if (isXFreeInRange(startX, r0, r1))    tX = startX;
+    else if (isXFreeInRange(endX, r0, r1)) tX = endX;
+    else                                   tX = allocateFreshX(r0, r1);
 
-    if (!usedFresh) for (let r = r0; r <= r1; r++) claimXAt(r, tX);
+    // Claim the trunk column in every intermediate row (allocateFreshX already
+    // does this for fresh columns, but the call is idempotent so it's safe).
+    for (let r = r0; r <= r1; r++) claimXAt(r, tX);
 
     if (tX === startX)
+      // Late elbow: straight vertical, then a single-row diagonal at the bottom.
       return [
-        { fromRow: startRow,   fromX: startX, toRow: endRow - 1, toX: tX     },
-        { fromRow: endRow - 1, fromX: tX,     toRow: endRow,     toX: endX   },
+        { fromRow: startRow,   fromX: startX, toRow: endRow - 1, toX: startX },
+        { fromRow: endRow - 1, fromX: startX, toRow: endRow,     toX: endX   },
       ];
+
+    if (tX === endX)
+      // Early elbow: single-row diagonal at the top, then straight vertical.
+      return [
+        { fromRow: startRow,     fromX: startX, toRow: startRow + 1, toX: endX },
+        { fromRow: startRow + 1, fromX: endX,   toRow: endRow,       toX: endX },
+      ];
+
+    // Fresh column: produce THREE segments so the only diagonal hops are
+    // single-row transitions.  This prevents long bezier curves that visually
+    // cross many other lanes.
+    //   • short diagonal  startX → tX  (one row at the top)
+    //   • straight trunk  tX → tX      (all intermediate rows)
+    //   • short diagonal  tX → endX    (one row at the bottom)
+    if (r1 > r0)
+      return [
+        { fromRow: startRow, fromX: startX, toRow: r0,     toX: tX   },
+        { fromRow: r0,       fromX: tX,     toRow: r1,     toX: tX   },
+        { fromRow: r1,       fromX: tX,     toRow: endRow, toX: endX },
+      ];
+    // Only one intermediate row — two short diagonals is the best we can do.
     return [
-      { fromRow: startRow,     fromX: startX, toRow: startRow + 1, toX: tX   },
-      { fromRow: startRow + 1, fromX: tX,     toRow: endRow,       toX: endX },
+      { fromRow: startRow, fromX: startX, toRow: r0,     toX: tX   },
+      { fromRow: r0,       fromX: tX,     toRow: endRow, toX: endX },
     ];
   }
 
@@ -221,24 +249,58 @@ export function buildGraphLayout(commits: GitCommit[], currentBranch: string): G
       lanes[myLane] = undefined;
       laneColorIdx[myLane] = undefined;
     } else {
-      lanes[myLane] = parents[0]!;
       for (let pi = 0; pi < parents.length; pi++) {
         const pHash = parents[pi]!;
-        const pRow  = rowByHash.get(pHash) ?? (row + 1);
+        const pRow  = rowByHash.get(pHash);
+
+        // Parent is outside the visible commit range (beyond the fetch limit).
+        // Keep the lane marker alive so the column stays reserved — the branch
+        // line will simply trail off at the bottom of the graph — but don't try
+        // to draw an edge to a non-existent row.
+        if (pRow === undefined) {
+          if (pi === 0) lanes[myLane] = pHash;
+          continue;
+        }
+
         let pLane: number, pColorIdx: number;
 
         if (pi === 0) {
-          pLane = myLane; pColorIdx = myColorIdx;
+          // Check if the first parent is already tracked by a *different* lane.
+          // This happens when two branch tips share the same ancestor — e.g. commits A
+          // and B both converge on commit C.  Whichever branch was processed first
+          // already reserved a lane for C; we must route our edge there instead of
+          // creating a duplicate tracking lane (which would later cause a disconnect
+          // when C's dot ends up at the first lane but our edge points to our own lane).
+          const existingLane = lanes.findIndex((h, i) => h === pHash && i !== myLane);
+          if (existingLane !== -1) {
+            // Merge into the existing lane: route our edge diagonally to it and
+            // release our lane so it can be reused.
+            pLane     = existingLane;
+            // FIX: colour the converging edge with the *current* branch's colour,
+            // not the destination lane's colour.  This matches the VSCode Git Graph
+            // behaviour where an edge belongs to the branch it originates from —
+            // e.g. a feature-branch line converging onto main stays blue all the
+            // way to the common ancestor, rather than turning orange at the join.
+            pColorIdx = myColorIdx;
+            if (laneColorIdx[existingLane] === undefined) laneColorIdx[existingLane] = getAvailableColor(row);
+            lanes[myLane]        = undefined;
+            laneColorIdx[myLane] = undefined;
+          } else {
+            // Standard: keep tracking the first parent in our own lane.
+            pLane         = myLane;
+            pColorIdx     = myColorIdx;
+            lanes[myLane] = pHash;
+          }
         } else {
           const existing = lanes.indexOf(pHash);
           if (existing !== -1) {
-            pLane = existing;
+            pLane     = existing;
             pColorIdx = laneColorIdx[existing] ?? getAvailableColor(row);
             if (laneColorIdx[existing] === undefined) laneColorIdx[existing] = pColorIdx;
           } else {
-            pLane = findFreeLane();
-            lanes[pLane] = pHash;
-            pColorIdx = getAvailableColor(row);
+            pLane               = findFreeLane();
+            lanes[pLane]        = pHash;
+            pColorIdx           = getAvailableColor(row);
             laneColorIdx[pLane] = pColorIdx;
           }
         }
@@ -251,13 +313,18 @@ export function buildGraphLayout(commits: GitCommit[], currentBranch: string): G
         });
       }
 
-      const retained = new Set<number>([myLane]);
-      for (let pi = 1; pi < parents.length; pi++) {
-        const idx = lanes.indexOf(parents[pi]!);
-        if (idx !== -1) retained.add(idx);
+      // Remove any lanes that were redundantly pointing to one of this commit's
+      // parents but weren't chosen as the canonical tracking lane above.
+      const canonicalLanes = new Set<number>();
+      for (const pHash of parents) {
+        const idx = lanes.indexOf(pHash);
+        if (idx !== -1) canonicalLanes.add(idx);
       }
       for (let i = 0; i < lanes.length; i++) {
-        if (!retained.has(i) && parents.includes(lanes[i] ?? "")) lanes[i] = undefined;
+        if (!canonicalLanes.has(i) && parents.includes(lanes[i] ?? "")) {
+          lanes[i]        = undefined;
+          laneColorIdx[i] = undefined;
+        }
       }
     }
 
@@ -288,6 +355,7 @@ function segmentPath(
   fromVis: number,
   toVis:   number,
   rowCenters: number[],
+  expandedVisIdx: number,
 ): string {
   const x1 = LANE_OFFSET + seg.fromX * LANE_W;
   const y1 = rowCenters[fromVis] ?? (fromVis * ROW_H + ROW_H / 2);
@@ -295,6 +363,17 @@ function segmentPath(
   const y2 = rowCenters[toVis]   ?? (toVis   * ROW_H + ROW_H / 2);
 
   if (x1 === x2) return `M ${x1} ${y1} L ${x2} ${y2}`;
+
+  // When this diagonal segment starts from an expanded row, the destination
+  // y-centre is pushed far down by EXPANDED_H — stretching the bezier across
+  // the entire diff panel.  Instead, keep the bezier to a normal single-row
+  // height and then drop a straight vertical line through the expanded area
+  // to reach the next commit's dot.
+  if (fromVis === expandedVisIdx) {
+    const yMid = y1 + ROW_H;   // one normal row-height below the commit dot
+    const d    = ROW_H * 0.6;
+    return `M ${x1} ${y1} C ${x1} ${y1 + d}, ${x2} ${yMid - d}, ${x2} ${yMid} L ${x2} ${y2}`;
+  }
 
   const span = Math.abs(y2 - y1);
   const d    = Math.min(span * 0.6, ROW_H * 1.2);
@@ -315,6 +394,14 @@ function GraphSvg({ nodes, maxLane, rowCenters, svgHeight, selectedHash, onSelec
   const visIdxByAbsRow = new Map<number, number>();
   nodes.forEach((n, vi) => visIdxByAbsRow.set(n.row, vi));
 
+  // Visual index of the currently-expanded row (-1 when nothing is expanded).
+  // Passed to segmentPath so diagonal beziers that originate from an expanded
+  // row can be kept to a normal single-row height instead of stretching across
+  // the entire diff panel.
+  const expandedVisIdx = selectedHash !== null
+    ? nodes.findIndex((n) => n.commit.hash === selectedHash)
+    : -1;
+
   return (
     <svg
       className="git-graph-svg"
@@ -333,7 +420,7 @@ function GraphSvg({ nodes, maxLane, rowCenters, svgHeight, selectedHash, onSelec
             return (
               <path
                 key={`${node.commit.hash}-e${ei}-s${si}`}
-                d={segmentPath(seg, fromVis, clippedToVis, rowCenters)}
+                d={segmentPath(seg, fromVis, clippedToVis, rowCenters, expandedVisIdx)}
                 stroke={edge.color}
                 strokeWidth={2}
                 fill="none"

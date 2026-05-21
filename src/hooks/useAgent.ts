@@ -37,6 +37,7 @@ interface CachedChat {
   status: ChatStatus | null;
   chatPermissionMode?: PermissionMode;
   branchInfo: Map<string, BranchInfo>;
+  slashCommands: string[];
 }
 
 // One entry per fork point (keyed by the parentMessageId — the user_message.id
@@ -129,6 +130,7 @@ interface UseAgentReturn {
   chatPermissionMode: PermissionMode | undefined;
   contextUsage: ContextUsage | null;
   branchInfo: Map<string, BranchInfo>;
+  slashCommands: string[];
   send: (text: string, opts: SendOptions) => void;
   revertToCheckpoint: (checkpointId: string) => void;
   respondPermission: (
@@ -168,6 +170,7 @@ export function useAgent(
     useState<PermissionMode | undefined>();
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
+  const [slashCommands, setSlashCommands] = useState<string[]>([]);
 
   // Tracks the number of turn_start events that haven't been matched by a
   // turn_end yet. This lets us guard against stale chat_status events (e.g.
@@ -200,6 +203,7 @@ export function useAgent(
       setChatPermissionMode(undefined);
       setContextUsage(null);
       setBranchInfo(new Map());
+      setSlashCommands([]);
       return;
     }
 
@@ -221,6 +225,7 @@ export function useAgent(
         setStatus(cached.status);
         setChatPermissionMode(cached.chatPermissionMode);
         setBranchInfo(cached.branchInfo);
+        setSlashCommands(cached.slashCommands ?? []);
       } else {
         setTurns([]);
         setIsStreaming(false);
@@ -232,6 +237,7 @@ export function useAgent(
         setPendingPermission(undefined);
         setChatPermissionMode(undefined);
         setBranchInfo(new Map());
+        setSlashCommands([]);
       }
     });
 
@@ -248,6 +254,7 @@ export function useAgent(
         mcpServers: [],
         status: null,
         branchInfo: new Map(),
+        slashCommands: [],
       };
       chatCache.set(id, { ...prev, ...patch });
       // Evict oldest entries when the cache grows too large.
@@ -343,6 +350,15 @@ export function useAgent(
       updateCache({ branchInfo: info });
     };
 
+    const cachedSetSlashCommands: React.Dispatch<React.SetStateAction<string[]>> = (action) => {
+      setSlashCommands((prev) => {
+        const next =
+          typeof action === "function" ? (action as (p: string[]) => string[])(prev) : action;
+        updateCache({ slashCommands: next });
+        return next;
+      });
+    };
+
     const handler = (event: AgentEvent) => {
       // Defensive: events may arrive after we've switched chats. The
       // multiplexer routes by chatId so this should be impossible, but guard
@@ -420,6 +436,7 @@ export function useAgent(
         setChatPermissionMode: cachedSetChatPermissionMode,
         setContextUsage,
         setBranchInfo: cachedSetBranchInfo,
+        setSlashCommands: cachedSetSlashCommands,
       });
     };
 
@@ -565,6 +582,7 @@ export function useAgent(
     chatPermissionMode,
     contextUsage,
     branchInfo,
+    slashCommands,
     send,
     revertToCheckpoint,
     respondPermission,
@@ -595,6 +613,7 @@ interface Setters {
   >;
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
   setBranchInfo: (info: Map<string, BranchInfo>) => void;
+  setSlashCommands: React.Dispatch<React.SetStateAction<string[]>>;
 }
 
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
@@ -634,6 +653,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       s.setTools(event.tools);
       s.setMcpServers(event.mcpServers);
       s.setCwd(event.cwd);
+      s.setSlashCommands(event.slashCommands ?? []);
       break;
     case "user_message_echo":
       s.setTurns((prev) => [
@@ -827,6 +847,7 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
       s.setTools(ev.tools);
       s.setMcpServers(ev.mcpServers);
       s.setCwd(ev.cwd);
+      s.setSlashCommands(ev.slashCommands ?? []);
     }
   }
   s.setTurns(turns);

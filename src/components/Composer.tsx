@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
 import {
+  Archive,
   ArrowUp,
   ClipboardList,
   Hammer,
@@ -11,6 +12,8 @@ import {
   Settings,
   ShieldOff,
   Square,
+  Terminal,
+  Trash2,
 } from "lucide-react";
 import {
   type Attachment,
@@ -37,6 +40,8 @@ interface Props {
   onToggleMcp: () => void;
   contextUsage?: ContextUsage | null;
   repoPath?: string;
+  /** SDK skill names from system_init, e.g. ["review", "simplify", "compact"] */
+  sdkSlashCommands?: string[];
 }
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -84,42 +89,80 @@ const MODE_META: Record<
 };
 
 // ---- Slash commands ----
+// Two action types:
+//   "permission" — changes the current permission mode and clears the command from the textarea
+//   "text"       — inserts "/" + key into the textarea so the user can add args then send
+type SlashCommandAction =
+  | { type: "permission"; mode: PermissionMode }
+  | { type: "text" };
+
+// Group for organising the popup into sections.
+type SlashCommandGroup = "modes" | "session" | "skills";
+const GROUP_LABELS: Record<SlashCommandGroup, string> = {
+  modes: "Modes",
+  session: "Session",
+  skills: "Skills",
+};
+const GROUP_ORDER: SlashCommandGroup[] = ["modes", "session", "skills"];
+
 interface SlashCommand {
   key: string;
-  mode: PermissionMode;
   label: string;
   description: string;
   icon: ReactNode;
+  action: SlashCommandAction;
+  group: SlashCommandGroup;
 }
 
-const SLASH_COMMANDS: SlashCommand[] = [
+// Built-in commands that are always present.
+const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   {
     key: "plan",
-    mode: "plan",
     label: "Plan mode",
     description: "Claude will explore code and present a plan",
     icon: <ClipboardList size={13} />,
+    action: { type: "permission", mode: "plan" },
+    group: "modes",
   },
   {
     key: "auto",
-    mode: "acceptEdits",
     label: "Edit automatically",
     description: "Claude will edit without asking for approval",
     icon: <Hammer size={13} />,
+    action: { type: "permission", mode: "acceptEdits" },
+    group: "modes",
   },
   {
     key: "ask",
-    mode: "default",
     label: "Ask before edits",
     description: "Claude will ask for approval before each edit",
     icon: <MessageCircleQuestion size={13} />,
+    action: { type: "permission", mode: "default" },
+    group: "modes",
   },
   {
     key: "yolo",
-    mode: "bypassPermissions",
     label: "Bypass permissions",
     description: "Claude will not ask before running commands",
     icon: <ShieldOff size={13} />,
+    action: { type: "permission", mode: "bypassPermissions" },
+    group: "modes",
+  },
+  {
+    key: "compact",
+    label: "Compact conversation",
+    description: "Summarise the conversation to free up context window",
+    icon: <Archive size={13} />,
+    action: { type: "text" },
+    group: "session",
+  },
+  {
+    key: "clear",
+    label: "Clear conversation",
+    description: "Start a fresh conversation with a new session",
+    icon: <Trash2 size={13} />,
+    action: { type: "text" },
+    group: "session",
   },
 ];
 
@@ -172,7 +215,25 @@ export function Composer(props: Props) {
     onToggleMcp,
     contextUsage,
     repoPath,
+    sdkSlashCommands = [],
   } = props;
+
+  // Merge built-in commands with SDK skills. SDK skills that already have a
+  // built-in entry (matched by key) are skipped so built-ins always win.
+  const builtinKeys = new Set(BUILTIN_SLASH_COMMANDS.map((c) => c.key));
+  const allSlashCommands: SlashCommand[] = [
+    ...BUILTIN_SLASH_COMMANDS,
+    ...sdkSlashCommands
+      .filter((name) => !builtinKeys.has(name))
+      .map((name) => ({
+        key: name,
+        label: name.charAt(0).toUpperCase() + name.slice(1).replace(/-/g, " "),
+        description: `Run the /${name} skill`,
+        icon: <Terminal size={13} />,
+        action: { type: "text" } as SlashCommandAction,
+        group: "skills" as SlashCommandGroup,
+      })),
+  ];
 
   const DRAFT_KEY = `buildover.draft.${chatId}`;
 
@@ -205,6 +266,7 @@ export function Composer(props: Props) {
   const [atHighlightIndex, setAtHighlightIndex] = useState(0);
   const atSearchRef = useRef<HTMLInputElement>(null);
   const atWrapRef = useRef<HTMLDivElement>(null);
+  const mirrorRef = useRef<HTMLDivElement>(null);
 
   // ---- / command popup state ----
   const [slashPopupOpen, setSlashPopupOpen] = useState(false);
@@ -377,25 +439,48 @@ export function Composer(props: Props) {
     });
   };
 
-  // Remove the /command token and apply the permission mode.
+  // Handle slash command selection.
+  // - "permission" commands: clear the token, apply the mode.
+  // - "text" commands: replace the partial token with "/<key> " so the user
+  //   can optionally add arguments before pressing Enter to send.
   const selectSlashCommand = (cmd: SlashCommand) => {
     const el = textareaRef.current;
     if (!el) return;
     const cursor = el.selectionStart ?? el.value.length;
     const before = el.value.slice(0, cursor);
-    const replaced = before.replace(/(?:^|\n)\/[^\s]*$/, (m) =>
-      m.startsWith("\n") ? "\n" : "",
-    );
-    const newText = replaced + el.value.slice(cursor);
-    setText(newText);
-    saveDraft(newText);
-    onPermissionModeChange(cmd.mode);
-    setSlashPopupOpen(false);
-    setSlashQuery("");
-    requestAnimationFrame(() => {
-      el.setSelectionRange(replaced.length, replaced.length);
-      el.focus();
-    });
+
+    if (cmd.action.type === "permission") {
+      // Remove the /token entirely and apply the mode.
+      const replaced = before.replace(/(?:^|\n)\/[^\s]*$/, (m) =>
+        m.startsWith("\n") ? "\n" : "",
+      );
+      const newText = replaced + el.value.slice(cursor);
+      setText(newText);
+      saveDraft(newText);
+      onPermissionModeChange(cmd.action.mode);
+      setSlashPopupOpen(false);
+      setSlashQuery("");
+      requestAnimationFrame(() => {
+        el.setSelectionRange(replaced.length, replaced.length);
+        el.focus();
+      });
+    } else {
+      // Replace the partial /token with the full "/<key> " so the user can
+      // type optional arguments and then press Enter to send.
+      const insertion = `/${cmd.key} `;
+      const replaced = before.replace(/(?:^|\n)\/[^\s]*$/, (m) =>
+        m.startsWith("\n") ? `\n${insertion}` : insertion,
+      );
+      const newText = replaced + el.value.slice(cursor);
+      setText(newText);
+      saveDraft(newText);
+      setSlashPopupOpen(false);
+      setSlashQuery("");
+      requestAnimationFrame(() => {
+        el.setSelectionRange(replaced.length, replaced.length);
+        el.focus();
+      });
+    }
   };
 
   const addFiles = async (files: FileList | File[]) => {
@@ -413,13 +498,36 @@ export function Composer(props: Props) {
 
   const meta = MODE_META[permissionMode];
 
+  // Renders `text` as React nodes, wrapping any /command token (at the start of the
+  // string or after a newline) in a <span class="slash-token"> so the mirror div can
+  // display a coloured pill behind it.  The mirror itself is `color: transparent`, so
+  // only the span's background-color is visible through the transparent textarea.
+  const renderHighlighted = (raw: string): React.ReactNode => {
+    if (!raw || !raw.includes("/")) return raw;
+    const parts: React.ReactNode[] = [];
+    const regex = /(^|\n)(\/\S*)/g;
+    let last = 0;
+    let k = 0;
+    let m: RegExpExecArray | null;
+    while ((m = regex.exec(raw)) !== null) {
+      const prefix = m[1]; // '' or '\n'
+      const token = m[2];  // '/command…'
+      if (m.index > last) parts.push(raw.slice(last, m.index));
+      if (prefix) parts.push(prefix);
+      parts.push(<span key={k++} className="slash-token">{token}</span>);
+      last = m.index + m[0].length;
+    }
+    if (last < raw.length) parts.push(raw.slice(last));
+    return <>{parts}</>;
+  };
+
   // Derived filtered lists (computed at render time for use in JSX + keyboard handlers).
   const atFilesFiltered = atFiles
     .filter(
       (f) => atQuery === "" || f.toLowerCase().includes(atQuery.toLowerCase()),
     )
     .slice(0, 50);
-  const slashCommandsFiltered = SLASH_COMMANDS.filter((c) =>
+  const slashCommandsFiltered = allSlashCommands.filter((c) =>
     c.key.startsWith(slashQuery.toLowerCase()),
   );
 
@@ -530,30 +638,76 @@ export function Composer(props: Props) {
             role="listbox"
             aria-label="Commands"
           >
-            {slashCommandsFiltered.length === 0 && (
+            {slashCommandsFiltered.length === 0 ? (
               <div className="at-popup-empty">No matching commands</div>
+            ) : slashQuery !== "" ? (
+              // Flat filtered list when the user has typed a prefix
+              slashCommandsFiltered.map((cmd, i) => (
+                <button
+                  key={cmd.key}
+                  className={`inline-popup-item${i === slashHighlightIndex ? " highlighted" : ""}`}
+                  role="option"
+                  aria-selected={i === slashHighlightIndex}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    selectSlashCommand(cmd);
+                  }}
+                  onMouseEnter={() => setSlashHighlightIndex(i)}
+                >
+                  <span className="popup-item-icon">{cmd.icon}</span>
+                  <div>
+                    <div className="popup-item-label">/{cmd.key}</div>
+                    <div className="popup-item-desc">{cmd.description}</div>
+                  </div>
+                </button>
+              ))
+            ) : (
+              // Grouped view when just "/" is typed
+              GROUP_ORDER.flatMap((group) => {
+                const cmds = slashCommandsFiltered.filter((c) => c.group === group);
+                if (cmds.length === 0) return [];
+                return [
+                  <div key={`hdr-${group}`} className="slash-popup-group-header">
+                    {GROUP_LABELS[group]}
+                  </div>,
+                  ...cmds.map((cmd) => {
+                    const i = slashCommandsFiltered.indexOf(cmd);
+                    return (
+                      <button
+                        key={cmd.key}
+                        className={`inline-popup-item${i === slashHighlightIndex ? " highlighted" : ""}`}
+                        role="option"
+                        aria-selected={i === slashHighlightIndex}
+                        onMouseDown={(e) => {
+                          e.preventDefault();
+                          selectSlashCommand(cmd);
+                        }}
+                        onMouseEnter={() => setSlashHighlightIndex(i)}
+                      >
+                        <span className="popup-item-icon">{cmd.icon}</span>
+                        <div>
+                          <div className="popup-item-label">/{cmd.key}</div>
+                          <div className="popup-item-desc">{cmd.description}</div>
+                        </div>
+                      </button>
+                    );
+                  }),
+                ];
+              })
             )}
-            {slashCommandsFiltered.map((cmd, i) => (
-              <button
-                key={cmd.key}
-                className={`inline-popup-item${i === slashHighlightIndex ? " highlighted" : ""}`}
-                role="option"
-                aria-selected={i === slashHighlightIndex}
-                onMouseDown={(e) => {
-                  e.preventDefault();
-                  selectSlashCommand(cmd);
-                }}
-                onMouseEnter={() => setSlashHighlightIndex(i)}
-              >
-                <span className="popup-item-icon">{cmd.icon}</span>
-                <div>
-                  <div className="popup-item-label">/{cmd.key}</div>
-                  <div className="popup-item-desc">{cmd.description}</div>
-                </div>
-              </button>
-            ))}
           </div>
         )}
+
+        {/* Mirror div — renders the same text with /command tokens highlighted.
+            Sits behind the transparent textarea; only the span backgrounds are
+            visible (the mirror text itself is color:transparent). */}
+        <div
+          ref={mirrorRef}
+          className="composer-input-mirror"
+          aria-hidden="true"
+        >
+          {renderHighlighted(text)}
+        </div>
 
         <textarea
           ref={textareaRef}
@@ -594,6 +748,10 @@ export function Composer(props: Props) {
             // Neither trigger active — close any open popup.
             setAtPopupOpen(false);
             setSlashPopupOpen(false);
+          }}
+          onScroll={(e) => {
+            if (mirrorRef.current)
+              mirrorRef.current.scrollTop = e.currentTarget.scrollTop;
           }}
           onPaste={async (e) => {
             const items = e.clipboardData?.items;

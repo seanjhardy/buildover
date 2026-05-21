@@ -827,6 +827,7 @@ export default function App() {
                               onToggleMcp={() => setMcpOpen((v) => !v)}
                               contextUsage={agent.contextUsage}
                               repoPath={activeRepo?.path}
+                              sdkSlashCommands={agent.slashCommands}
                             />
                           </div>
                         </div>
