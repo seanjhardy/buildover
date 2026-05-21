@@ -81,6 +81,10 @@ class AgentSession {
   // event arrives. Used to decide whether to auto-compact after a turn ends.
   private lastContextPct = 0;
   private lastModel: Model = "claude-sonnet-4-6";
+  // Set to true when the agent calls ClearContext during a turn. The finally
+  // block treats this the same as hitting the auto-compact threshold — it runs
+  // a silent /compact turn immediately after the current turn ends.
+  private pendingCompact = false;
 
   constructor(chatId: string, repoPath: string) {
     this.chatId = chatId;
@@ -404,6 +408,11 @@ class AgentSession {
       "user_message_echo",
       "turn_start",
       "turn_end",
+      // Suppress the transient spike in context usage that happens while the
+      // compact turn loads the full history to summarize it. The internal
+      // lastContextPct field is still updated (done before the broadcast check)
+      // so the threshold logic works correctly.
+      "context_usage",
     ]);
 
     const emit = (event: RawAgentEvent) => {
@@ -431,6 +440,10 @@ class AgentSession {
         getPermissionMode: () => this.currentPermissionMode,
         attachments: args.attachments,
         emit,
+        requestCompact: (reason) => {
+          console.log(`[session] ClearContext requested by agent${reason ? `: ${reason}` : ""}`);
+          this.pendingCompact = true;
+        },
         requestPermission: (req) =>
           new Promise((resolve) => {
             const requestId = `pr-${Date.now()}-${Math.random()
@@ -516,12 +529,14 @@ class AgentSession {
       });
       if (final) await this.pushStatusFor(final);
 
-      // Auto-compact if the context window is getting full.
+      // Auto-compact if the context window is getting full, or if the agent
+      // explicitly requested a compact via the ClearContext tool.
       // Guard: don't re-trigger on the compact turn itself to avoid a loop.
-      if (
-        this.lastContextPct >= AUTO_COMPACT_THRESHOLD &&
-        !args.text.startsWith("/compact")
-      ) {
+      const shouldCompact =
+        (this.lastContextPct >= AUTO_COMPACT_THRESHOLD || this.pendingCompact) &&
+        !args.text.startsWith("/compact");
+      this.pendingCompact = false;
+      if (shouldCompact) {
         void this.runTurn({
           text: "/compact",
           model: this.lastModel,
@@ -558,6 +573,10 @@ class AgentSession {
     // context_usage is not a turn event — persist it as a top-level field on
     // the ChatRecord so it survives page reload and can be re-emitted on replay,
     // without bloating the events array with a new entry every turn.
+    // Skip during silent (compact) turns: the usage spike while compaction loads
+    // the full history should not be written to disk — a page reload would show
+    // an inflated number until the next real turn corrects it.
+    if (event.type === "context_usage" && this.currentTurnSilent) return;
     if (event.type === "context_usage") {
       await withChatLock(this.repoPath, this.chatId, async () => {
         const r = await readChat(this.repoPath, this.chatId);

@@ -15,9 +15,17 @@ export type RequestAttentionAck = (args: {
   summary?: string;
 }) => Promise<{ feedback?: string; interrupt?: boolean }>;
 
+// Callback type: signals to the session that the agent wants to compact the
+// conversation history. The session schedules a /compact turn after the current
+// turn ends (same mechanism as auto-compact, but triggered by the agent itself).
+export type RequestCompact = (reason?: string) => void;
+
 // Creates the custom MCP tool server, closing over the requestAttentionAck
 // callback so the RequestUserAttention handler can block on real user input.
-export function createCustomToolsServer(requestAttentionAck: RequestAttentionAck) {
+export function createCustomToolsServer(
+  requestAttentionAck: RequestAttentionAck,
+  requestCompact: RequestCompact,
+) {
   // RequestUserAttention: pauses the agent turn and surfaces a UI prompt.
   // Unlike the old implementation that returned immediately (making it
   // bypassable via the permission system), the handler here awaits a Promise
@@ -256,9 +264,49 @@ export function createCustomToolsServer(requestAttentionAck: RequestAttentionAck
     },
   );
 
+  // ClearContext: lets the agent proactively compact the conversation history
+  // to free up context window space. Calling it schedules a silent /compact
+  // turn immediately after the current turn ends — the same mechanism used by
+  // auto-compact, but triggered by the agent rather than a usage threshold.
+  // Use this after accumulating large tool results or file reads that are no
+  // longer needed for the current task.
+  const clearContextTool = tool(
+    "ClearContext",
+    "Summarize and compact the conversation history to free up context window space. " +
+      "Call this proactively whenever you have accumulated tool results, file reads, " +
+      "or other content in the history that is no longer relevant to what you are " +
+      "currently working on. Prefer calling it early and often rather than waiting " +
+      "until the context window is nearly full — clearing irrelevant history makes " +
+      "the remaining context cheaper and faster. After this turn ends the history " +
+      "will be summarized automatically; you do not need to do anything else.",
+    {
+      reason: z
+        .string()
+        .optional()
+        .describe(
+          "Brief description of what is being cleared and why " +
+            "(e.g. 'Clearing file reads from initial exploration — moving to implementation'). " +
+            "Helps with debugging; not shown to the user.",
+        ),
+    },
+    async (args) => {
+      requestCompact(args.reason);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: args.reason
+              ? `Context compaction scheduled: ${args.reason}`
+              : "Context compaction scheduled. History will be summarized after this turn completes.",
+          },
+        ],
+      };
+    },
+  );
+
   return createSdkMcpServer({
     name: "buildover-custom-tools",
     version: "1.0.0",
-    tools: [requestUserAttentionTool, renderSvgTool, renderTableTool, renderChartTool],
+    tools: [requestUserAttentionTool, renderSvgTool, renderTableTool, renderChartTool, clearContextTool],
   });
 }

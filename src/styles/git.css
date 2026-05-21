@@ -221,6 +221,12 @@
   gap: 5px;
 }
 
+.git-commit-input-wrap {
+  position: relative;
+  display: flex;
+  align-items: center;
+}
+
 .git-commit-input {
   width: 100%;
   background: var(--app-input-background);
@@ -229,7 +235,7 @@
   color: var(--app-input-foreground);
   font: inherit;
   font-size: 12px;
-  padding: 5px 8px;
+  padding: 5px 28px 5px 8px;
   outline: none;
   transition: border-color 100ms;
 }
@@ -237,9 +243,66 @@
   border-color: var(--app-input-active-border);
 }
 
+.git-generate-btn {
+  position: absolute;
+  right: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  background: transparent;
+  border: 0;
+  border-radius: 3px;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: color 100ms, background 100ms;
+  flex-shrink: 0;
+}
+.git-generate-btn:hover:not(:disabled) {
+  color: var(--app-claude-orange);
+  background: rgba(217, 119, 87, 0.12);
+}
+.git-generate-btn:disabled {
+  opacity: 0.35;
+  cursor: not-allowed;
+}
+@keyframes git-wand-spin {
+  from { transform: rotate(0deg); }
+  to   { transform: rotate(360deg); }
+}
+.git-generate-btn--spinning {
+  color: var(--app-claude-orange);
+}
+.git-generate-btn--spinning svg {
+  animation: git-wand-spin 0.8s linear infinite;
+}
+
 .git-commit-actions {
   display: flex;
   gap: 5px;
+}
+
+.git-commit-btn-active,
+.git-commit-btn-inactive {
+  justify-content: center;
+}
+
+.git-commit-btn-active {
+  background: var(--app-claude-orange);
+  border-color: var(--app-claude-orange);
+  color: #fff;
+  cursor: pointer;
+}
+.git-commit-btn-active:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--app-claude-orange) 85%, #000);
+  border-color: color-mix(in srgb, var(--app-claude-orange) 85%, #000);
+}
+
+.git-commit-btn-inactive {
+  cursor: not-allowed;
+  pointer-events: none;
 }
 
 .git-sync-row {
@@ -256,11 +319,16 @@
   background: var(--app-claude-orange);
   color: white;
   font-size: 9px;
-  padding: 1px 5px;
+  padding: 0 5px;
   border-radius: 999px;
   font-weight: 700;
   margin-left: auto;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 1;
+  min-height: 14px;
 }
 
 /* Split push button (Push + Force-push joined together) */

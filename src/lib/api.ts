@@ -9,6 +9,31 @@ import type {
   SearchIndexStatus,
 } from "../types.js";
 
+// ── Response cache & in-flight deduplication ──────────────────────────────────
+// Eliminates redundant network requests when multiple callers fetch the same
+// URL in a short window (e.g. badge polls + sidebar polls overlapping), and
+// makes tab switches feel instant by serving fresh-enough cached responses.
+
+interface _CacheEntry { data: unknown; expiresAt: number }
+const _responseCache = new Map<string, _CacheEntry>();
+const _inFlight = new Map<string, Promise<unknown>>();
+
+/** Returns the cache TTL in ms for a given API path. 0 = no caching. */
+function _getTtl(path: string): number {
+  if (path.startsWith('/api/github/')) return 30_000;  // PR data changes slowly
+  if (path.startsWith('/api/git/status')) return 5_000; // git status: short TTL
+  if (path.startsWith('/api/git/log')) return 10_000;   // git log: medium TTL
+  if (path.startsWith('/api/chats')) return 10_000;     // chat list: short TTL so repo switches are instant
+  return 0;
+}
+
+/** Evict cached GET entries whose full URL contains the given substring. */
+export function invalidateApiCache(urlSubstring: string): void {
+  for (const key of _responseCache.keys()) {
+    if (key.includes(urlSubstring)) _responseCache.delete(key);
+  }
+}
+
 // In Electron production, the page is served from file:// so there is no
 // implicit base URL for relative fetch() paths. Detect this and prefix all
 // API calls with the explicit Express server origin.
@@ -17,14 +42,36 @@ function getApiBase(): string {
 }
 
 async function getJson<T>(path: string): Promise<T> {
-  const res = await fetch(getApiBase() + path);
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text || res.statusText}`);
-  }
-  return (await res.json()) as T;
-}
+  const url = getApiBase() + path;
+  const ttl = _getTtl(path);
 
+  // Serve from cache if the entry is still fresh.
+  if (ttl > 0) {
+    const hit = _responseCache.get(url);
+    if (hit && hit.expiresAt > Date.now()) return hit.data as T;
+  }
+
+  // Deduplicate concurrent identical requests — return the same Promise.
+  const existing = _inFlight.get(url);
+  if (existing) return existing as Promise<T>;
+
+  const promise = fetch(url)
+    .then(async (res) => {
+      if (!res.ok) {
+        const text = await res.text().catch(() => "");
+        throw new Error(`${res.status}: ${text || res.statusText}`);
+      }
+      const data = (await res.json()) as T;
+      if (ttl > 0) {
+        _responseCache.set(url, { data, expiresAt: Date.now() + ttl });
+      }
+      return data;
+    })
+    .finally(() => { _inFlight.delete(url); });
+
+  _inFlight.set(url, promise);
+  return promise as Promise<T>;
+}
 
 async function send<T>(
   method: string,
@@ -40,6 +87,11 @@ async function send<T>(
     const text = await res.text().catch(() => "");
     throw new Error(`${res.status}: ${text || res.statusText}`);
   }
+  // Invalidate related GET caches after any mutation so the next poll
+  // fetches fresh data rather than serving a stale cached response.
+  if (path.startsWith('/api/git/')) invalidateApiCache('/api/git/');
+  if (path.startsWith('/api/github/')) invalidateApiCache('/api/github/');
+  if (path.startsWith('/api/chats')) invalidateApiCache('/api/chats');
   return (await res.json()) as T;
 }
 
@@ -337,6 +389,10 @@ export const gitApi = {
     getJson<{ diff: string }>(
       `/api/git/commit-file-diff?repoPath=${encodeURIComponent(repoPath)}&hash=${encodeURIComponent(hash)}&file=${encodeURIComponent(file)}`,
     ).then((r) => r.diff),
+
+  generateCommitMessage: (repoPath: string) =>
+    send<{ message: string }>("POST", `/api/git/generate-commit-message`, { repoPath })
+      .then((r) => r.message),
 };
 
 export const githubApi = {

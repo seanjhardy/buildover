@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { Mic, MicOff } from "lucide-react";
 import { Composer } from "./components/Composer.js";
 import { EmptyChat, EmptyWorkspace } from "./components/EmptyStates.js";
@@ -36,6 +36,7 @@ import { TerminalPanel } from "./components/TerminalPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
 import { agentSocket } from "./lib/agentSocket.js";
 import { api, gitApi, githubApi, selfUpdateApi } from "./lib/api.js";
+import type { GitHubPR } from "./lib/api.js";
 import { useSelfUpdate } from "./hooks/useSelfUpdate.js";
 import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
@@ -53,7 +54,18 @@ export default function App() {
   const workspace = useWorkspace();
   const { activeRepo, activeChatId } = workspace;
 
-  const chats = useChats(activeRepo?.path ?? null);
+  // Track chat statuses for all open repos so inactive tabs can show badges.
+  // Must come before useChats so we can pass the pre-fetched list as initial
+  // state — this eliminates the loading flash when switching between repos.
+  const openRepoPaths = workspace.openRepos.map((r) => r.path);
+  const allRepoChats = useAllRepoChats(openRepoPaths);
+  const { badges: repoTabBadges, markSeen: markRepoTabSeen } =
+    useRepoTabBadges(openRepoPaths, activeRepo?.path ?? null, allRepoChats);
+
+  // Seed useChats with whatever useAllRepoChats already has for this repo so
+  // switching to a repo that has been prefetched shows its chats immediately.
+  const prefetchedChats = activeRepo ? (allRepoChats[activeRepo.path] ?? null) : null;
+  const chats = useChats(activeRepo?.path ?? null, prefetchedChats);
   const agent = useAgent(activeRepo?.path ?? null, activeChatId);
   const todos = useTodos(agent.turns);
   const filesChanged = useFilesChanged(
@@ -61,12 +73,6 @@ export default function App() {
     agent.cwd ?? activeRepo?.path ?? "",
     activeRepo?.path ?? "",
   );
-
-  // Track chat statuses for all open repos so inactive tabs can show badges.
-  const openRepoPaths = workspace.openRepos.map((r) => r.path);
-  const allRepoChats = useAllRepoChats(openRepoPaths);
-  const { badges: repoTabBadges, markSeen: markRepoTabSeen } =
-    useRepoTabBadges(openRepoPaths, activeRepo?.path ?? null, allRepoChats);
 
   // Dock badge + native macOS notifications for agent status changes.
   useNotifications(allRepoChats);
@@ -91,6 +97,12 @@ export default function App() {
   });
   const [activeView, setActiveView] = useState<WorkspaceView>('chat');
   const [activePrNumber, setActivePrNumber] = useState<number | null>(null);
+  // The lightweight PR object from the sidebar list — used to seed PullRequestView
+  // immediately so it renders without a loading screen while the detail fetch runs.
+  const [activePr, setActivePr] = useState<GitHubPR | null>(null);
+  // Reset selected PR when the active repo changes so we don't try to load a
+  // PR number from a previous repo against the new one.
+  useEffect(() => { setActivePrNumber(null); setActivePr(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prBadge, setPrBadge] = useState(0);
   const [scBadge, setScBadge] = useState(0);
 
@@ -718,7 +730,10 @@ export default function App() {
             setMarketOpen(false);
             setHomeOpen(false);
             markRepoTabSeen(path);
-            workspace.setActiveRepo(path);
+            // startTransition keeps the current repo's UI visible while React
+            // computes the new state in the background, preventing the blank
+            // flash that happened when synchronous teardown preceded the fetch.
+            startTransition(() => workspace.setActiveRepo(path));
           }}
           onClose={workspace.closeRepo}
           onOpen={async (path) => {
@@ -774,7 +789,10 @@ export default function App() {
               prBadge={prBadge}
             />
 
-            {/* Conditional sidebar based on active view */}
+            {/* Sidebars — SC and PR stay mounted so their state (file lists,
+                PR lists, scroll position) survives view switches and re-showing
+                them is instant. Chat sidebar is lightweight (data from props)
+                so conditional rendering is fine there. */}
             {activeView === 'chat' && (
               <ChatSidebar
                 chats={chats.chats}
@@ -788,19 +806,16 @@ export default function App() {
                 onOpenGraph={() => setGitGraphOpen(true)}
               />
             )}
-            {activeView === 'source-control' && (
-              <SourceControlSidebar
-                repoPath={activeRepo.path}
-                onOpenGraph={() => setGitGraphOpen(true)}
-              />
-            )}
-            {activeView === 'pr' && (
-              <PullRequestSidebar
-                repoPath={activeRepo.path}
-                activePrNumber={activePrNumber}
-                onSelectPr={(num) => setActivePrNumber(num)}
-              />
-            )}
+            <SourceControlSidebar
+              repoPath={activeRepo.path}
+              hidden={activeView !== 'source-control'}
+            />
+            <PullRequestSidebar
+              repoPath={activeRepo.path}
+              activePrNumber={activePrNumber}
+              onSelectPr={(pr) => { setActivePrNumber(pr.number); setActivePr(pr); }}
+              hidden={activeView !== 'pr'}
+            />
 
             {/* Gradient fade — only shown in chat view */}
             {activeView === 'chat' && <div className="chat-sidebar-fade" />}
@@ -838,7 +853,8 @@ export default function App() {
                   <PullRequestView
                     repoPath={activeRepo.path}
                     prNumber={activePrNumber}
-                    onClose={() => setActivePrNumber(null)}
+                    initialPr={activePr}
+                    onClose={() => { setActivePrNumber(null); setActivePr(null); }}
                   />
                 </div>
                 {workspace.openRepos.map((repo) => (

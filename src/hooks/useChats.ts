@@ -26,10 +26,32 @@ export interface UseChatsReturn {
 // Lists chats in a repo and keeps their statuses live by subscribing to each
 // chat's WS event stream (without replay). Status / title updates are pushed
 // back into the local summary list as they arrive.
-export function useChats(repoPath: string | null): UseChatsReturn {
-  const [chats, setChats] = useState<ChatSummary[]>([]);
+//
+// `prefetchedList` — optional chat list already in memory (e.g. from
+// useAllRepoChats). When provided it seeds the initial state so the sidebar
+// renders immediately on repo switch, while a background fetch refreshes it.
+export function useChats(
+  repoPath: string | null,
+  prefetchedList?: ChatSummary[] | null,
+): UseChatsReturn {
+  const [chats, setChats] = useState<ChatSummary[]>(() => prefetchedList ?? []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // When we switch to a new repo and already have prefetched data, apply it
+  // immediately so the sidebar is populated before the HTTP request finishes.
+  const prevRepoRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (repoPath !== prevRepoRef.current) {
+      prevRepoRef.current = repoPath;
+      if (prefetchedList && prefetchedList.length > 0) {
+        setChats(prefetchedList);
+      }
+    }
+  // We intentionally only re-run on repoPath change, not on every prefetchedList update
+  // (live WS updates own that from here on).
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [repoPath]);
   // Track which chatIds we've already wired live listeners for. Cleaned up
   // when the repoPath changes or the component unmounts.
   const subscribedRef = useRef<Set<string>>(new Set());
@@ -98,7 +120,7 @@ export function useChats(repoPath: string | null): UseChatsReturn {
         agentSocket.send({
           type: "subscribe",
           chatId: chat.id,
-          repoPath,
+          repoPath: repoPath!, // guarded by `if (!repoPath) return` above
           withReplay: false,
         });
         const cleanup = () => {

@@ -320,6 +320,36 @@ export async function gitCommitDiffStat(
     .filter((f) => f.filename);
 }
 
+/**
+ * Returns the full working-tree diff suitable for commit message generation.
+ * Combines staged + unstaged changes vs HEAD (git diff HEAD). Falls back to
+ * the staged-only diff on a fresh repo with no commits yet.
+ * Truncated to 16 KB so the prompt stays small.
+ */
+export async function gitGetWorkingDiff(repoPath: string): Promise<string> {
+  // git diff HEAD shows working tree vs HEAD, including both staged & unstaged
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["diff", "HEAD"],
+      { cwd: repoPath, maxBuffer: 512 * 1024 },
+    );
+    if (stdout.trim()) return stdout.slice(0, 16_000);
+  } catch { /* no HEAD yet — fresh repo */ }
+
+  // Fresh repo: staged vs empty (initial commit pending)
+  try {
+    const { stdout } = await execFileAsync(
+      "git",
+      ["diff", "--cached"],
+      { cwd: repoPath, maxBuffer: 512 * 1024 },
+    );
+    if (stdout.trim()) return stdout.slice(0, 16_000);
+  } catch { /* ignore */ }
+
+  return "";
+}
+
 /** Returns the raw unified diff for a single file in a specific commit. */
 export async function gitCommitFileDiff(
   repoPath: string,

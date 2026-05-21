@@ -476,6 +476,7 @@ function RefPill({ label, color, isCurrentBranch, onContextMenu, onDoubleClick }
       className="ggraph-ref-pill"
       style={borderStyle}
       title={label.kind === "remote" ? `${label.remoteName ?? "origin"}/${label.text}` : label.text}
+      onClick={(e) => e.stopPropagation()}
       onContextMenu={onContextMenu}
       onDoubleClick={onDoubleClick}
     >

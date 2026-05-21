@@ -306,19 +306,34 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
   }, [fitTerminalWhenReady, setTabSettingUp, wsSend]);
 
   // Ref-callback: called whenever a container div mounts/unmounts.
-  // Initialises immediately (panel closed or not) so PTYs are pre-warmed.
+  // Only initialises eagerly for the active (non-hidden) repo so that opening
+  // a new repo tab doesn't immediately spawn a background PTY session. Hidden
+  // terminals are initialised lazily when the repo first becomes active.
   const setContainerRef = useCallback((tabId: string, el: HTMLDivElement | null) => {
     containerRefs.current.set(tabId, el);
-    if (el) {
+    if (el && !hidden) {
       const tab = tabs.find((t) => t.id === tabId);
       if (tab && !terminalsRef.current.has(tabId)) {
         initTerminal(tab, el);
       }
     }
-  }, [tabs, initTerminal]);
+  }, [tabs, initTerminal, hidden]);
 
-  // When the panel opens, initialise the active tab and focus it
+  // When the panel opens OR this repo becomes the active (visible) one,
+  // initialise all pending tabs and focus the active tab.
   useEffect(() => {
+    // Initialise any tabs whose containers are ready but not yet spawned.
+    // This covers the case where setContainerRef deferred init (hidden=true at
+    // mount time) and the repo has now become active (hidden=false).
+    if (!hidden) {
+      for (const tab of tabs) {
+        const container = containerRefs.current.get(tab.id);
+        if (container && !terminalsRef.current.has(tab.id)) {
+          initTerminal(tab, container);
+        }
+      }
+    }
+
     if (!isOpen || !activeTabId) return;
     const tab = tabs.find((t) => t.id === activeTabId);
     const container = containerRefs.current.get(activeTabId);

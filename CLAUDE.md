@@ -1,32 +1,11 @@
 # Buildover Agent Instructions
 
-## Code Search
+## Search Tools
 
-Use `semble search` to find code by describing what it does or naming a symbol/identifier, instead of grep:
+Always use `rg` (ripgrep) instead of `grep` for searching file contents. Ripgrep is faster, respects `.gitignore` by default, and supports the same common flags (`-n`, `-i`, `-r`, etc.). For example:
 
-​```bash
-semble search "authentication flow" ./my-project
-semble search "save_pretrained" ./my-project
-semble search "save model to disk" ./my-project --top-k 10
-​```
-
-Use `semble find-related` to discover code similar to a known location (pass `file_path` and `line` from a prior search result):
-
-​```bash
-semble find-related src/auth.py 42 ./my-project
-​```
-
-`path` defaults to the current directory when omitted; git URLs are accepted.
-
-If `semble` is not on `$PATH`, use `uvx --from "semble[mcp]" semble` in its place.
-
-### Workflow
-
-1. Start with `semble search` to find relevant chunks.
-2. Inspect full files only when the returned chunk is not enough context.
-3. Optionally use `semble find-related` with a promising result's `file_path` and `line` to discover related implementations.
-4. Use grep only when you need exhaustive literal matches or quick confirmation of an exact string.
-
+- Use `rg "pattern" path/` instead of `grep -r "pattern" path/`
+- Use `rg --type ts "pattern"` instead of `grep -r --include="*.ts" "pattern"`
 
 ## RequestUserAttention Tool
 
@@ -73,3 +52,32 @@ RequestUserAttention({
   summary: "## Options\n\n- **Auth0** — enterprise-grade, expensive\n- **Supabase Auth** — open-source, generous free tier\n- **Clerk** — developer-friendly, moderate cost\n\nI recommend Supabase Auth given your self-hosted requirements, but let me know if you'd like me to dig deeper into any of these before I start."
 })
 ```
+
+## Context Management
+
+The context window is a shared, finite resource. Every tool result, file read, and assistant message that remains in the history costs tokens on every subsequent API call. **Proactively clear irrelevant context** rather than letting it accumulate.
+
+### ClearContext tool
+
+Use `ClearContext` to trigger an immediate, silent compaction of the conversation history. After your current turn ends, the full history is summarised into a compact form — all irrelevant tool results and file contents are dropped from the active window.
+
+```
+ClearContext({
+  reason: "Finished exploring the codebase — clearing file reads before starting implementation"
+})
+```
+
+### When to call it
+
+Call `ClearContext` **before** the context gets crowded, not after. Good triggers:
+
+- You have finished an **exploration or research phase** (reading files, grepping, etc.) and are switching to writing or editing code. The raw file contents are no longer needed.
+- You completed a **self-contained subtask** (e.g. debugging one module) and are moving on to an unrelated part of the codebase.
+- The history contains **many large tool results** (long grep outputs, full file reads, shell output) that were only needed for a single step.
+- You are about to start a **new logical phase** of a task and the prior context would just add noise.
+
+### When NOT to call it
+
+- Mid-investigation, when earlier results are still being referenced.
+- When the context is mostly lean assistant/user messages — only clear when there is actual bulk to remove.
+- Immediately before returning a final answer — compact first only if the history is genuinely large.

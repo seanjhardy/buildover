@@ -6,6 +6,9 @@ interface Props {
   repoPath: string;
   prNumber: number | null;
   onClose?: () => void;
+  /** Basic PR data from the sidebar list — used to render the view instantly
+   *  while the full detail fetch is in flight, eliminating the loading screen. */
+  initialPr?: GitHubPR | null;
 }
 
 type CircleType = 'success' | 'error' | 'warning' | 'info';
@@ -73,8 +76,10 @@ const MERGE_OPTIONS: Array<{ method: MergeMethod; label: string; desc: string }>
   { method: 'rebase', label: 'Rebase and merge', desc: 'Rebase all commits onto the base branch' },
 ];
 
-export function PullRequestView({ repoPath, prNumber }: Props) {
-  const [pr, setPr] = useState<GitHubPR | null>(null);
+export function PullRequestView({ repoPath, prNumber, initialPr }: Props) {
+  // Seed state with initialPr so the view renders instantly on selection,
+  // then overwrite with fresh data once the detail fetch completes.
+  const [pr, setPr] = useState<GitHubPR | null>(initialPr ?? null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [bypass, setBypass] = useState(false);
@@ -91,6 +96,12 @@ export function PullRequestView({ repoPath, prNumber }: Props) {
       setPr(null);
       return;
     }
+    // Show initialPr immediately so content is visible before the fetch lands.
+    if (initialPr && initialPr.number === prNumber) {
+      setPr(initialPr);
+    }
+    // Always fetch full details in the background (cache makes this near-instant
+    // on repeat views, so there's rarely a visible loading state after first load).
     setIsLoading(true);
     setError(null);
     githubApi.getPR(repoPath, prNumber)
@@ -100,14 +111,16 @@ export function PullRequestView({ repoPath, prNumber }: Props) {
       })
       .catch((err) => {
         const msg = err instanceof Error ? err.message : String(err);
-        if (msg.includes('gh') || msg.includes('not found') || msg.includes('command')) {
+        const isGhMissing = msg.includes('ENOENT') || msg.toLowerCase().includes('command not found');
+        const isGhUnauthed = msg.toLowerCase().includes('not logged') || msg.toLowerCase().includes('not authenticated') || msg.toLowerCase().includes('gh auth login');
+        if (isGhMissing || isGhUnauthed) {
           setError('GitHub CLI (gh) is not available or not authenticated. Run `gh auth login` to enable pull request features.');
         } else {
           setError(msg);
         }
         setIsLoading(false);
       });
-  }, [repoPath, prNumber]);
+  }, [repoPath, prNumber]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Close dropdown on outside click
   useEffect(() => {
@@ -132,10 +145,17 @@ export function PullRequestView({ repoPath, prNumber }: Props) {
     );
   }
 
-  if (isLoading) {
+  // Only show a full loading screen when there's no data at all to display
+  // (first load with no initialPr). When initialPr seeds the view, we render
+  // immediately and the detail fetch updates in place — no visible loading.
+  if (isLoading && !pr) {
     return (
       <div className="pr-view">
-        <div className="pr-view-loading">Loading pull request...</div>
+        <div className="pr-view-skeleton">
+          {[60, 40, 80].map((w, i) => (
+            <span key={i} className="skeleton-line" style={{ width: `${w}%`, height: i === 0 ? 16 : 12, display: 'block' }} />
+          ))}
+        </div>
       </div>
     );
   }

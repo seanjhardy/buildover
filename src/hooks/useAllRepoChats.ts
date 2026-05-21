@@ -117,7 +117,7 @@ export function useAllRepoChats(
       }
       // Also catch any chats that slipped through (e.g. ref updated between ticks).
       subscribeNewChats();
-    }, 2000);
+    }, 30_000);
 
     // On reconnect, re-fetch all repos so badges stay accurate after restarts.
     const unsubReconnect = agentSocket.onReconnect(() => {

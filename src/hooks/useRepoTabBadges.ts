@@ -5,9 +5,11 @@ const SEEN_KEY = "buildover.repoTabSeen";
 
 // Priority order for the always-visible tab icon: highest priority first.
 // Only these statuses show an icon; idle/finished show nothing.
+// "awaiting_input" ranks above "running" because a chat blocking on user
+// input is more urgent — the user must act before work can continue.
 const ICON_PRIORITY: ChatStatus[] = [
-  "running",        // Highest — always show spinner while anything is running
-  "awaiting_input", // Question/chat icon — agent needs user response
+  "awaiting_input", // Highest — agent is blocked, user must respond
+  "running",        // Agent is actively working
   "error",          // Something went wrong
   "agent_done",     // Agent finished, awaiting user follow-up
 ];

@@ -1,4 +1,26 @@
 /* ============================================================ */
+/* Skeleton loading shimmer                                      */
+/* ============================================================ */
+
+@keyframes skeleton-shimmer {
+  0%   { background-position: -200% center; }
+  100% { background-position:  200% center; }
+}
+
+.skeleton-line {
+  background: linear-gradient(
+    90deg,
+    var(--app-input-background) 25%,
+    color-mix(in srgb, var(--app-input-background) 55%, var(--app-primary-foreground)) 50%,
+    var(--app-input-background) 75%
+  );
+  background-size: 200% auto;
+  animation: skeleton-shimmer 1.4s linear infinite;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+/* ============================================================ */
 /* Source Control Sidebar                                        */
 /* ============================================================ */
 
@@ -175,6 +197,15 @@
 .sc-status-letter--deleted  { color: #e03131; }
 .sc-status-letter--modified { color: #4e9de0; }
 
+.sc-sidebar-controls {
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  padding: 8px var(--app-spacing-medium);
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
 .sc-sidebar-footer {
   flex-shrink: 0;
   border-top: 1px solid var(--app-primary-border-color);
@@ -308,6 +339,21 @@
   border-radius: 999px;
   min-width: 14px;
   text-align: center;
+}
+
+/* SC sidebar skeleton */
+.sc-skeleton {
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.sc-skeleton-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
 }
 
 .sc-empty {
@@ -1003,4 +1049,15 @@
 .pr-comment-submit-btn:disabled {
   opacity: 0.5;
   cursor: not-allowed;
+}
+
+/* ============================================================ */
+/* PR View skeleton (shown on first load before data arrives)   */
+/* ============================================================ */
+
+.pr-view-skeleton {
+  padding: 20px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
 }

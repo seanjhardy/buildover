@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { GitBranch, ChevronsUp, ChevronRight, ChevronDown, RefreshCw } from "lucide-react";
+import { ChevronsUp, ChevronRight, ChevronDown, RefreshCw, Check, Wand2 } from "lucide-react";
 import { gitApi, type GitStatus } from "../lib/api.js";
 import type { ChangedFile } from "../lib/api.js";
 
@@ -352,23 +352,26 @@ function ScFileTree({ files }: { files: ChangedFile[] }) {
 
 interface Props {
   repoPath: string;
-  onOpenGraph?: () => void;
+  /** When true the sidebar is hidden (display:none) but stays mounted,
+   *  preserving its state so re-showing it is instant. */
+  hidden?: boolean;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function SourceControlSidebar({ repoPath, onOpenGraph }: Props) {
+export function SourceControlSidebar({ repoPath, hidden }: Props) {
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [statusFiles, setStatusFiles] = useState<ChangedFile[]>([]);
   const [loading, setLoading] = useState(false);
   const [opLoading, setOpLoading] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [showBranchPicker, setShowBranchPicker] = useState(false);
-  const [showCommitInput, setShowCommitInput] = useState(false);
   const [commitMessage, setCommitMessage] = useState("");
+  const [isGenerating, setIsGenerating] = useState(false);
   const [stagedExpanded, setStagedExpanded] = useState(true);
   const [changesExpanded, setChangesExpanded] = useState(true);
-  const branchPickerRef = useRef<HTMLDivElement>(null);
+  // Tracks whether we've done the initial load for the current repoPath.
+  // Reset to false whenever the repo changes so the new repo triggers a load.
+  const hasLoadedRef = useRef(false);
 
   const refresh = useCallback(async () => {
     try {
@@ -389,42 +392,41 @@ export function SourceControlSidebar({ repoPath, onOpenGraph }: Props) {
     setGitStatus(null);
     setStatusFiles([]);
     setError(null);
-    setShowBranchPicker(false);
-    setShowCommitInput(false);
     setCommitMessage("");
+    hasLoadedRef.current = false; // allow initial load effect to re-run for new repo
   }, [repoPath]);
 
-  // Initial load + polling
+  // Initial load on first mount, and whenever repoPath changes.
   useEffect(() => {
+    if (hasLoadedRef.current) return;
+    hasLoadedRef.current = true;
     setLoading(true);
     refresh().finally(() => setLoading(false));
-    const id = setInterval(() => void refresh(), 10_000);
-    return () => clearInterval(id);
   }, [refresh]);
 
-  // Close branch picker on outside click
+  // Polling + refresh-on-show: run a 10s poll while visible; trigger an
+  // immediate refresh whenever the sidebar becomes visible so stale data
+  // (accumulated while hidden) is updated right away.
+  const wasHiddenRef = useRef(hidden);
   useEffect(() => {
-    if (!showBranchPicker) return;
-    const handler = (e: MouseEvent) => {
-      if (branchPickerRef.current && !branchPickerRef.current.contains(e.target as Node)) {
-        setShowBranchPicker(false);
-      }
-    };
-    document.addEventListener("mousedown", handler);
-    return () => document.removeEventListener("mousedown", handler);
-  }, [showBranchPicker]);
+    const becameVisible = wasHiddenRef.current && !hidden;
+    wasHiddenRef.current = hidden;
+    if (hidden) return; // no polling while hidden
+    if (becameVisible) void refresh(); // catch up after being hidden
+    const id = setInterval(() => void refresh(), 10_000);
+    return () => clearInterval(id);
+  }, [hidden, refresh]);
 
-  const handleCheckout = async (branch: string) => {
-    setShowBranchPicker(false);
-    setOpLoading("checkout");
+  const handleGenerateCommitMessage = async () => {
+    setIsGenerating(true);
     setError(null);
     try {
-      await gitApi.checkout(repoPath, branch);
-      await refresh();
+      const message = await gitApi.generateCommitMessage(repoPath);
+      setCommitMessage(message);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setOpLoading(null);
+      setIsGenerating(false);
     }
   };
 
@@ -435,7 +437,6 @@ export function SourceControlSidebar({ repoPath, onOpenGraph }: Props) {
     try {
       await gitApi.commit(repoPath, commitMessage.trim());
       setCommitMessage("");
-      setShowCommitInput(false);
       await refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -489,7 +490,7 @@ export function SourceControlSidebar({ repoPath, onOpenGraph }: Props) {
   const hasChanges = statusFiles.length > 0 || (gitStatus?.isDirty ?? false);
 
   return (
-    <div className="sc-sidebar">
+    <div className="sc-sidebar" style={hidden ? { display: 'none' } : undefined}>
       {/* Header */}
       <div className="sc-sidebar-header">
         <span className="sc-sidebar-title">Source Control</span>
@@ -504,165 +505,54 @@ export function SourceControlSidebar({ repoPath, onOpenGraph }: Props) {
         </button>
       </div>
 
-      {/* Scrollable file tree */}
-      <div className="sc-sidebar-body">
-        {loading && !gitStatus && (
-          <div className="git-status-row git-muted" style={{ padding: "6px 12px" }}>
-            Loading…
-          </div>
-        )}
-
-        {error && (
-          <div className="git-error" style={{ margin: "6px 8px" }} title={error}>
-            {error.length > 80 ? error.slice(0, 80) + "…" : error}
-          </div>
-        )}
-
-        {gitStatus && (
-          <>
-            {stagedFiles.length > 0 && (
-              <div className="sc-section">
-                <button
-                  className="sc-section-header"
-                  onClick={() => setStagedExpanded((v) => !v)}
-                >
-                  {stagedExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                  Staged Changes
-                  <span className="sc-section-count">{stagedFiles.length}</span>
-                </button>
-                {stagedExpanded && <ScFileTree files={stagedFiles} />}
-              </div>
-            )}
-
-            {unstagedFiles.length > 0 && (
-              <div className="sc-section">
-                <button
-                  className="sc-section-header"
-                  onClick={() => setChangesExpanded((v) => !v)}
-                >
-                  {changesExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
-                  Changes
-                  <span className="sc-section-count">{unstagedFiles.length}</span>
-                </button>
-                {changesExpanded && <ScFileTree files={unstagedFiles} />}
-              </div>
-            )}
-
-            {!hasChanges && (
-              <div className="git-muted" style={{ padding: "6px 12px" }}>
-                No changes
-              </div>
-            )}
-          </>
-        )}
-      </div>
-
-      {/* Git controls footer — matches GitPanel design exactly */}
+      {/* Commit / Push / Pull — fixed, above the scrollable list */}
       {gitStatus && (
-        <div className="sc-sidebar-footer">
-          {/* Branch switcher + graph button */}
-          <div className="git-branch-row-wrap">
-            <div className="git-branch-row" ref={branchPickerRef}>
+        <div className="sc-sidebar-controls">
+          {/* Commit */}
+          <div className="git-commit-form">
+            <div className="git-commit-input-wrap">
+              <input
+                className="git-commit-input"
+                type="text"
+                placeholder="Commit message…"
+                value={commitMessage}
+                onChange={(e) => setCommitMessage(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleCommit();
+                  if (e.key === "Escape") setCommitMessage("");
+                }}
+                disabled={opLoading === "commit"}
+              />
               <button
                 type="button"
-                className="git-branch-btn"
-                onClick={() => setShowBranchPicker((v) => !v)}
-                disabled={busy}
+                className={`git-generate-btn${isGenerating ? " git-generate-btn--spinning" : ""}`}
+                onClick={() => void handleGenerateCommitMessage()}
+                disabled={!hasChanges || isGenerating || opLoading === "commit"}
+                title="Generate commit message with AI"
               >
-                <span className="git-icon">⎇</span>
-                <span className="git-branch-name">{gitStatus.currentBranch}</span>
-                <span className="git-chevron">
-                  {opLoading === "checkout" ? "…" : "▾"}
-                </span>
+                <Wand2 size={12} />
               </button>
-
-              {showBranchPicker && (
-                <div className="git-branch-list">
-                  {gitStatus.branches.map((b) => (
-                    <button
-                      key={b}
-                      type="button"
-                      className={`git-branch-item${b === gitStatus.currentBranch ? " active" : ""}`}
-                      onClick={() => void handleCheckout(b)}
-                    >
-                      {b === gitStatus.currentBranch && (
-                        <span className="git-branch-check">✓ </span>
-                      )}
-                      {b}
-                    </button>
-                  ))}
-                  {gitStatus.branches.length === 0 && (
-                    <div className="git-branch-item git-muted">No branches found</div>
-                  )}
-                </div>
-              )}
             </div>
-
-            {/* Open git graph */}
             <button
               type="button"
-              className="git-tree-btn"
-              onClick={() => onOpenGraph?.()}
-              title="Open git graph"
+              className={
+                hasChanges && commitMessage.trim()
+                  ? "git-action-btn git-commit-btn-active"
+                  : "git-action-btn git-commit-btn-inactive"
+              }
+              onClick={() => void handleCommit()}
+              disabled={!hasChanges || !commitMessage.trim() || opLoading === "commit"}
+              title={
+                !hasChanges
+                  ? "Nothing to commit"
+                  : !commitMessage.trim()
+                  ? "Enter a commit message"
+                  : "Stage all & commit"
+              }
             >
-              <GitBranch size={13} />
+              <Check size={13} />
+              {opLoading === "commit" ? "Committing…" : "Commit"}
             </button>
-          </div>
-
-          {/* Commit */}
-          <div className="git-section">
-            {showCommitInput ? (
-              <div className="git-commit-form">
-                <input
-                  className="git-commit-input"
-                  type="text"
-                  placeholder="Commit message…"
-                  value={commitMessage}
-                  onChange={(e) => setCommitMessage(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") void handleCommit();
-                    if (e.key === "Escape") {
-                      setShowCommitInput(false);
-                      setCommitMessage("");
-                    }
-                  }}
-                  autoFocus
-                  disabled={opLoading === "commit"}
-                />
-                <div className="git-commit-actions">
-                  <button
-                    type="button"
-                    className="git-action-btn git-action-primary"
-                    onClick={() => void handleCommit()}
-                    disabled={!commitMessage.trim() || opLoading === "commit"}
-                  >
-                    {opLoading === "commit" ? "Committing…" : "Commit"}
-                  </button>
-                  <button
-                    type="button"
-                    className="git-action-btn"
-                    onClick={() => { setShowCommitInput(false); setCommitMessage(""); }}
-                    disabled={opLoading === "commit"}
-                  >
-                    Cancel
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <button
-                type="button"
-                className="git-action-btn"
-                onClick={() => setShowCommitInput(true)}
-                disabled={!hasChanges || busy}
-                title={hasChanges ? "Stage all & commit" : "Nothing to commit"}
-              >
-                <span className="git-icon">✓</span>
-                Commit
-                {hasChanges && (
-                  <span className="git-dirty-dot" title="Uncommitted changes" />
-                )}
-              </button>
-            )}
           </div>
 
           {/* Push / Pull */}
@@ -713,6 +603,65 @@ export function SourceControlSidebar({ repoPath, onOpenGraph }: Props) {
           </div>
         </div>
       )}
+
+      {/* Scrollable file tree */}
+      <div className="sc-sidebar-body">
+        {loading && !gitStatus && (
+          <div className="sc-skeleton">
+            {[70, 55, 85, 60, 45].map((w, i) => (
+              <div key={i} className="sc-skeleton-row">
+                <span className="skeleton-line" style={{ width: 14, height: 14, borderRadius: 2, flexShrink: 0 }} />
+                <span className="skeleton-line" style={{ width: `${w}%`, height: 11 }} />
+              </div>
+            ))}
+          </div>
+        )}
+
+        {error && (
+          <div className="git-error" style={{ margin: "6px 8px" }} title={error}>
+            {error.length > 80 ? error.slice(0, 80) + "…" : error}
+          </div>
+        )}
+
+        {gitStatus && (
+          <>
+            {stagedFiles.length > 0 && (
+              <div className="sc-section">
+                <button
+                  className="sc-section-header"
+                  onClick={() => setStagedExpanded((v) => !v)}
+                >
+                  {stagedExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                  Staged Changes
+                  <span className="sc-section-count">{stagedFiles.length}</span>
+                </button>
+                {stagedExpanded && <ScFileTree files={stagedFiles} />}
+              </div>
+            )}
+
+            {unstagedFiles.length > 0 && (
+              <div className="sc-section">
+                <button
+                  className="sc-section-header"
+                  onClick={() => setChangesExpanded((v) => !v)}
+                >
+                  {changesExpanded ? <ChevronDown size={10} /> : <ChevronRight size={10} />}
+                  Changes
+                  <span className="sc-section-count">{unstagedFiles.length}</span>
+                </button>
+                {changesExpanded && <ScFileTree files={unstagedFiles} />}
+              </div>
+            )}
+
+            {!hasChanges && (
+              <div className="git-muted" style={{ padding: "6px 12px" }}>
+                No changes
+              </div>
+            )}
+          </>
+        )}
+      </div>
+
     </div>
   );
 }

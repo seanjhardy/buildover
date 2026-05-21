@@ -2,6 +2,7 @@ import { query, type CanUseTool } from "@anthropic-ai/claude-agent-sdk";
 import {
   createCustomToolsServer,
   type RequestAttentionAck,
+  type RequestCompact,
 } from "./customTools.js";
 import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
 import type {
@@ -67,6 +68,10 @@ interface RunArgs {
   // client sends an attention_ack — this is what makes the tool block
   // regardless of permission-mode bypass.
   requestAttentionAck: RequestAttentionAck;
+  // Called by the ClearContext tool handler. Signals to the session that the
+  // agent wants to compact history; the session schedules a /compact turn
+  // after the current turn ends (same path as auto-compact).
+  requestCompact: RequestCompact;
   abortController?: AbortController;
   // Optional hook called just before a file-modifying tool (Write, Edit,
   // MultiEdit) executes.  The session uses this to snapshot the target file's
@@ -91,7 +96,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     abortController,
   } = args;
 
-  const customToolsServer = createCustomToolsServer(requestAttentionAck);
+  const customToolsServer = createCustomToolsServer(requestAttentionAck, args.requestCompact);
 
   const finalPromptContent = renderPromptWithAttachments(prompt, attachments);
 

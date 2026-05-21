@@ -43,7 +43,9 @@ import {
   gitDeleteBranch,
   gitCommitDiffStat,
   gitCommitFileDiff,
+  gitGetWorkingDiff,
 } from "./git.js";
+import { generateCommitMessage } from "./title.js";
 import {
   readDashboard,
   addNote,
@@ -309,7 +311,18 @@ function readRepoPath(req: express.Request): string {
 app.get("/api/chats", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
-    res.json({ chats: await listChats(repoPath) });
+    const chats = await listChats(repoPath);
+    // Overlay live "awaiting_input" for any chats whose session has a pending
+    // attention. This state is never persisted to disk, so listChats() alone
+    // would return "running" for those chats — causing the sidebar and tab
+    // badges to revert to "running" on every repo-switch or page reload.
+    for (const chat of chats) {
+      const session = tryGetSession(repoPath, chat.id);
+      if (session && session.pendingAttentionList().length > 0) {
+        chat.status = "awaiting_input";
+      }
+    }
+    res.json({ chats });
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
@@ -710,6 +723,21 @@ app.get("/api/git/status-files", async (req, res) => {
     const repoPath = readRepoPath(req);
     const files = await getStatusFiles(repoPath);
     res.json({ files });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Generate commit message via Haiku ----
+app.post("/api/git/generate-commit-message", async (req, res) => {
+  try {
+    const { repoPath } = req.body as { repoPath?: string };
+    if (!repoPath) return res.status(400).json({ error: "repoPath required" });
+    const diff = await gitGetWorkingDiff(repoPath);
+    if (!diff) return res.status(400).json({ error: "No changes to describe" });
+    const message = await generateCommitMessage(diff);
+    if (!message) return res.status(500).json({ error: "Failed to generate message" });
+    res.json({ message });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }

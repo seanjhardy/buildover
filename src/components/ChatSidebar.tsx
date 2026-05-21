@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { X } from "lucide-react";
 import { ChatSidebarItem } from "./ChatSidebarItem.js";
-import { GitPanel } from "./GitPanel.js";
 import { searchApi } from "../lib/api.js";
 import type { ChatStatus, ChatSummary, SearchResult } from "../types.js";
 

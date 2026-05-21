@@ -35,6 +35,37 @@ ${trimmed}
   return cleanTitle(raw);
 }
 
+export async function generateCommitMessage(diff: string): Promise<string | null> {
+  const trimmed = diff.trim().slice(0, 14_000);
+  if (!trimmed) return null;
+
+  const instruction = `Generate a concise git commit message for the following diff.
+
+Constraints:
+- Follow conventional commits format where appropriate (feat:, fix:, refactor:, style:, chore:, docs:, test:)
+- Keep it under 72 characters
+- Use imperative mood ("Add feature" not "Added feature")
+- Be specific about what changed
+- Output the commit message and nothing else — no explanation, no quotes
+
+Diff:
+\`\`\`
+${trimmed}
+\`\`\``;
+
+  try {
+    const result = await complete({
+      model: "claude-haiku-4-5",
+      userPrompt: instruction,
+      maxTokens: 128,
+    });
+    const text = result.text.trim().replace(/^["'`]+|["'`]+$/g, "").trim();
+    return text || null;
+  } catch {
+    return null;
+  }
+}
+
 function cleanTitle(raw: string): string | null {
   let t = raw.trim();
   if (!t) return null;
