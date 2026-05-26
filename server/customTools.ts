@@ -3,6 +3,7 @@ import {
   createSdkMcpServer,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
+import { writeRunConfig } from "./runConfig.js";
 
 // Callback type: the tool handler calls this and awaits the returned promise,
 // which only resolves when a real attention_ack WebSocket message arrives from
@@ -25,6 +26,7 @@ export type RequestCompact = (reason?: string) => void;
 export function createCustomToolsServer(
   requestAttentionAck: RequestAttentionAck,
   requestCompact: RequestCompact,
+  repoPath?: string,
 ) {
   // RequestUserAttention: pauses the agent turn and surfaces a UI prompt.
   // Unlike the old implementation that returned immediately (making it
@@ -304,9 +306,89 @@ export function createCustomToolsServer(
     },
   );
 
+  // WriteRunConfig: lets the agent persist a custom HTML run panel + metadata
+  // for the current repo. The panel HTML is stored at
+  // ~/.buildover/repos/{name}/run-panel.html and rendered in a sandboxed
+  // iframe at the bottom of the chat sidebar. Buttons inside the HTML fire
+  // window.parent.postMessage({ type: 'run-command', command: '...' }, '*')
+  // which buildover intercepts and routes to a new terminal tab.
+  const writeRunConfigTool = tool(
+    "WriteRunConfig",
+    "Persist a custom Run panel for a project. Call this after discovering the " +
+      "project's runnable commands. The panelHtml must be a fully self-contained " +
+      "HTML snippet (inline CSS + JS, no external resources). Each button should " +
+      "call: window.parent.postMessage({ type: 'run-command', command: 'CMD' }, '*') " +
+      "on click. Style to match buildover's dark theme: background #1a1a1a, text #cccccc, " +
+      "primary buttons #c6613f. Keep it compact — the panel lives in a 260px-wide sidebar.",
+    {
+      repoPath: z
+        .string()
+        .describe(
+          "Absolute path of the project this run panel belongs to. " +
+            "This may differ from the current working directory when the setup " +
+            "chat was opened in a different repo (e.g. buildover itself). " +
+            "Example: '/Users/alice/projects/my-app'",
+        ),
+      panelHtml: z
+        .string()
+        .describe(
+          "Complete self-contained HTML for the run panel. Must include a <style> block " +
+            "and inline onclick handlers. No external stylesheets or scripts.",
+        ),
+      previewUrl: z
+        .string()
+        .optional()
+        .describe(
+          "Full URL where the dev server will be accessible once started, " +
+            "e.g. 'http://localhost:5173'. Used to open the embedded preview pane.",
+        ),
+      devPort: z
+        .number()
+        .optional()
+        .describe(
+          "Numeric port the dev server listens on, e.g. 5173. Used to detect " +
+            "whether the server is running and to offer a Kill button.",
+        ),
+    },
+    async (args) => {
+      // Prefer the explicitly-supplied repoPath argument; fall back to the
+      // session's cwd for backwards-compat with same-repo invocations.
+      const targetPath = args.repoPath || repoPath;
+      if (!targetPath) {
+        return {
+          content: [{ type: "text" as const, text: "Error: repoPath argument is required." }],
+          isError: true,
+        };
+      }
+      try {
+        await writeRunConfig(targetPath, args.panelHtml, args.previewUrl, args.devPort);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Run panel saved for ${targetPath}. The panel will appear at the bottom of the chat sidebar immediately.`,
+            },
+          ],
+        };
+      } catch (err) {
+        return {
+          content: [{ type: "text" as const, text: `Failed to save run config: ${err}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "buildover-custom-tools",
     version: "1.0.0",
-    tools: [requestUserAttentionTool, renderSvgTool, renderTableTool, renderChartTool, clearContextTool],
+    tools: [
+      requestUserAttentionTool,
+      renderSvgTool,
+      renderTableTool,
+      renderChartTool,
+      clearContextTool,
+      writeRunConfigTool,
+    ],
   });
 }

@@ -513,6 +513,11 @@
   margin-left: auto;
 }
 
+.ggraph-filter-wrap {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
 .ggraph-filter-input {
   height: 26px;
   padding: 0 8px;
@@ -522,7 +527,7 @@
   color: var(--app-primary-foreground);
   font-size: 11px;
   width: 160px;
-  transition: border-color 100ms;
+  transition: border-color 100ms, padding-right 100ms;
 }
 .ggraph-filter-input:focus {
   outline: none;
@@ -530,6 +535,47 @@
 }
 .ggraph-filter-input::placeholder {
   color: var(--app-secondary-foreground);
+}
+.ggraph-filter-counter {
+  position: absolute;
+  right: 26px;
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  pointer-events: none;
+  white-space: nowrap;
+  line-height: 1;
+}
+.ggraph-filter-counter--none {
+  color: #e05c5c;
+}
+.ggraph-filter-clear {
+  position: absolute;
+  right: 5px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: var(--app-secondary-foreground);
+  padding: 2px;
+  border-radius: 3px;
+  line-height: 1;
+}
+.ggraph-filter-clear:hover {
+  color: var(--app-primary-foreground);
+  background: var(--app-list-hover-background);
+}
+.ggraph-highlight {
+  background: rgba(255, 200, 0, 0.35);
+  color: inherit;
+  border-radius: 2px;
+  padding: 0 1px;
+}
+.git-graph-row--active-match {
+  background: rgba(255, 200, 0, 0.12) !important;
+  outline: 1px solid rgba(255, 200, 0, 0.4);
+  outline-offset: -1px;
 }
 
 .ggraph-limit-select {

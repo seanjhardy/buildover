@@ -30,24 +30,46 @@ export interface GitHubComment {
   createdAt: string;
 }
 
+/** Returns true when gh can't find a GitHub counterpart for the local repo. */
+function isNoGithubRepo(msg: string): boolean {
+  return (
+    msg.includes('Could not resolve to a Repository') ||
+    msg.includes('no GitHub remote') ||
+    msg.includes('no git remote')
+  );
+}
+
 export async function listGitHubPRs(repoPath: string): Promise<GitHubPR[]> {
   const fields = 'number,title,state,isDraft,author,headRefName,baseRefName,url,body,createdAt,updatedAt,additions,deletions,reviewDecision,statusCheckRollup,mergeable';
-  const { stdout } = await execFileAsync(
-    'gh', ['pr', 'list', '--state', 'all', '--limit', '50', '--json', fields],
-    { cwd: repoPath }
-  );
-  const raw = JSON.parse(stdout) as Array<Record<string, unknown>>;
-  return raw.map(formatPR);
+  try {
+    const { stdout } = await execFileAsync(
+      'gh', ['pr', 'list', '--state', 'all', '--limit', '50', '--json', fields],
+      { cwd: repoPath }
+    );
+    const raw = JSON.parse(stdout) as Array<Record<string, unknown>>;
+    return raw.map(formatPR);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    // Repo has no corresponding GitHub repository — treat as no PRs rather than an error
+    if (isNoGithubRepo(msg)) return [];
+    throw err;
+  }
 }
 
 export async function getGitHubPR(repoPath: string, number: number): Promise<GitHubPR> {
   const fields = 'number,title,state,isDraft,author,headRefName,baseRefName,url,body,createdAt,updatedAt,additions,deletions,reviewDecision,statusCheckRollup,mergeable,comments';
-  const { stdout } = await execFileAsync(
-    'gh', ['pr', 'view', String(number), '--json', fields],
-    { cwd: repoPath }
-  );
-  const raw = JSON.parse(stdout) as Record<string, unknown>;
-  return formatPR(raw);
+  try {
+    const { stdout } = await execFileAsync(
+      'gh', ['pr', 'view', String(number), '--json', fields],
+      { cwd: repoPath }
+    );
+    const raw = JSON.parse(stdout) as Record<string, unknown>;
+    return formatPR(raw);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    if (isNoGithubRepo(msg)) throw new Error('No GitHub repository found for this project.');
+    throw err;
+  }
 }
 
 export async function mergePR(repoPath: string, number: number, method: 'merge' | 'squash' | 'rebase'): Promise<void> {

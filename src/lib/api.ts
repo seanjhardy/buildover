@@ -450,3 +450,31 @@ export const selfUpdateApi = {
   forcePull: () =>
     send<{ success: boolean; output: string }>("POST", `/api/self/force-pull`),
 };
+
+// ── Run config ─────────────────────────────────────────────────────────────────
+
+export interface RunConfig {
+  repoPath: string;
+  previewUrl?: string;
+  devPort?: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export const runConfigApi = {
+  getConfig: (repoPath: string) =>
+    getJson<{ config: RunConfig | null }>(
+      `/api/run-config?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.config),
+
+  getHtml: (repoPath: string) =>
+    getJson<{ html: string | null }>(
+      `/api/run-config/html?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.html),
+
+  checkPort: (port: number) =>
+    getJson<{ listening: boolean }>(`/api/port-status?port=${port}`),
+
+  killPort: (port: number) =>
+    send<{ ok: boolean }>("POST", `/api/kill-port`, { port }),
+};

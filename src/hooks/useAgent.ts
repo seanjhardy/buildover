@@ -36,6 +36,7 @@ interface CachedChat {
   cwd?: string;
   status: ChatStatus | null;
   chatPermissionMode?: PermissionMode;
+  contextUsage?: ContextUsage | null;
   branchInfo: Map<string, BranchInfo>;
   slashCommands: string[];
 }
@@ -213,9 +214,6 @@ export function useAgent(
     // render as interruptible — keeping the UI responsive during reconciliation.
     const cached = chatCache.get(chatId);
     startTransition(() => {
-      // Always reset contextUsage when switching chats — it is never cached
-      // because it's transient (re-emitted live each turn, not persisted).
-      setContextUsage(null);
       if (cached) {
         setTurns(cached.turns);
         setSessionId(cached.sessionId);
@@ -224,6 +222,10 @@ export function useAgent(
         setCwd(cached.cwd);
         setStatus(cached.status);
         setChatPermissionMode(cached.chatPermissionMode);
+        // Restore the last known context usage from the in-memory cache so the
+        // ring is populated immediately on switch, without waiting for the
+        // server replay round-trip.
+        setContextUsage(cached.contextUsage ?? null);
         setBranchInfo(cached.branchInfo);
         setSlashCommands(cached.slashCommands ?? []);
       } else {
@@ -236,6 +238,7 @@ export function useAgent(
         setStatus(null);
         setPendingPermission(undefined);
         setChatPermissionMode(undefined);
+        setContextUsage(null);
         setBranchInfo(new Map());
         setSlashCommands([]);
       }
@@ -345,6 +348,17 @@ export function useAgent(
       });
     };
 
+    const cachedSetContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>> = (action) => {
+      setContextUsage((prev) => {
+        const next =
+          typeof action === "function"
+            ? (action as (p: ContextUsage | null) => ContextUsage | null)(prev)
+            : action;
+        updateCache({ contextUsage: next });
+        return next;
+      });
+    };
+
     const cachedSetBranchInfo = (info: Map<string, BranchInfo>) => {
       setBranchInfo(info);
       updateCache({ branchInfo: info });
@@ -440,7 +454,7 @@ export function useAgent(
         setPendingPermission,
         setPendingAttention,
         setChatPermissionMode: cachedSetChatPermissionMode,
-        setContextUsage,
+        setContextUsage: cachedSetContextUsage,
         setBranchInfo: cachedSetBranchInfo,
         setSlashCommands: cachedSetSlashCommands,
       });
@@ -872,9 +886,18 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   }
   s.setTurns(turns);
   if (record.sessionId) s.setSessionId(record.sessionId);
-  // Restore the last known context usage so the ring is visible immediately
-  // on load, without waiting for the next agent turn to emit a fresh value.
-  s.setContextUsage(record.lastContextUsage ?? null);
+  // Restore the last known context usage from the persisted record, but only
+  // if we don't already have a live value that is higher. A chat_replay can
+  // arrive mid-turn on WebSocket reconnect; in that case record.lastContextUsage
+  // is from the *previous* turn and must not overwrite the current turn's live
+  // reading — that would make the ring appear to reset between messages.
+  const recordUsage = record.lastContextUsage ?? null;
+  s.setContextUsage((current) => {
+    if (current !== null && recordUsage !== null && current.pct >= recordUsage.pct) {
+      return current; // keep the higher live value
+    }
+    return recordUsage;
+  });
   // Rebuild branch navigation metadata from the record's branches array.
   s.setBranchInfo(computeBranchInfo(record));
 }

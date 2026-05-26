@@ -264,7 +264,18 @@ function fileNameClass(statusCode: string): string {
   return "files-tree-name";
 }
 
-function ScFileNodeRow({ node, depth }: { node: FileNode; depth: number }) {
+function ScFileNodeRow({
+  node,
+  depth,
+  onFilePreview,
+  previewFilePath,
+}: {
+  node: FileNode;
+  depth: number;
+  onFilePreview?: (file: ChangedFile | null) => void;
+  previewFilePath?: string | null;
+}) {
+  const isActive = previewFilePath === node.entry.relPath;
   const paddingLeft = BASE_INDENT + depth * INDENT + 20;
   const letter = statusLetter(node.entry.statusCode);
   const op = statusToOp(node.entry.statusCode);
@@ -272,11 +283,20 @@ function ScFileNodeRow({ node, depth }: { node: FileNode; depth: number }) {
     op === "write"  ? "sc-status-letter sc-status-letter--added"   :
     op === "delete" ? "sc-status-letter sc-status-letter--deleted"  :
                       "sc-status-letter sc-status-letter--modified";
+  const handleClick = () => {
+    if (!onFilePreview) return;
+    if (isActive) {
+      onFilePreview(null);
+    } else {
+      onFilePreview({ path: node.entry.relPath, statusCode: node.entry.statusCode, staged: false, unstaged: false });
+    }
+  };
   return (
     <div
-      className="files-tree-file"
+      className={`files-tree-file files-tree-file--clickable${isActive ? " files-tree-file--active" : ""}`}
       style={{ paddingLeft }}
       title={node.entry.relPath}
+      onClick={handleClick}
     >
       <img
         className="files-tree-icon"
@@ -292,7 +312,17 @@ function ScFileNodeRow({ node, depth }: { node: FileNode; depth: number }) {
   );
 }
 
-function ScDirNodeRow({ node, depth }: { node: DirNode; depth: number }) {
+function ScDirNodeRow({
+  node,
+  depth,
+  onFilePreview,
+  previewFilePath,
+}: {
+  node: DirNode;
+  depth: number;
+  onFilePreview?: (file: ChangedFile | null) => void;
+  previewFilePath?: string | null;
+}) {
   const [open, setOpen] = useState(true);
   const paddingLeft = BASE_INDENT + depth * INDENT;
   const guideLeft = paddingLeft + 8;
@@ -322,9 +352,9 @@ function ScDirNodeRow({ node, depth }: { node: DirNode; depth: number }) {
         >
           {node.children.map((child, i) =>
             child.kind === "dir" ? (
-              <ScDirNodeRow key={i} node={child} depth={depth + 1} />
+              <ScDirNodeRow key={i} node={child} depth={depth + 1} onFilePreview={onFilePreview} previewFilePath={previewFilePath} />
             ) : (
-              <ScFileNodeRow key={i} node={child} depth={depth + 1} />
+              <ScFileNodeRow key={i} node={child} depth={depth + 1} onFilePreview={onFilePreview} previewFilePath={previewFilePath} />
             ),
           )}
         </div>
@@ -333,15 +363,23 @@ function ScDirNodeRow({ node, depth }: { node: DirNode; depth: number }) {
   );
 }
 
-function ScFileTree({ files }: { files: ChangedFile[] }) {
+function ScFileTree({
+  files,
+  onFilePreview,
+  previewFilePath,
+}: {
+  files: ChangedFile[];
+  onFilePreview?: (file: ChangedFile | null) => void;
+  previewFilePath?: string | null;
+}) {
   const tree = buildTree(files);
   return (
     <div className="files-tree">
       {tree.map((node, i) =>
         node.kind === "dir" ? (
-          <ScDirNodeRow key={i} node={node} depth={0} />
+          <ScDirNodeRow key={i} node={node} depth={0} onFilePreview={onFilePreview} previewFilePath={previewFilePath} />
         ) : (
-          <ScFileNodeRow key={i} node={node} depth={0} />
+          <ScFileNodeRow key={i} node={node} depth={0} onFilePreview={onFilePreview} previewFilePath={previewFilePath} />
         ),
       )}
     </div>
@@ -355,11 +393,15 @@ interface Props {
   /** When true the sidebar is hidden (display:none) but stays mounted,
    *  preserving its state so re-showing it is instant. */
   hidden?: boolean;
+  /** Called when a file row is clicked. Pass null to clear the preview. */
+  onFilePreview?: (file: ChangedFile | null) => void;
+  /** relPath of the currently-previewed file (highlights that row). */
+  previewFilePath?: string | null;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function SourceControlSidebar({ repoPath, hidden }: Props) {
+export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewFilePath }: Props) {
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [statusFiles, setStatusFiles] = useState<ChangedFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -635,7 +677,7 @@ export function SourceControlSidebar({ repoPath, hidden }: Props) {
                   Staged Changes
                   <span className="sc-section-count">{stagedFiles.length}</span>
                 </button>
-                {stagedExpanded && <ScFileTree files={stagedFiles} />}
+                {stagedExpanded && <ScFileTree files={stagedFiles} onFilePreview={onFilePreview} previewFilePath={previewFilePath} />}
               </div>
             )}
 
@@ -649,7 +691,7 @@ export function SourceControlSidebar({ repoPath, hidden }: Props) {
                   Changes
                   <span className="sc-section-count">{unstagedFiles.length}</span>
                 </button>
-                {changesExpanded && <ScFileTree files={unstagedFiles} />}
+                {changesExpanded && <ScFileTree files={unstagedFiles} onFilePreview={onFilePreview} previewFilePath={previewFilePath} />}
               </div>
             )}
 

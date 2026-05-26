@@ -126,6 +126,11 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
   // the first batch of turns arrives from the server or cache.
   const scrollToChatBottomRef = useRef(false);
 
+  // Holds the timeout ID for the chat-switch fallback DOM scroll. Stored in a
+  // ref (not a local effect variable) so React re-renders between now and the
+  // timeout firing (e.g. more turns arriving) don't cancel it via effect cleanup.
+  const chatScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
   // Incremental tool_use_id → result map — kept as a stable ref object so
   // AssistantMessage's arePropsEqual bails cheaply for unchanged messages.
   const toolResultsRef = useRef<Record<string, { content: string; isError: boolean }>>({});
@@ -204,6 +209,11 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
   // bottom if streaming starts before the scroll event has fired.
   useEffect(() => {
     if (!chatId) return;
+    // Cancel any scroll timer still pending from the previous chat.
+    if (chatScrollTimerRef.current) {
+      clearTimeout(chatScrollTimerRef.current);
+      chatScrollTimerRef.current = null;
+    }
     scrollToChatBottomRef.current = true;
     wasAtBottomRef.current = true;
     toolResultsRef.current = {};
@@ -242,6 +252,13 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
     return () => ro.disconnect();
   }, []);
 
+  // Clean up any pending chat-switch scroll timer on unmount.
+  useEffect(() => {
+    return () => {
+      if (chatScrollTimerRef.current) clearTimeout(chatScrollTimerRef.current);
+    };
+  }, []);
+
   // Auto-scroll whenever turns change (new message added or chat switch).
   // We always defer to rAF so virtua has painted the new item before we read
   // scrollHeight — otherwise we'd scroll to the old bottom and the new item
@@ -261,16 +278,25 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
       // el.scrollHeight is far shorter than the real bottom — direct DOM scroll
       // would undershoot on any long chat. scrollToIndex tells virtua to render
       // and position at the last item regardless of what's been painted yet.
-      const raf = requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
         virtualizerRef.current?.scrollToIndex(items.length, { align: "end" });
       });
       // Belt-and-suspenders: after virtua has settled, force the true DOM bottom
       // in case scrollToIndex's estimated position was slightly off.
-      const t = setTimeout(scrollToEnd, 300);
-      return () => {
-        cancelAnimationFrame(raf);
-        clearTimeout(t);
-      };
+      // Stored in a ref — NOT a local variable — so React re-renders between now
+      // and the timeout firing (more turns arriving, isStreaming toggling, etc.)
+      // don't cancel the scroll via effect cleanup.
+      if (chatScrollTimerRef.current) clearTimeout(chatScrollTimerRef.current);
+      chatScrollTimerRef.current = setTimeout(() => {
+        scrollToEnd();
+        // Second retry: variable-height items (code blocks, tool calls) can cause
+        // virtua to adjust layout after the first DOM scroll, so we nudge again.
+        chatScrollTimerRef.current = setTimeout(() => {
+          chatScrollTimerRef.current = null;
+          scrollToEnd();
+        }, 400);
+      }, 200);
+      return;
     }
     if (turns.length === 1 || wasAtBottomRef.current) {
       // Defer so virtua has painted the new item and scrollHeight is up to date.

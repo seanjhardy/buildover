@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, useCallback } from "react";
+import { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { WebLinksAddon } from "@xterm/addon-web-links";
@@ -29,6 +29,10 @@ export interface TerminalPanelProps {
   hidden?: boolean;
 }
 
+export interface TerminalPanelHandle {
+  runCommand: (command: string) => void;
+}
+
 const TERMINAL_FONT_SIZE = 11;
 const MIN_FIT_WIDTH = 40;
 const MIN_FIT_HEIGHT = 40;
@@ -53,6 +57,21 @@ function makeTab(cwd: string, count: number): TerminalTab {
     name: `shell ${count + 1}`,
     cwd,
   };
+}
+
+function stripAnsi(str: string): string {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    .replace(/\x1b\][^\x07]*\x07/g, "")
+    .replace(/\x1b[^[\]]/g, "");
+}
+
+function looksLikePrompt(data: string): boolean {
+  const stripped = stripAnsi(data);
+  const lines = stripped.split(/\r?\n/);
+  const lastLine = lines[lines.length - 1];
+  // Matches common shell prompts ending with $, %, >, or # (plus optional trailing space)
+  return /[$%>#]\s*$/.test(lastLine);
 }
 
 const XTERM_THEME = {
@@ -81,7 +100,8 @@ const XTERM_THEME = {
 
 // ── Component ──────────────────────────────────────────────────────────────────
 
-export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelProps) {
+export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>(
+  function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelProps, ref) {
   const key = storageKey(repoPath);
   const saved = loadState(repoPath);
   const initialTabsRef = useRef<TerminalTab[] | null>(null);
@@ -103,6 +123,9 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
   const [settingUpTabIds, setSettingUpTabIds] = useState<Set<string>>(() => new Set(initialTabs.map((t) => t.id)));
   const tabsRef = useRef(tabs);
   const settingUpTabIdsRef = useRef(settingUpTabIds);
+  const pendingCommandsRef = useRef<Map<string, string>>(new Map());
+  // Tracks tabs that are currently executing a run-panel command (cleared on prompt detection)
+  const runningTabIdsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -219,6 +242,16 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
           if (msg.type === "output") {
             setTabSettingUp(msg.tabId, false);
             if (msg.data) terminalsRef.current.get(msg.tabId)?.terminal.write(msg.data);
+            // Execute any command that was queued for this tab once the shell is ready
+            const pending = pendingCommandsRef.current.get(msg.tabId);
+            if (pending) {
+              pendingCommandsRef.current.delete(msg.tabId);
+              runningTabIdsRef.current.add(msg.tabId);
+              wsSend({ type: "input", tabId: msg.tabId, data: pending + "\n" });
+            } else if (runningTabIdsRef.current.has(msg.tabId) && msg.data && looksLikePrompt(msg.data)) {
+              // Shell prompt detected — command has finished, tab is now idle
+              runningTabIdsRef.current.delete(msg.tabId);
+            }
           } else if (msg.type === "error") {
             setTabSettingUp(msg.tabId, false);
             const terminal = terminalsRef.current.get(msg.tabId)?.terminal;
@@ -379,8 +412,32 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
     setActiveTabId(newTab.id);
   }, [defaultCwd, tabs.length]);
 
+  useImperativeHandle(ref, () => ({
+    runCommand(command: string) {
+      setIsOpen(true);
+      // Prefer the first idle tab: initialised, not setting up, not running, no queued command
+      const idleTab = tabsRef.current.find((tab) =>
+        terminalsRef.current.has(tab.id) &&
+        !settingUpTabIdsRef.current.has(tab.id) &&
+        !runningTabIdsRef.current.has(tab.id) &&
+        !pendingCommandsRef.current.has(tab.id)
+      );
+      if (idleTab) {
+        runningTabIdsRef.current.add(idleTab.id);
+        setActiveTabId(idleTab.id);
+        wsSend({ type: "input", tabId: idleTab.id, data: command + "\n" });
+      } else {
+        const newTab = makeTab(defaultCwd, tabsRef.current.length);
+        pendingCommandsRef.current.set(newTab.id, command);
+        setTabs((prev) => [...prev, newTab]);
+        setActiveTabId(newTab.id);
+      }
+    },
+  }), [defaultCwd, wsSend]);
+
   const closeTab = useCallback((tabId: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    runningTabIdsRef.current.delete(tabId);
     wsSend({ type: "destroy", tabId });
     const inst = terminalsRef.current.get(tabId);
     if (inst) {
@@ -574,4 +631,4 @@ export function TerminalPanel({ repoPath, defaultCwd, hidden }: TerminalPanelPro
       </div>
     </div>
   );
-}
+  });  // closes the forwardRef callback

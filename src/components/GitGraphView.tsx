@@ -14,6 +14,7 @@ import {
   ChevronRight,
   ChevronDown,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import { gitApi, type CommitDiffFile, type GitCommit, type GitLogResult } from "../lib/api.js";
 
@@ -456,11 +457,27 @@ interface RefPillProps {
   label:           RefLabel;
   color:           string;          // lane colour for the icon strip
   isCurrentBranch: boolean;
+  filter?:         string;
   onContextMenu?:  (e: React.MouseEvent) => void;
   onDoubleClick?:  (e: React.MouseEvent) => void;
 }
 
-function RefPill({ label, color, isCurrentBranch, onContextMenu, onDoubleClick }: RefPillProps) {
+/** Wrap every occurrence of `query` in `text` with a <mark> highlight span. */
+function highlight(text: string, query: string): React.ReactNode {
+  if (!query) return text;
+  const q = query.toLowerCase();
+  const idx = text.toLowerCase().indexOf(q);
+  if (idx === -1) return text;
+  return (
+    <>
+      {text.slice(0, idx)}
+      <mark className="ggraph-highlight">{text.slice(idx, idx + query.length)}</mark>
+      {highlight(text.slice(idx + query.length), query)}
+    </>
+  );
+}
+
+function RefPill({ label, color, isCurrentBranch, filter, onContextMenu, onDoubleClick }: RefPillProps) {
   if (label.kind === "head") return null; // HEAD arrow handled separately
 
   const borderStyle = isCurrentBranch
@@ -486,7 +503,7 @@ function RefPill({ label, color, isCurrentBranch, onContextMenu, onDoubleClick }
       </span>
 
       {/* Branch name */}
-      <span className="ggraph-ref-pill-text">{label.text}</span>
+      <span className="ggraph-ref-pill-text">{highlight(label.text, filter ?? "")}</span>
 
       {/* Remote origin suffix */}
       {label.kind === "remote" && label.remoteName && (
@@ -772,6 +789,8 @@ interface CommitRowProps {
   isExpanded:     boolean;
   currentBranch:  string;
   diffState:      DiffState | null;
+  filter:         string;
+  isActiveMatch:  boolean;
   onToggle:       () => void;
   onContextMenu:  (e: React.MouseEvent, target: CtxTarget) => void;
   onSelectFile:   (filename: string) => void;
@@ -783,7 +802,7 @@ type CtxTarget =
   | { type: "branch"; label: RefLabel; color: string };
 
 function CommitRow({
-  node, isExpanded, currentBranch, diffState, onToggle, onContextMenu, onSelectFile, onDoubleClick,
+  node, isExpanded, currentBranch, diffState, filter, isActiveMatch, onToggle, onContextMenu, onSelectFile, onDoubleClick,
 }: CommitRowProps) {
   const { commit, refLabels } = node;
 
@@ -798,10 +817,9 @@ function CommitRow({
     <div className={`ggraph-row-wrap${isExpanded ? " ggraph-row-wrap--expanded" : ""}`}>
       {/* Main row */}
       <div
-        className={`git-graph-row${isExpanded ? " git-graph-row--selected" : ""}${node.isHead ? " git-graph-row--head" : ""}`}
+        className={`git-graph-row${isExpanded ? " git-graph-row--selected" : ""}${node.isHead ? " git-graph-row--head" : ""}${isActiveMatch ? " git-graph-row--active-match" : ""}`}
         style={{ height: ROW_H }}
         onClick={onToggle}
-        onDoubleClick={() => onDoubleClick()}
         onContextMenu={handleRowCtx}
       >
         {/* Refs + Subject combined into one flex cell */}
@@ -812,6 +830,7 @@ function CommitRow({
               label={label}
               color={node.color}
               isCurrentBranch={label.kind === "local" && label.text === currentBranch}
+              filter={filter}
               onContextMenu={(e) => {
                 e.preventDefault();
                 e.stopPropagation();
@@ -823,11 +842,11 @@ function CommitRow({
               }}
             />
           ))}
-          <span className="ggraph-subject" title={commit.subject}>{commit.subject}</span>
+          <span className="ggraph-subject" title={commit.subject}>{highlight(commit.subject, filter)}</span>
         </span>
 
         {/* Author */}
-        <span className="ggraph-author">{commit.authorName}</span>
+        <span className="ggraph-author">{highlight(commit.authorName, filter)}</span>
 
         {/* Date */}
         <span className="ggraph-date">{relativeDate(commit.authorDate)}</span>
@@ -961,6 +980,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   const [diffState,   setDiffState]   = useState<DiffState | null>(null);
   const [limit,       setLimit]       = useState(150);
   const [filter,      setFilter]      = useState("");
+  const [matchIndex,  setMatchIndex]  = useState(0);
   const [treeWidth,   setTreeWidth]   = useState(DEFAULT_TREE_W);
   const [ctxMenu,     setCtxMenu]     = useState<{ x: number; y: number; items: CtxMenuEntry[] } | null>(null);
   const [createBranchHash, setCreateBranchHash] = useState<string | null>(null);
@@ -972,6 +992,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   const resizeStartX   = useRef(0);
   const resizeStartW   = useRef(0);
   const scrollRef      = useRef<HTMLDivElement>(null);
+  const filterInputRef = useRef<HTMLInputElement>(null);
 
   // ── Fetch log ──
   const fetchLog = useCallback(async (lim: number) => {
@@ -990,7 +1011,17 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   // ── Keyboard ──
   useEffect(() => {
     const h = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === "f") {
+        e.preventDefault();
+        filterInputRef.current?.focus();
+        filterInputRef.current?.select();
+        return;
+      }
       if (e.key === "Escape") {
+        if (document.activeElement === filterInputRef.current) {
+          filterInputRef.current?.blur();
+          return;
+        }
         if (checkoutModal)    { setCheckoutModal(null); return; }
         if (ctxMenu)          { setCtxMenu(null); return; }
         if (createBranchHash) { setCreateBranchHash(null); return; }
@@ -1008,16 +1039,25 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
     return buildGraphLayout(logResult.commits, logResult.currentBranch);
   }, [logResult]);
 
-  const visibleNodes = useMemo(() => {
-    if (!filter.trim()) return nodes;
+  const visibleNodes = nodes;
+
+  // ── Filter match indices ──
+  const matchingIndices = useMemo(() => {
+    if (!filter.trim()) return [];
     const q = filter.toLowerCase();
-    return nodes.filter((n) =>
-      n.commit.subject.toLowerCase().includes(q) ||
-      n.commit.shortHash.toLowerCase().includes(q) ||
-      n.commit.authorName.toLowerCase().includes(q) ||
-      n.refLabels.some((r) => r.text.toLowerCase().includes(q)),
-    );
-  }, [nodes, filter]);
+    return visibleNodes.reduce<number[]>((acc, n, i) => {
+      if (
+        n.commit.subject.toLowerCase().includes(q) ||
+        n.commit.shortHash.toLowerCase().includes(q) ||
+        n.commit.authorName.toLowerCase().includes(q) ||
+        n.refLabels.some((r) => r.text.toLowerCase().includes(q))
+      ) acc.push(i);
+      return acc;
+    }, []);
+  }, [visibleNodes, filter]);
+
+  // Reset index when filter changes
+  useEffect(() => { setMatchIndex(0); }, [filter]);
 
   const maxLane = useMemo(() => {
     let max = 0;
@@ -1245,13 +1285,45 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
           <span className="ggraph-repo-name">{repoName}</span>
         </div>
         <div className="ggraph-toolbar-right">
-          <input
-            className="ggraph-filter-input"
-            type="search"
-            placeholder="Filter commits…"
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-          />
+          <div className="ggraph-filter-wrap">
+            <input
+              ref={filterInputRef}
+              className="ggraph-filter-input"
+              type="text"
+              placeholder="Filter commits… (⌘F)"
+              value={filter}
+              style={{ paddingRight: filter ? "52px" : undefined }}
+              onChange={(e) => { setFilter(e.target.value); }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && matchingIndices.length > 0) {
+                  e.preventDefault();
+                  const next = e.shiftKey
+                    ? (matchIndex - 1 + matchingIndices.length) % matchingIndices.length
+                    : (matchIndex + 1) % matchingIndices.length;
+                  setMatchIndex(next);
+                  const nodeIdx = matchingIndices[next];
+                  if (scrollRef.current && rowCenters[nodeIdx] !== undefined) {
+                    scrollRef.current.scrollTop = rowCenters[nodeIdx] - scrollRef.current.clientHeight / 2;
+                  }
+                }
+              }}
+            />
+            {filter && (
+              <>
+                <span className={`ggraph-filter-counter${matchingIndices.length === 0 ? " ggraph-filter-counter--none" : ""}`}>
+                  {matchingIndices.length === 0 ? "0/0" : `${matchIndex + 1}/${matchingIndices.length}`}
+                </span>
+                <button
+                  type="button"
+                  className="ggraph-filter-clear"
+                  title="Clear filter"
+                  onClick={() => { setFilter(""); setMatchIndex(0); filterInputRef.current?.focus(); }}
+                >
+                  <X size={11} />
+                </button>
+              </>
+            )}
+          </div>
           <select
             className="ggraph-limit-select"
             value={limit}
@@ -1327,8 +1399,9 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
               <div className="ggraph-empty"><GitCommitIcon size={24} />No commits found</div>
             )}
 
-            {visibleNodes.map((node) => {
+            {visibleNodes.map((node, nodeIndex) => {
               const isExp = node.commit.hash === expandedHash;
+              const isActiveMatch = matchingIndices.length > 0 && matchingIndices[matchIndex] === nodeIndex;
               return (
                 <CommitRow
                   key={node.commit.hash}
@@ -1336,6 +1409,8 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
                   isExpanded={isExp}
                   currentBranch={currentBranch}
                   diffState={isExp ? diffState : null}
+                  filter={filter}
+                  isActiveMatch={isActiveMatch}
                   onToggle={() => handleToggleExpand(node.commit.hash)}
                   onContextMenu={handleContextMenu}
                   onSelectFile={handleSelectDiffFile}
@@ -1348,7 +1423,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
               <div className="git-graph-footer">
                 <GitCommitIcon size={11} />
                 {visibleNodes.length} commit{visibleNodes.length !== 1 ? "s" : ""}
-                {filter && ` matching "${filter}"`}
+                {filter && ` — highlighting "${filter}"`}
                 {logResult && logResult.commits.length >= limit && (
                   <span className="ggraph-footer-more"> — showing {limit}. Increase limit to see more.</span>
                 )}

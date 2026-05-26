@@ -1,4 +1,7 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
+import { useRunConfig } from "./hooks/useRunConfig.js";
+import { PreviewPane } from "./components/PreviewPane.js";
+import type { TerminalPanelHandle } from "./components/TerminalPanel.js";
 import { Mic, MicOff } from "lucide-react";
 import { Composer } from "./components/Composer.js";
 import { EmptyChat, EmptyWorkspace } from "./components/EmptyStates.js";
@@ -10,6 +13,7 @@ import { OrchestratorBar, type OrchestratorWakeTrigger } from "./components/Orch
 import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt.js";
 import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
+import { PreviewChatSidebar } from "./components/PreviewChatSidebar.js";
 import { GitGraphView } from "./components/GitGraphView.js";
 import { ActivityBar, type WorkspaceView } from "./components/ActivityBar.js";
 import { SourceControlSidebar } from "./components/SourceControlSidebar.js";
@@ -36,7 +40,7 @@ import { TerminalPanel } from "./components/TerminalPanel.js";
 import { UpdateBanner } from "./components/UpdateBanner.js";
 import { agentSocket } from "./lib/agentSocket.js";
 import { api, gitApi, githubApi, selfUpdateApi } from "./lib/api.js";
-import type { GitHubPR } from "./lib/api.js";
+import type { GitHubPR, ChangedFile } from "./lib/api.js";
 import { useSelfUpdate } from "./hooks/useSelfUpdate.js";
 import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
@@ -103,6 +107,8 @@ export default function App() {
   // Reset selected PR when the active repo changes so we don't try to load a
   // PR number from a previous repo against the new one.
   useEffect(() => { setActivePrNumber(null); setActivePr(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Clear source-control file preview when the active repo changes
+  useEffect(() => { setScPreviewFile(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prBadge, setPrBadge] = useState(0);
   const [scBadge, setScBadge] = useState(0);
 
@@ -156,8 +162,41 @@ export default function App() {
   }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [marketOpen, setMarketOpen] = useState(false);
   const [homeOpen, setHomeOpen] = useState(false);
+  const [previewActive, setPreviewActive] = useState(false);
+  // Pin the URL at the moment the user opens preview so the iframe survives
+  // repo-tab switches (runConfig changes per-repo, but the live app doesn't).
+  const [pinnedPreviewUrl, setPinnedPreviewUrl] = useState<string | null>(null);
+  const openPreview = () => {
+    if (runConfig.config?.previewUrl && runConfig.isPortListening) {
+      setPinnedPreviewUrl(runConfig.config.previewUrl);
+      setPreviewActive(true);
+    }
+  };
+  const closePreview = () => {
+    setPreviewActive(false);
+    setPinnedPreviewUrl(null);
+  };
+  const [runSetupActive, setRunSetupActive] = useState(false);
+  // Tracks which repo the in-progress setup is targeting, so the spinner only
+  // clears when the user is viewing THAT repo and its config has loaded.
+  const runSetupTargetRef = useRef<string | null>(null);
+  const terminalRefs = useRef<Map<string, TerminalPanelHandle>>(new Map());
+  const runConfig = useRunConfig(activeRepo?.path ?? null);
+  // Clear the spinner only when we're back on the target repo and its config arrived
+  useEffect(() => {
+    if (
+      runSetupActive &&
+      runConfig.config &&
+      activeRepo?.path === runSetupTargetRef.current
+    ) {
+      setRunSetupActive(false);
+      runSetupTargetRef.current = null;
+    }
+  }, [runSetupActive, runConfig.config, activeRepo?.path]);
   // File viewer: null = hidden, FileEntry = open
   const [openFile, setOpenFile] = useState<FileEntry | null>(null);
+  // Source-control inline file preview (replaces git graph when set)
+  const [scPreviewFile, setScPreviewFile] = useState<ChangedFile | null>(null);
   // Per-chat message queues: chatId → queued messages for that chat.
   // Stored as a map so navigating away from a chat doesn't lose its queue.
   const [messageQueues, setMessageQueues] = useState<Record<string, QueuedMessage[]>>({});
@@ -200,6 +239,38 @@ export default function App() {
   // Using window.innerWidth is reliable at all times (no DOM layout needed).
   // The right-rail panels start getting squeezed below ~1100px window width.
   const [todoNarrow, setTodoNarrow] = useState(() => window.innerWidth < 1100);
+
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    const stored = localStorage.getItem('buildover-sidebar-width');
+    return stored ? parseInt(stored, 10) : 280;
+  });
+  const [sidebarResizing, setSidebarResizing] = useState(false);
+
+  const handleSidebarResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    setSidebarResizing(true);
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+
+    const onMouseMove = (ev: MouseEvent) => {
+      const newWidth = Math.max(180, Math.min(520, startWidth + (ev.clientX - startX)));
+      setSidebarWidth(newWidth);
+      localStorage.setItem('buildover-sidebar-width', String(newWidth));
+    };
+
+    const onMouseUp = () => {
+      setSidebarResizing(false);
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      document.removeEventListener('mousemove', onMouseMove);
+      document.removeEventListener('mouseup', onMouseUp);
+    };
+
+    document.addEventListener('mousemove', onMouseMove);
+    document.addEventListener('mouseup', onMouseUp);
+  }, [sidebarWidth]);
   useEffect(() => {
     const onResize = () => setTodoNarrow(window.innerWidth < 1100);
     window.addEventListener("resize", onResize);
@@ -454,6 +525,59 @@ export default function App() {
     const record = await chats.createChat(model, permissionMode);
     workspace.setActiveChat(record.id);
   }, [activeRepo, chats, model, permissionMode, workspace]);
+
+  const handleRunCommand = useCallback((command: string) => {
+    if (!activeRepo) return;
+    const handle = terminalRefs.current.get(activeRepo.path);
+    handle?.runCommand(command);
+  }, [activeRepo]);
+
+  const handleSetupRun = useCallback(async () => {
+    if (!activeRepo) return;
+    const targetRepoPath = activeRepo.path;
+    setRunSetupActive(true);
+    runSetupTargetRef.current = targetRepoPath;
+
+    // The chat must run in buildover's own repo so the agent has full context
+    // about the codebase (WriteRunConfig tool, postMessage protocol, etc.).
+    // The target project path is passed explicitly in the prompt so the agent
+    // can read its files using absolute paths.
+    let buildoverPath = targetRepoPath; // fallback if self/info fails
+    try {
+      const info = await selfUpdateApi.getInfo();
+      buildoverPath = info.appRoot;
+    } catch { /* keep fallback */ }
+
+    // Open buildover as a repo tab and switch to it
+    if (buildoverPath !== targetRepoPath) {
+      await workspace.openRepo(buildoverPath);
+    }
+
+    // Create the chat in buildover's repo with full permissions
+    const record = await api.createChat(buildoverPath, model, "bypassPermissions");
+    workspace.setActiveChat(record.id);
+
+    // Wait for useAgent to subscribe to the new chatId before sending
+    setTimeout(() => {
+      agentSocket.send({
+        type: "user_message",
+        chatId: record.id,
+        repoPath: buildoverPath,
+        text: `Create a run panel for the project at \`${targetRepoPath}\`.
+
+Explore the project however you like to discover its runnable commands and dev server port, then call \`WriteRunConfig\` with \`repoPath: "${targetRepoPath}"\`.
+
+The \`panelHtml\` should be a self-contained HTML page rendered in a small iframe (~200px tall, dark background #1e1e1e). Design it however you think looks best — aim for something minimal and polished. Icon-only buttons work great; avoid clutter. Each button must fire: \`window.parent.postMessage({type:'run-command',command:'...'}, '*')\`
+
+Important rules for commands:
+- When invoking a \`.sh\` script, always use the source operator: \`. ./script.sh\` — never \`./script.sh\`. Direct execution requires the executable bit and will fail with "permission denied" if the script lacks \`+x\`.
+- Prefer sourcing the project's own run scripts (e.g. \`. ./run.sh\`) over reconstructing the underlying command (e.g. \`cargo run --release\`) — the script may set env vars or flags that the raw command misses.`,
+        model,
+        permissionMode: "bypassPermissions",
+      });
+    }, 600);
+
+  }, [activeRepo, workspace, model]);
 
   const handleDeleteChat = useCallback(async (chatId: string) => {
     await chats.deleteChat(chatId);
@@ -770,7 +894,10 @@ export default function App() {
         {activeRepo && (
           <div
             className={`workspace${openFile ? " workspace--file-open" : ""}`}
-            style={{ display: (marketOpen || homeOpen) ? "none" : undefined }}
+            style={{
+              display: (marketOpen || homeOpen) ? "none" : undefined,
+              '--sidebar-width': `${sidebarWidth}px`,
+            } as React.CSSProperties}
           >
             {/* File viewer slides in from the right, absolutely positioned */}
             {openFile && (
@@ -794,21 +921,58 @@ export default function App() {
                 them is instant. Chat sidebar is lightweight (data from props)
                 so conditional rendering is fine there. */}
             {activeView === 'chat' && (
-              <ChatSidebar
-                chats={chats.chats}
-                activeChatId={gitGraphOpen ? null : activeChatId}
-                onSelect={handleSelectChat}
-                onCreate={handleCreateChat}
-                onToggleFinished={handleToggleFinished}
-                onDelete={handleDeleteChat}
-                repoPath={activeRepo.path}
-                chatDrafts={chatDrafts}
-                onOpenGraph={() => setGitGraphOpen(true)}
-              />
+              previewActive && pinnedPreviewUrl ? (
+                <PreviewChatSidebar
+                  chats={chats.chats}
+                  activeChatId={activeChatId}
+                  onSelectChat={handleSelectChat}
+                  onCreateChat={handleCreateChat}
+                  onToggleFinished={handleToggleFinished}
+                  onDeleteChat={handleDeleteChat}
+                  chatDrafts={chatDrafts}
+                  repoPath={activeRepo.path}
+                  onClosePreview={closePreview}
+                  agent={agent}
+                  onDraftChange={handleDraftChange}
+                  model={model}
+                  permissionMode={permissionMode}
+                  onPermissionModeChange={(m) => {
+                    setPermissionMode(m);
+                    agent.setPermissionMode(m);
+                  }}
+                  onToggleMcp={() => setMcpOpen((v) => !v)}
+                />
+              ) : (
+                <ChatSidebar
+                  chats={chats.chats}
+                  activeChatId={gitGraphOpen ? null : activeChatId}
+                  onSelect={handleSelectChat}
+                  onCreate={handleCreateChat}
+                  onToggleFinished={handleToggleFinished}
+                  onDelete={handleDeleteChat}
+                  repoPath={activeRepo.path}
+                  chatDrafts={chatDrafts}
+                  onOpenGraph={() => setGitGraphOpen(true)}
+                  runPanelProps={{
+                    config: runConfig.config,
+                    panelHtml: runConfig.panelHtml,
+                    isPortListening: runConfig.isPortListening,
+                    isSettingUp: runSetupActive,
+                    onSetupRun: () => void handleSetupRun(),
+                    onRunCommand: handleRunCommand,
+                    onKillPort: runConfig.killPort,
+                    onOpenPreview: openPreview,
+                  }}
+                />
+              )
             )}
             <SourceControlSidebar
               repoPath={activeRepo.path}
               hidden={activeView !== 'source-control'}
+              onFilePreview={(file) => setScPreviewFile(prev =>
+                file === null ? null : prev?.path === file.path ? null : file
+              )}
+              previewFilePath={scPreviewFile?.path ?? null}
             />
             <PullRequestSidebar
               repoPath={activeRepo.path}
@@ -820,6 +984,12 @@ export default function App() {
             {/* Gradient fade — only shown in chat view */}
             {activeView === 'chat' && <div className="chat-sidebar-fade" />}
 
+            {/* Drag handle to resize the sidebar */}
+            <div
+              className={`sidebar-resize-handle${sidebarResizing ? ' sidebar-resize-handle--dragging' : ''}`}
+              onMouseDown={handleSidebarResizeStart}
+            />
+
             {/* workspace-panels: wraps only the main area so it slides left
                 when the file viewer opens, while the sidebar stays put.
                 When a file is open, clicking the exposed strip closes it. */}
@@ -828,18 +998,42 @@ export default function App() {
               onClick={openFile ? () => setOpenFile(null) : undefined}
             >
             {activeView === 'source-control' ? (
-              /* Source control view: show GitGraphView directly */
+              /* Source control view: show file preview or GitGraphView */
               <main className="chat-pane" ref={chatPaneRef}>
                 <div className="chat-pane-content">
-                  <GitGraphView
-                    repoPath={activeRepo.path}
-                    onClose={() => setActiveView('chat')}
-                    onCheckout={(branch) => void handleGitCheckout(branch)}
-                  />
+                  {scPreviewFile ? (
+                    <FileViewer
+                      inline
+                      entry={{
+                        path: `${activeRepo.path}/${scPreviewFile.path}`,
+                        relPath: scPreviewFile.path,
+                        op: (() => {
+                          const code = scPreviewFile.statusCode;
+                          const x = code[0] ?? ' ';
+                          const y = code[1] ?? ' ';
+                          if (code === '??' || x === 'A') return 'write' as const;
+                          if (x === 'D' || y === 'D') return 'delete' as const;
+                          return 'edit' as const;
+                        })(),
+                      }}
+                      repoPath={activeRepo.path}
+                      onClose={() => setScPreviewFile(null)}
+                    />
+                  ) : (
+                    <GitGraphView
+                      repoPath={activeRepo.path}
+                      onClose={() => setActiveView('chat')}
+                      onCheckout={(branch) => void handleGitCheckout(branch)}
+                    />
+                  )}
                 </div>
                 {workspace.openRepos.map((repo) => (
                   <TerminalPanel
                     key={repo.path}
+                    ref={(handle) => {
+                      if (handle) terminalRefs.current.set(repo.path, handle);
+                      else terminalRefs.current.delete(repo.path);
+                    }}
                     repoPath={repo.path}
                     defaultCwd={repo.path}
                     hidden={repo.path !== activeRepo.path}
@@ -860,6 +1054,32 @@ export default function App() {
                 {workspace.openRepos.map((repo) => (
                   <TerminalPanel
                     key={repo.path}
+                    ref={(handle) => {
+                      if (handle) terminalRefs.current.set(repo.path, handle);
+                      else terminalRefs.current.delete(repo.path);
+                    }}
+                    repoPath={repo.path}
+                    defaultCwd={repo.path}
+                    hidden={repo.path !== activeRepo.path}
+                  />
+                ))}
+              </main>
+            ) : previewActive && pinnedPreviewUrl ? (
+              /* Preview mode: full-width preview pane, chat is in the sidebar */
+              <main className="chat-pane" ref={chatPaneRef}>
+                <div className="chat-pane-content">
+                  <PreviewPane
+                    url={pinnedPreviewUrl}
+                    onClose={closePreview}
+                  />
+                </div>
+                {workspace.openRepos.map((repo) => (
+                  <TerminalPanel
+                    key={repo.path}
+                    ref={(handle) => {
+                      if (handle) terminalRefs.current.set(repo.path, handle);
+                      else terminalRefs.current.delete(repo.path);
+                    }}
                     repoPath={repo.path}
                     defaultCwd={repo.path}
                     hidden={repo.path !== activeRepo.path}
@@ -994,6 +1214,10 @@ export default function App() {
                 {workspace.openRepos.map((repo) => (
                   <TerminalPanel
                     key={repo.path}
+                    ref={(handle) => {
+                      if (handle) terminalRefs.current.set(repo.path, handle);
+                      else terminalRefs.current.delete(repo.path);
+                    }}
                     repoPath={repo.path}
                     defaultCwd={repo.path}
                     hidden={repo.path !== activeRepo.path}

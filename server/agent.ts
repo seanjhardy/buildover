@@ -96,7 +96,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     abortController,
   } = args;
 
-  const customToolsServer = createCustomToolsServer(requestAttentionAck, args.requestCompact);
+  const customToolsServer = createCustomToolsServer(requestAttentionAck, args.requestCompact, cwd);
 
   const finalPromptContent = renderPromptWithAttachments(prompt, attachments);
 
@@ -254,7 +254,9 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             const outputTokens = iterUsage.output_tokens ?? 0;
             const cacheReadTokens = iterUsage.cache_read_input_tokens ?? 0;
             const cacheWriteTokens = iterUsage.cache_creation_input_tokens ?? 0;
-            const usedTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
+            // Exclude outputTokens: they are generated tokens, not context window
+            // consumption. The context window limit is an input constraint only.
+            const usedTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
             const contextWindowSize = MODEL_CONTEXT_WINDOWS[args.model] ?? 200_000;
             const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
             emit({
@@ -295,53 +297,14 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             numTurns: message.num_turns ?? 0,
             result: message.result,
           });
-          // Emit context usage derived from the SDK's usage + modelUsage fields.
-          // modelUsage is keyed by model name and carries contextWindow size.
-          const usage = (message as any).usage as
-            | {
-                input_tokens?: number;
-                output_tokens?: number;
-                cache_read_input_tokens?: number;
-                cache_creation_input_tokens?: number;
-              }
-            | undefined;
-          const modelUsageMap = (message as any).modelUsage as
-            | Record<string, { contextWindow?: number }>
-            | undefined;
-          if (usage) {
-            const inputTokens = usage.input_tokens ?? 0;
-            const outputTokens = usage.output_tokens ?? 0;
-            const cacheReadTokens = usage.cache_read_input_tokens ?? 0;
-            const cacheWriteTokens = usage.cache_creation_input_tokens ?? 0;
-            const usedTokens = inputTokens + outputTokens + cacheReadTokens + cacheWriteTokens;
-            // Prefer the actual model's context window size reported by the SDK.
-            // Fall back to a static lookup table of known limits, then 200k.
-            const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-              "claude-opus-4-7": 1_000_000,
-              "claude-sonnet-4-6": 1_000_000,
-              "claude-haiku-4-5": 200_000,
-            };
-            const modelEntry = modelUsageMap
-              ? Object.values(modelUsageMap)[0]
-              : undefined;
-            // modelEntry.contextWindow comes from the SDK; if absent, fall back
-            // to our static table keyed by the model used in this turn, then 200k.
-            const contextWindowSize =
-              MODEL_CONTEXT_WINDOWS[args.model] ??
-              modelEntry?.contextWindow ??
-              200_000;
-            const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
-            emit({
-              type: "context_usage",
-              usedTokens,
-              contextWindowSize,
-              pct,
-              inputTokens,
-              outputTokens,
-              cacheReadTokens,
-              cacheWriteTokens,
-            });
-          }
+          // NOTE: We intentionally do NOT emit context_usage from the result event.
+          // The SDK's result.usage is the *cumulative sum* of tokens across all
+          // agentic sub-turns (every API call Claude made during this user turn).
+          // That sum can be many times larger than the actual context window in use
+          // at any single moment — emitting it here caused a jarring jump to
+          // hundreds of thousands of tokens at the end of multi-step tasks.
+          // The per-assistant-message context_usage emits above are accurate
+          // per-API-call measurements and are sufficient for tracking context pressure.
           break;
         }
 

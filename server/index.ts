@@ -70,6 +70,13 @@ import {
 import type { InstalledMcpServer } from "../src/types.js";
 import { searchMessages, removeIndexedChat, getIndexStatus } from "./embeddings.js";
 import {
+  readRunConfig,
+  readRunPanelHtml,
+  writeRunConfig,
+  checkPortListening,
+  killPort,
+} from "./runConfig.js";
+import {
   checkForUpdates,
   getSelfUpdateStatus,
   getSelfAppRoot,
@@ -987,6 +994,49 @@ app.delete("/api/schedules/:id", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Run config ----
+app.get("/api/run-config", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const config = await readRunConfig(repoPath);
+    res.json({ config });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/run-config/html", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const html = await readRunPanelHtml(repoPath);
+    res.json({ html });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/port-status", async (req, res) => {
+  try {
+    const port = parseInt(String(req.query.port ?? ""), 10);
+    if (!port || isNaN(port)) throw new Error("port required");
+    const listening = await checkPortListening(port);
+    res.json({ listening });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/kill-port", async (req, res) => {
+  try {
+    const port = Number(req.body?.port);
+    if (!port || isNaN(port)) throw new Error("port required");
+    await killPort(port);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 

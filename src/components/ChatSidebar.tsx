@@ -3,6 +3,7 @@ import { X } from "lucide-react";
 import { ChatSidebarItem } from "./ChatSidebarItem.js";
 import { searchApi } from "../lib/api.js";
 import type { ChatStatus, ChatSummary, SearchResult } from "../types.js";
+import { RunPanel } from "./RunPanel.js";
 
 interface Props {
   chats: ChatSummary[];
@@ -14,9 +15,19 @@ interface Props {
   repoPath: string;
   chatDrafts?: Record<string, string>;
   onOpenGraph?: () => void;
+  runPanelProps: {
+    config: import("../lib/api.js").RunConfig | null;
+    panelHtml: string | null;
+    isPortListening: boolean;
+    isSettingUp: boolean;
+    onSetupRun: () => void;
+    onRunCommand: (command: string) => void;
+    onKillPort: () => void;
+    onOpenPreview: () => void;
+  };
 }
 
-const GROUP_ORDER: ChatStatus[] = [
+export const GROUP_ORDER: ChatStatus[] = [
   "awaiting_input",
   "idle",
   "running",
@@ -24,7 +35,7 @@ const GROUP_ORDER: ChatStatus[] = [
   "error",
 ];
 
-const GROUP_LABEL: Record<ChatStatus, string> = {
+export const GROUP_LABEL: Record<ChatStatus, string> = {
   awaiting_input: "Awaiting input",
   running: "Running",
   error: "Interrupted",
@@ -119,7 +130,7 @@ function groupSearchResultsByChat(results: SearchResult[]): SearchResultGroup[] 
   return order.map((id) => byChat.get(id)!);
 }
 
-function ChatItemsByRecency({
+export function ChatItemsByRecency({
   items,
   activeChatId,
   onSelect,
@@ -171,6 +182,7 @@ export function ChatSidebar({
   repoPath,
   chatDrafts = {},
   onOpenGraph,
+  runPanelProps,
 }: Props) {
   const [query, setQuery] = useState("");
   const [archiveOpen, setArchiveOpen] = useState(false);
@@ -361,6 +373,9 @@ export function ChatSidebar({
         )}
       </div>
 
+      <div className="run-panel-container">
+        <RunPanel repoPath={repoPath} {...runPanelProps} />
+      </div>
     </aside>
   );
 }

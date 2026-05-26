@@ -42,6 +42,8 @@ interface Props {
   repoPath?: string;
   /** SDK skill names from system_init, e.g. ["review", "simplify", "compact"] */
   sdkSlashCommands?: string[];
+  /** Hide the permissions/mode pill (e.g. in compact embedded contexts) */
+  hideModePill?: boolean;
 }
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -216,6 +218,7 @@ export function Composer(props: Props) {
     contextUsage,
     repoPath,
     sdkSlashCommands = [],
+    hideModePill = false,
   } = props;
 
   // Merge built-in commands with SDK skills. SDK skills that already have a
@@ -928,7 +931,7 @@ export function Composer(props: Props) {
               <Mic className="mic-icon" size={14} aria-hidden="true" />
             )}
           </button>
-          <div ref={modeWrapRef} className="popup-wrap">
+          {!hideModePill && <div ref={modeWrapRef} className="popup-wrap">
             <button
               className="mode-pill"
               onClick={() => setModePopupOpen((v) => !v)}
@@ -970,7 +973,7 @@ export function Composer(props: Props) {
                 })}
               </div>
             )}
-          </div>
+          </div>}
 
           {onQueueMessage && (
             <button

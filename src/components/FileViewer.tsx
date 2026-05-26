@@ -65,9 +65,11 @@ interface Props {
   entry: FileEntry;
   repoPath: string;
   onClose: () => void;
+  /** When true, renders inline (fills parent) instead of as an absolute overlay */
+  inline?: boolean;
 }
 
-export function FileViewer({ entry, repoPath, onClose }: Props) {
+export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
   const [content, setContent] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -276,7 +278,7 @@ export function FileViewer({ entry, repoPath, onClose }: Props) {
   }, []);
 
   return (
-    <div className="file-viewer">
+    <div className={`file-viewer${inline ? " file-viewer--inline" : ""}`}>
       {/* Header */}
       <div className="file-viewer-header">
         <div className="file-viewer-tab">

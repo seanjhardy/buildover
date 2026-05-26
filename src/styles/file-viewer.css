@@ -31,7 +31,7 @@
 .chat-sidebar-fade {
   position: absolute;
   top: 0;
-  left: 280px; /* sidebar width — anchored to sidebar's right edge */
+  left: calc(44px + var(--sidebar-width, 280px)); /* activity-bar (44px) + sidebar width */
   bottom: 0;
   width: 120px;
   background: linear-gradient(
@@ -81,6 +81,21 @@
 @keyframes viewer-slide-in {
   from { transform: translateX(100%); opacity: 0; }
   to   { transform: translateX(0);    opacity: 1; }
+}
+
+/* ── Inline variant: fills its parent container (e.g. source-control preview) ── */
+.file-viewer--inline {
+  position: relative;
+  top: auto;
+  right: auto;
+  bottom: auto;
+  width: 100%;
+  min-width: 0;
+  max-width: none;
+  border-left: none;
+  animation: none;
+  z-index: auto;
+  flex: 1;
 }
 
 /* --- Header / tab bar --- */
