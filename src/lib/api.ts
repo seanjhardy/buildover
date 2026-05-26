@@ -344,6 +344,9 @@ export const gitApi = {
   pull: (repoPath: string) =>
     send<{ ok: boolean }>("POST", `/api/git/pull`, { repoPath }),
 
+  fetch: (repoPath: string) =>
+    send<{ ok: boolean }>("POST", `/api/git/fetch`, { repoPath }),
+
   getDiffStat: (repoPath: string, relPaths: string[]) =>
     getJson<{ stats: Record<string, FileDiffStat> }>(
       `/api/git/diff-stat?repoPath=${encodeURIComponent(repoPath)}&files=${encodeURIComponent(relPaths.join(","))}`,

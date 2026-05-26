@@ -8,6 +8,7 @@ import {
 import { createPortal } from "react-dom";
 import {
   RefreshCw,
+  Download,
   GitBranch,
   GitCommit as GitCommitIcon,
   Tag,
@@ -985,6 +986,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   const [ctxMenu,     setCtxMenu]     = useState<{ x: number; y: number; items: CtxMenuEntry[] } | null>(null);
   const [createBranchHash, setCreateBranchHash] = useState<string | null>(null);
   const [opError,     setOpError]     = useState<string | null>(null);
+  const [fetchLoading, setFetchLoading] = useState(false);
   const [checkoutModal, setCheckoutModal] = useState<{ target: string; label: string } | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
@@ -1267,6 +1269,19 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
     setCtxMenu({ x: e.clientX, y: e.clientY, items });
   }, [repoPath, limit, fetchLog, onCheckout]);
 
+  const handleFetch = useCallback(async () => {
+    setFetchLoading(true);
+    setOpError(null);
+    try {
+      await gitApi.fetch(repoPath);
+      await fetchLog(limit);
+    } catch (err) {
+      setOpError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setFetchLoading(false);
+    }
+  }, [repoPath, fetchLog, limit]);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, target: CtxTarget) => {
     e.preventDefault();
     if (target.type === "commit") openCommitCtx(e, target.node);
@@ -1334,9 +1349,18 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
           </select>
           <button
             type="button"
+            className={`ggraph-icon-btn${fetchLoading ? " ggraph-icon-btn--spinning" : ""}`}
+            onClick={() => void handleFetch()}
+            disabled={fetchLoading || loading}
+            title="Fetch all remotes"
+          >
+            <Download size={13} />
+          </button>
+          <button
+            type="button"
             className={`ggraph-icon-btn${loading ? " ggraph-icon-btn--spinning" : ""}`}
             onClick={() => void fetchLog(limit)}
-            disabled={loading}
+            disabled={loading || fetchLoading}
             title="Refresh"
           >
             <RefreshCw size={13} />

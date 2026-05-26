@@ -88,6 +88,10 @@ export async function gitPull(repoPath: string): Promise<void> {
   await execFileAsync("git", ["pull"], { cwd: repoPath });
 }
 
+export async function gitFetch(repoPath: string): Promise<void> {
+  await execFileAsync("git", ["fetch", "--all", "--prune"], { cwd: repoPath });
+}
+
 export interface GitCommit {
   hash: string;
   shortHash: string;

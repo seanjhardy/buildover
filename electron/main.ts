@@ -4,10 +4,19 @@ const { spawn } = require("child_process");
 const http = require("http");
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
-const NPM = "/opt/homebrew/bin/npm";
+const NPM = "npm";
+const EXTRA_PATH = [
+  "/opt/homebrew/bin",
+  "/opt/homebrew/sbin",
+  "/usr/local/bin",
+  "/usr/bin",
+  "/bin",
+  "/usr/sbin",
+  "/sbin",
+].join(":");
 const ENV = {
   ...process.env,
-  PATH: "/opt/homebrew/bin:/opt/homebrew/sbin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  PATH: process.env.PATH ? `${process.env.PATH}:${EXTRA_PATH}` : EXTRA_PATH,
   HOME: require("os").homedir(),
 };
 

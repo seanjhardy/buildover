@@ -31,6 +31,7 @@ import {
   gitPush,
   gitForcePush,
   gitPull,
+  gitFetch,
   gitDiffStat,
   gitFileDiff,
   gitLog,
@@ -508,6 +509,18 @@ app.post("/api/git/pull", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
     await gitPull(repoPath);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/git/fetch", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    await gitFetch(repoPath);
     res.json({ ok: true });
   } catch (err) {
     res.status(500).json({
