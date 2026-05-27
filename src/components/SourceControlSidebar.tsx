@@ -598,51 +598,64 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
           </div>
 
           {/* Push / Pull */}
-          <div className="git-sync-row">
-            <button
-              type="button"
-              className="git-action-btn git-sync-btn"
-              onClick={() => void handlePull()}
-              disabled={busy}
-              title="Pull from origin"
-            >
-              <span className="git-icon">↓</span>
-              {opLoading === "pull" ? "Pulling…" : "Pull"}
-              {gitStatus.behind > 0 && (
-                <span className="git-badge">{gitStatus.behind}</span>
-              )}
-            </button>
-            <div className="git-push-split">
+          {gitStatus.hasUpstream ? (
+            <div className="git-sync-row">
               <button
                 type="button"
-                className="git-action-btn git-push-main"
-                onClick={() => void handlePush()}
+                className="git-action-btn git-sync-btn"
+                onClick={() => void handlePull()}
                 disabled={busy}
-                title="Push to origin"
+                title="Pull from origin"
               >
-                <span className="git-icon">↑</span>
-                {opLoading === "push" ? "Pushing…" : "Push"}
-                {gitStatus.ahead > 0 && (
-                  <span className="git-badge">{gitStatus.ahead}</span>
+                <span className="git-icon">↓</span>
+                {opLoading === "pull" ? "Pulling…" : "Pull"}
+                {gitStatus.behind > 0 && (
+                  <span className="git-badge">{gitStatus.behind}</span>
                 )}
               </button>
-              <div className="git-force-push-wrap">
+              <div className="git-push-split">
                 <button
                   type="button"
-                  className="git-action-btn git-force-push-btn"
-                  onClick={() => void handleForcePush()}
+                  className="git-action-btn git-push-main"
+                  onClick={() => void handlePush()}
                   disabled={busy}
-                  aria-label="Force push (--force-with-lease)"
+                  title="Push to origin"
                 >
-                  <ChevronsUp size={12} />
+                  <span className="git-icon">↑</span>
+                  {opLoading === "push" ? "Pushing…" : "Push"}
+                  {gitStatus.ahead > 0 && (
+                    <span className="git-badge">{gitStatus.ahead}</span>
+                  )}
                 </button>
-                <div className="git-force-push-tooltip">
-                  Force push
-                  <span className="git-force-push-tooltip-sub">--force-with-lease</span>
+                <div className="git-force-push-wrap">
+                  <button
+                    type="button"
+                    className="git-action-btn git-force-push-btn"
+                    onClick={() => void handleForcePush()}
+                    disabled={busy}
+                    aria-label="Force push (--force-with-lease)"
+                  >
+                    <ChevronsUp size={12} />
+                  </button>
+                  <div className="git-force-push-tooltip">
+                    Force push
+                    <span className="git-force-push-tooltip-sub">--force-with-lease</span>
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
+          ) : (
+            <button
+              type="button"
+              className="git-action-btn git-publish-btn"
+              onClick={() => void handlePush()}
+              disabled={busy}
+              title="Publish branch to origin"
+            >
+              <span className="git-icon">↑</span>
+              {opLoading === "push" ? "Publishing…" : "Publish Branch"}
+            </button>
+          )}
         </div>
       )}
 

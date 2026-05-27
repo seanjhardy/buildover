@@ -74,9 +74,10 @@ interface ParentEdge {
 }
 
 export interface RefLabel {
-  text:        string;
-  kind:        "head" | "local" | "remote" | "tag";
-  remoteName?: string;  // for remote refs, e.g. "origin"
+  text:          string;
+  kind:          "head" | "local" | "remote" | "tag";
+  remoteName?:   string;  // for remote refs, e.g. "origin"
+  pairedRemote?: string;  // set on local refs that have a matching upstream (e.g. "origin")
 }
 
 function parseRefs(refs: string): RefLabel[] {
@@ -111,6 +112,40 @@ function parseRefs(refs: string): RefLabel[] {
         return [{ text: r.slice("tag: ".length), kind: "tag" as const }];
       return [{ text: r, kind: "local" as const }];
     });
+}
+
+/**
+ * Merge paired local+remote refs into a single pill.
+ * e.g. local "main" + remote "origin/main" → local "main" with pairedRemote="origin"
+ */
+function mergeRefs(labels: RefLabel[]): RefLabel[] {
+  // Build a map of remote text → remoteName for quick lookup
+  const remoteByText = new Map<string, string>();
+  for (const l of labels) {
+    if (l.kind === "remote") remoteByText.set(l.text, l.remoteName ?? "origin");
+  }
+
+  const consumedRemotes = new Set<string>();
+  const result: RefLabel[] = [];
+
+  for (const l of labels) {
+    if (l.kind === "remote") continue; // handled below
+    if (l.kind === "local") {
+      const remoteName = remoteByText.get(l.text);
+      if (remoteName !== undefined) {
+        consumedRemotes.add(l.text);
+        result.push({ ...l, pairedRemote: remoteName });
+        continue;
+      }
+    }
+    result.push(l);
+  }
+
+  // Append any remote refs that had no local counterpart
+  for (const l of labels) {
+    if (l.kind === "remote" && !consumedRemotes.has(l.text)) result.push(l);
+  }
+  return result;
 }
 
 export function buildGraphLayout(commits: GitCommit[], currentBranch: string): GraphNode[] {
@@ -232,7 +267,7 @@ export function buildGraphLayout(commits: GitCommit[], currentBranch: string): G
     for (let i = 0; i < lanes.length; i++)
       if (i !== myLane && lanes[i] === commit.hash) lanes[i] = undefined;
 
-    const refsParsed = parseRefs(commit.refs);
+    const refsParsed = mergeRefs(parseRefs(commit.refs));
     const isHead = refsParsed.some(
       (r) => r.kind === "head" || (r.kind === "local" && r.text === currentBranch),
     );
@@ -384,15 +419,16 @@ function segmentPath(
 }
 
 interface GraphSvgProps {
-  nodes:       GraphNode[];
-  maxLane:     number;
-  rowCenters:  number[];
-  svgHeight:   number;
+  nodes:        GraphNode[];
+  maxLane:      number;
+  rowCenters:   number[];
+  svgHeight:    number;
   selectedHash: string | null;
-  onSelect:    (hash: string) => void;
+  isDirty:      boolean;
+  onSelect:     (hash: string) => void;
 }
 
-function GraphSvg({ nodes, maxLane, rowCenters, svgHeight, selectedHash, onSelect }: GraphSvgProps) {
+function GraphSvg({ nodes, maxLane, rowCenters, svgHeight, selectedHash, isDirty, onSelect }: GraphSvgProps) {
   const svgWidth = LANE_OFFSET + (maxLane + 1) * LANE_W + 8;
   const visIdxByAbsRow = new Map<number, number>();
   nodes.forEach((n, vi) => visIdxByAbsRow.set(n.row, vi));
@@ -412,6 +448,23 @@ function GraphSvg({ nodes, maxLane, rowCenters, svgHeight, selectedHash, onSelec
       height={svgHeight}
       style={{ display: "block", minWidth: svgWidth }}
     >
+      {/* Uncommitted changes dot + dashed line to first commit */}
+      {isDirty && (() => {
+        const dotX = LANE_OFFSET;
+        const dotY = ROW_H / 2;
+        const lineY = rowCenters[0] ?? dotY + ROW_H;
+        return (
+          <g className="ggraph-uncommitted">
+            <line
+              x1={dotX} y1={dotY}
+              x2={dotX} y2={lineY}
+              stroke="#666" strokeWidth={2} strokeDasharray="3 3"
+            />
+            <circle cx={dotX} cy={dotY} r={DOT_R} fill="none" stroke="#777" strokeWidth={2} />
+          </g>
+        );
+      })()}
+
       {/* Edges */}
       {nodes.map((node) =>
         node.parentEdges.map((edge, ei) =>
@@ -481,6 +534,7 @@ function highlight(text: string, query: string): React.ReactNode {
 function RefPill({ label, color, isCurrentBranch, filter, onContextMenu, onDoubleClick }: RefPillProps) {
   if (label.kind === "head") return null; // HEAD arrow handled separately
 
+  const isCheckable = label.kind === "local"; // local (incl. paired) can be checked out
   const borderStyle = isCurrentBranch
     ? { border: `1px solid ${color}` }
     : { border: "1px solid rgba(180,180,180,0.25)" };
@@ -489,11 +543,24 @@ function RefPill({ label, color, isCurrentBranch, filter, onContextMenu, onDoubl
     ? <Tag size={9} color="white" />
     : <GitBranch size={9} color="white" />;
 
+  let titleText: string;
+  if (label.kind === "remote") {
+    titleText = `${label.remoteName ?? "origin"}/${label.text}`;
+  } else if (label.pairedRemote) {
+    titleText = isCurrentBranch
+      ? `${label.text} (current branch) — double-click to checkout`
+      : `${label.text} — double-click to checkout`;
+  } else {
+    titleText = isCheckable && !isCurrentBranch
+      ? `${label.text} — double-click to checkout`
+      : label.text;
+  }
+
   return (
     <span
-      className="ggraph-ref-pill"
+      className={`ggraph-ref-pill${isCheckable && !isCurrentBranch ? " ggraph-ref-pill--checkable" : ""}`}
       style={borderStyle}
-      title={label.kind === "remote" ? `${label.remoteName ?? "origin"}/${label.text}` : label.text}
+      title={titleText}
       onClick={(e) => e.stopPropagation()}
       onContextMenu={onContextMenu}
       onDoubleClick={onDoubleClick}
@@ -506,7 +573,15 @@ function RefPill({ label, color, isCurrentBranch, filter, onContextMenu, onDoubl
       {/* Branch name */}
       <span className="ggraph-ref-pill-text">{highlight(label.text, filter ?? "")}</span>
 
-      {/* Remote origin suffix */}
+      {/* Paired remote suffix (local branch that has a matching upstream) */}
+      {label.pairedRemote && (
+        <>
+          <span className="ggraph-ref-pill-divider" />
+          <em className="ggraph-ref-pill-remote">{label.pairedRemote}</em>
+        </>
+      )}
+
+      {/* Remote-only origin suffix */}
       {label.kind === "remote" && label.remoteName && (
         <>
           <span className="ggraph-ref-pill-divider" />
@@ -987,6 +1062,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   const [createBranchHash, setCreateBranchHash] = useState<string | null>(null);
   const [opError,     setOpError]     = useState<string | null>(null);
   const [fetchLoading, setFetchLoading] = useState(false);
+  const [isDirty,      setIsDirty]      = useState(false);
   const [checkoutModal, setCheckoutModal] = useState<{ target: string; label: string } | null>(null);
   const [checkoutLoading, setCheckoutLoading] = useState(false);
 
@@ -1000,7 +1076,12 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   const fetchLog = useCallback(async (lim: number) => {
     setLoading(true); setError(null);
     try {
-      setLogResult(await gitApi.getLog(repoPath, lim));
+      const [result, status] = await Promise.all([
+        gitApi.getLog(repoPath, lim),
+        gitApi.getStatus(repoPath),
+      ]);
+      setLogResult(result);
+      setIsDirty(status.isDirty);
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {
@@ -1072,17 +1153,17 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
     return max;
   }, [visibleNodes]);
 
-  // ── Row y-centres (accounts for expanded rows) ──
+  // ── Row y-centres (accounts for expanded rows + optional uncommitted row at top) ──
   const { rowCenters, svgHeight } = useMemo(() => {
     const centers: number[] = [];
-    let acc = 0;
+    let acc = isDirty ? ROW_H : 0; // extra row at top for "Uncommitted changes"
     for (const node of visibleNodes) {
       centers.push(acc + ROW_H / 2);
       acc += ROW_H;
       if (node.commit.hash === expandedHash) acc += EXPANDED_H;
     }
     return { rowCenters: centers, svgHeight: acc };
-  }, [visibleNodes, expandedHash]);
+  }, [visibleNodes, expandedHash, isDirty]);
 
   // ── Fetch diff when a commit is expanded ──
   useEffect(() => {
@@ -1401,6 +1482,7 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
                 rowCenters={rowCenters}
                 svgHeight={svgHeight}
                 selectedHash={expandedHash}
+                isDirty={isDirty}
                 onSelect={handleToggleExpand}
               />
             )}
@@ -1421,6 +1503,17 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
             )}
             {!loading && visibleNodes.length === 0 && !error && (
               <div className="ggraph-empty"><GitCommitIcon size={24} />No commits found</div>
+            )}
+
+            {/* Uncommitted changes virtual row */}
+            {isDirty && (
+              <div className="git-graph-row ggraph-uncommitted-row" style={{ height: ROW_H }}>
+                <span className="ggraph-refs-msg">
+                  <span className="ggraph-uncommitted-label">Uncommitted changes</span>
+                </span>
+                <span className="ggraph-author" />
+                <span className="ggraph-date">now</span>
+              </div>
             )}
 
             {visibleNodes.map((node, nodeIndex) => {

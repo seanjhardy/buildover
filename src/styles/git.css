@@ -331,6 +331,21 @@
   min-height: 14px;
 }
 
+/* Publish branch button — shown when no upstream is configured */
+
+.git-publish-btn {
+  width: 100%;
+  justify-content: center;
+  background: var(--app-accent-muted, rgba(99, 102, 241, 0.15));
+  border-color: var(--app-accent, #6366f1);
+  color: var(--app-accent, #6366f1);
+  font-weight: 500;
+}
+.git-publish-btn:hover:not(:disabled) {
+  background: var(--app-accent-muted-hover, rgba(99, 102, 241, 0.25));
+  border-color: var(--app-accent, #6366f1);
+}
+
 /* Split push button (Push + Force-push joined together) */
 
 .git-push-split {
@@ -785,6 +800,14 @@
   flex-shrink: 0;
 }
 
+/* Checkable pills (local branches) show pointer on hover to hint double-click */
+.ggraph-ref-pill--checkable {
+  cursor: pointer;
+}
+.ggraph-ref-pill--checkable:hover {
+  background: rgba(255,255,255,0.12);
+}
+
 /* "origin" italic suffix */
 .ggraph-ref-pill-remote {
   padding: 3px 6px;
@@ -815,6 +838,22 @@
   color: var(--app-secondary-foreground);
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Uncommitted changes virtual row */
+.ggraph-uncommitted-row {
+  cursor: default;
+  opacity: 0.6;
+}
+.ggraph-uncommitted-row:hover {
+  background: transparent !important;
+}
+.ggraph-uncommitted-label {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--app-secondary-foreground);
+  padding: 0 4px;
   white-space: nowrap;
 }
 

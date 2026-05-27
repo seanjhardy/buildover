@@ -11,6 +11,7 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   isDirty: boolean;
+  hasUpstream: boolean;
 }
 
 export async function getGitStatus(repoPath: string): Promise<GitStatus> {
@@ -37,6 +38,7 @@ export async function getGitStatus(repoPath: string): Promise<GitStatus> {
   // Ahead / behind relative to upstream (may fail if no upstream is set)
   let ahead = 0;
   let behind = 0;
+  let hasUpstream = false;
   try {
     const { stdout: countsOut } = await execFileAsync(
       "git",
@@ -46,8 +48,9 @@ export async function getGitStatus(repoPath: string): Promise<GitStatus> {
     const parts = countsOut.trim().split(/\s+/);
     behind = parseInt(parts[0] ?? "0", 10) || 0;
     ahead = parseInt(parts[1] ?? "0", 10) || 0;
+    hasUpstream = true;
   } catch {
-    // No upstream configured — silently leave ahead/behind as 0
+    // No upstream configured — leave ahead/behind as 0, hasUpstream as false
   }
 
   // Working-tree dirtiness
@@ -58,7 +61,7 @@ export async function getGitStatus(repoPath: string): Promise<GitStatus> {
   );
   const isDirty = statusOut.trim().length > 0;
 
-  return { currentBranch, branches, ahead, behind, isDirty };
+  return { currentBranch, branches, ahead, behind, isDirty, hasUpstream };
 }
 
 export async function gitCheckout(
@@ -77,11 +80,11 @@ export async function gitCommit(
 }
 
 export async function gitPush(repoPath: string): Promise<void> {
-  await execFileAsync("git", ["push"], { cwd: repoPath });
+  await execFileAsync("git", ["push", "-u", "origin", "HEAD"], { cwd: repoPath });
 }
 
 export async function gitForcePush(repoPath: string): Promise<void> {
-  await execFileAsync("git", ["push", "--force-with-lease"], { cwd: repoPath });
+  await execFileAsync("git", ["push", "--force-with-lease", "-u", "origin", "HEAD"], { cwd: repoPath });
 }
 
 export async function gitPull(repoPath: string): Promise<void> {

@@ -251,6 +251,7 @@ export interface GitStatus {
   ahead: number;
   behind: number;
   isDirty: boolean;
+  hasUpstream: boolean;
 }
 
 export interface GitCommit {
