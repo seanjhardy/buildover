@@ -397,11 +397,14 @@ interface Props {
   onFilePreview?: (file: ChangedFile | null) => void;
   /** relPath of the currently-previewed file (highlights that row). */
   previewFilePath?: string | null;
+  /** Called after any successful git operation (push, pull, commit, etc.) so
+   *  sibling components like the git graph can refresh themselves. */
+  onGitOperation?: () => void;
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
 
-export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewFilePath }: Props) {
+export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewFilePath, onGitOperation }: Props) {
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [statusFiles, setStatusFiles] = useState<ChangedFile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -480,6 +483,7 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
       await gitApi.commit(repoPath, commitMessage.trim());
       setCommitMessage("");
       await refresh();
+      onGitOperation?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -493,6 +497,7 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
     try {
       await gitApi.push(repoPath);
       await refresh();
+      onGitOperation?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -506,6 +511,7 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
     try {
       await gitApi.forcePush(repoPath);
       await refresh();
+      onGitOperation?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -519,6 +525,7 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
     try {
       await gitApi.pull(repoPath);
       await refresh();
+      onGitOperation?.();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {

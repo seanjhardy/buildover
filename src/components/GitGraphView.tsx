@@ -1,9 +1,11 @@
 import {
   useCallback,
   useEffect,
+  useImperativeHandle,
   useMemo,
   useRef,
   useState,
+  forwardRef,
 } from "react";
 import { createPortal } from "react-dom";
 import {
@@ -1046,9 +1048,13 @@ interface Props {
   onCheckout: (branch: string) => void;
 }
 
+export interface GitGraphViewHandle {
+  refresh: () => void;
+}
+
 const LIMIT_OPTIONS = [50, 100, 150, 250, 500];
 
-export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
+export const GitGraphView = forwardRef<GitGraphViewHandle, Props>(function GitGraphView({ repoPath, onClose, onCheckout }, ref) {
   const [logResult,   setLogResult]   = useState<GitLogResult | null>(null);
   const [loading,     setLoading]     = useState(false);
   const [error,       setError]       = useState<string | null>(null);
@@ -1090,6 +1096,11 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
   }, [repoPath]);
 
   useEffect(() => { void fetchLog(limit); }, [repoPath, fetchLog, limit]);
+
+  // ── Imperative handle (lets parent components trigger a refresh) ──
+  useImperativeHandle(ref, () => ({
+    refresh: () => void fetchLog(limit),
+  }), [fetchLog, limit]);
 
   // ── Keyboard ──
   useEffect(() => {
@@ -1581,4 +1592,4 @@ export function GitGraphView({ repoPath, onClose, onCheckout }: Props) {
       )}
     </div>
   );
-}
+});

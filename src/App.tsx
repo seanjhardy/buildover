@@ -14,7 +14,7 @@ import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt
 import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
 import { PreviewChatSidebar } from "./components/PreviewChatSidebar.js";
-import { GitGraphView } from "./components/GitGraphView.js";
+import { GitGraphView, type GitGraphViewHandle } from "./components/GitGraphView.js";
 import { ActivityBar, type WorkspaceView } from "./components/ActivityBar.js";
 import { SourceControlSidebar } from "./components/SourceControlSidebar.js";
 import { PullRequestSidebar } from "./components/PullRequestSidebar.js";
@@ -181,6 +181,7 @@ export default function App() {
   // clears when the user is viewing THAT repo and its config has loaded.
   const runSetupTargetRef = useRef<string | null>(null);
   const terminalRefs = useRef<Map<string, TerminalPanelHandle>>(new Map());
+  const gitGraphRef = useRef<GitGraphViewHandle>(null);
   const runConfig = useRunConfig(activeRepo?.path ?? null);
   // Clear the spinner only when we're back on the target repo and its config arrived
   useEffect(() => {
@@ -973,6 +974,7 @@ Important rules for commands:
                 file === null ? null : prev?.path === file.path ? null : file
               )}
               previewFilePath={scPreviewFile?.path ?? null}
+              onGitOperation={() => gitGraphRef.current?.refresh()}
             />
             <PullRequestSidebar
               repoPath={activeRepo.path}
@@ -1021,6 +1023,7 @@ Important rules for commands:
                     />
                   ) : (
                     <GitGraphView
+                      ref={gitGraphRef}
                       repoPath={activeRepo.path}
                       onClose={() => setActiveView('chat')}
                       onCheckout={(branch) => void handleGitCheckout(branch)}
@@ -1093,6 +1096,7 @@ Important rules for commands:
                 <div className="chat-pane-content">
                   {gitGraphOpen ? (
                     <GitGraphView
+                      ref={gitGraphRef}
                       repoPath={activeRepo.path}
                       onClose={() => setGitGraphOpen(false)}
                       onCheckout={(branch) => void handleGitCheckout(branch)}
