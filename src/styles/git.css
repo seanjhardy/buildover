@@ -336,14 +336,14 @@
 .git-publish-btn {
   width: 100%;
   justify-content: center;
-  background: var(--app-accent-muted, rgba(99, 102, 241, 0.15));
-  border-color: var(--app-accent, #6366f1);
-  color: var(--app-accent, #6366f1);
+  background: var(--app-claude-orange);
+  border-color: var(--app-claude-orange);
+  color: #fff;
   font-weight: 500;
 }
 .git-publish-btn:hover:not(:disabled) {
-  background: var(--app-accent-muted-hover, rgba(99, 102, 241, 0.25));
-  border-color: var(--app-accent, #6366f1);
+  background: color-mix(in srgb, var(--app-claude-orange) 85%, #000);
+  border-color: color-mix(in srgb, var(--app-claude-orange) 85%, #000);
 }
 
 /* Split push button (Push + Force-push joined together) */
