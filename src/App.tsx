@@ -19,6 +19,7 @@ import { ActivityBar, type WorkspaceView } from "./components/ActivityBar.js";
 import { SourceControlSidebar } from "./components/SourceControlSidebar.js";
 import { PullRequestSidebar } from "./components/PullRequestSidebar.js";
 import { PullRequestView } from "./components/PullRequestView.js";
+import { CreatePrForm } from "./components/CreatePrForm.js";
 import { RepoTabs } from "./components/RepoTabs.js";
 import { MarketPanel } from "./components/MarketPanel.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
@@ -104,9 +105,12 @@ export default function App() {
   // The lightweight PR object from the sidebar list — used to seed PullRequestView
   // immediately so it renders without a loading screen while the detail fetch runs.
   const [activePr, setActivePr] = useState<GitHubPR | null>(null);
+  const [creatingPr, setCreatingPr] = useState(false);
+  // Bumping this triggers a background refresh of the PR sidebar list.
+  const [prRefreshKey, setPrRefreshKey] = useState(0);
   // Reset selected PR when the active repo changes so we don't try to load a
   // PR number from a previous repo against the new one.
-  useEffect(() => { setActivePrNumber(null); setActivePr(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { setActivePrNumber(null); setActivePr(null); setCreatingPr(false); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clear source-control file preview when the active repo changes
   useEffect(() => { setScPreviewFile(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prBadge, setPrBadge] = useState(0);
@@ -858,7 +862,10 @@ Important rules for commands:
             // startTransition keeps the current repo's UI visible while React
             // computes the new state in the background, preventing the blank
             // flash that happened when synchronous teardown preceded the fetch.
-            startTransition(() => workspace.setActiveRepo(path));
+            startTransition(() => {
+              workspace.setActiveRepo(path);
+              setActiveView('chat');
+            });
           }}
           onClose={workspace.closeRepo}
           onOpen={async (path) => {
@@ -979,7 +986,9 @@ Important rules for commands:
             <PullRequestSidebar
               repoPath={activeRepo.path}
               activePrNumber={activePrNumber}
-              onSelectPr={(pr) => { setActivePrNumber(pr.number); setActivePr(pr); }}
+              onSelectPr={(pr) => { setCreatingPr(false); setActivePrNumber(pr.number); setActivePr(pr); }}
+              onCreatePr={() => { setCreatingPr(true); setActivePrNumber(null); setActivePr(null); }}
+              forceRefresh={prRefreshKey}
               hidden={activeView !== 'pr'}
             />
 
@@ -1047,12 +1056,25 @@ Important rules for commands:
               /* Pull request view */
               <main className="chat-pane" ref={chatPaneRef}>
                 <div className="chat-pane-content">
-                  <PullRequestView
-                    repoPath={activeRepo.path}
-                    prNumber={activePrNumber}
-                    initialPr={activePr}
-                    onClose={() => { setActivePrNumber(null); setActivePr(null); }}
-                  />
+                  {creatingPr ? (
+                    <CreatePrForm
+                      repoPath={activeRepo.path}
+                      onCreated={(pr) => {
+                        setPrRefreshKey((k) => k + 1);
+                        setCreatingPr(false);
+                        setActivePrNumber(pr.number);
+                        setActivePr(pr);
+                      }}
+                      onCancel={() => setCreatingPr(false)}
+                    />
+                  ) : (
+                    <PullRequestView
+                      repoPath={activeRepo.path}
+                      prNumber={activePrNumber}
+                      initialPr={activePr}
+                      onClose={() => { setActivePrNumber(null); setActivePr(null); }}
+                    />
+                  )}
                 </div>
                 {workspace.openRepos.map((repo) => (
                   <TerminalPanel

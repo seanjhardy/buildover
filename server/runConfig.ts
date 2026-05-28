@@ -80,9 +80,12 @@ export function killPort(port: number): Promise<void> {
   return new Promise((resolve) => {
     // lsof -ti :<port> prints PIDs; xargs kill -9 terminates them.
     // Resolves regardless of exit code — nothing listening is fine.
+    // -sTCP:LISTEN restricts to the process *listening* on the port (the dev
+    // server), so we don't accidentally kill browser processes that merely have
+    // an open connection to that port (e.g. the preview iframe).
     execFile(
       "sh",
-      ["-c", `lsof -ti :${port} | xargs kill -9 2>/dev/null; true`],
+      ["-c", `lsof -ti TCP:${port} -sTCP:LISTEN | xargs kill -9 2>/dev/null; true`],
       () => resolve(),
     );
   });

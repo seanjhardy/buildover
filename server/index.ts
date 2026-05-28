@@ -90,6 +90,12 @@ import {
   mergePR,
   addPRComment,
   updatePRBranch,
+  getDefaultBranch,
+  createPR,
+  getPRDiff,
+  editPR,
+  getRepoCollaborators,
+  getRepoLabels,
   getStatusFiles,
 } from "./github.js";
 import type {
@@ -824,6 +830,93 @@ app.post("/api/github/pr/update-branch", async (req, res) => {
     if (!number || isNaN(number)) throw new Error("number required");
     await updatePRBranch(repoPath, number);
     res.json({ ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---- GitHub PR create ----
+app.get("/api/github/default-branch", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const branch = await getDefaultBranch(repoPath);
+    res.json({ branch });
+  } catch (err) {
+    // Always return a sensible fallback — never a 500
+    res.json({ branch: 'main' });
+  }
+});
+
+app.post("/api/github/pr/create", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const { title, body, head, base, draft } = req.body ?? {};
+    if (!title) throw new Error("title required");
+    if (!head) throw new Error("head required");
+    if (!base) throw new Error("base required");
+    const prNumber = await createPR(repoPath, String(title), String(body ?? ''), String(head), String(base), Boolean(draft));
+    const pr = await getGitHubPR(repoPath, prNumber);
+    res.json({ pr });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---- GitHub PR diff ----
+app.get("/api/github/pr/diff", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const number = parseInt(String(req.query.number ?? ""), 10);
+    if (isNaN(number)) throw new Error("number required");
+    const diff = await getPRDiff(repoPath, number);
+    res.json({ diff });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---- GitHub PR edit (reviewers / assignees / labels) ----
+app.post("/api/github/pr/edit", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const { number, addReviewers, removeReviewers, addAssignees, removeAssignees, addLabels, removeLabels } = req.body ?? {};
+    if (!number) throw new Error("number required");
+    await editPR(repoPath, Number(number), {
+      addReviewers: addReviewers as string[] | undefined,
+      removeReviewers: removeReviewers as string[] | undefined,
+      addAssignees: addAssignees as string[] | undefined,
+      removeAssignees: removeAssignees as string[] | undefined,
+      addLabels: addLabels as string[] | undefined,
+      removeLabels: removeLabels as string[] | undefined,
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---- GitHub repo collaborators ----
+app.get("/api/github/collaborators", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const collaborators = await getRepoCollaborators(repoPath);
+    res.json({ collaborators });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    res.status(500).json({ error: msg });
+  }
+});
+
+// ---- GitHub repo labels ----
+app.get("/api/github/labels", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const labels = await getRepoLabels(repoPath);
+    res.json({ labels });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     res.status(500).json({ error: msg });

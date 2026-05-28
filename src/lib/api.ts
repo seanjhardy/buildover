@@ -299,6 +299,35 @@ export interface ChangedFile {
   statusCode: string;
 }
 
+export interface GitHubCheck {
+  name: string;
+  status: string;
+  conclusion: string | null;
+  startedAt: string | null;
+  completedAt: string | null;
+  detailsUrl: string | null;
+  workflowName: string | null;
+}
+
+export interface GitHubFile {
+  path: string;
+  additions: number;
+  deletions: number;
+}
+
+export interface GitHubReview {
+  id: string;
+  author: string;
+  state: string;
+  body: string;
+  submittedAt: string;
+}
+
+export interface GitHubLabel {
+  name: string;
+  color: string;
+}
+
 export interface GitHubPR {
   number: number;
   title: string;
@@ -317,6 +346,12 @@ export interface GitHubPR {
   statusCheckRollup: 'SUCCESS' | 'FAILURE' | 'PENDING' | null;
   mergeable: 'MERGEABLE' | 'CONFLICTING' | 'UNKNOWN';
   comments: Array<{ id: string; author: string; body: string; createdAt: string }>;
+  checks: GitHubCheck[];
+  files: GitHubFile[];
+  reviews: GitHubReview[];
+  assignees: string[];
+  labels: GitHubLabel[];
+  reviewRequests: string[];
 }
 
 export const gitApi = {
@@ -418,6 +453,40 @@ export const githubApi = {
 
   updateBranch: (repoPath: string, number: number) =>
     send<{ ok: boolean }>('POST', '/api/github/pr/update-branch', { repoPath, number }),
+
+  getDefaultBranch: (repoPath: string) =>
+    getJson<{ branch: string }>(
+      `/api/github/default-branch?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.branch),
+
+  createPR: (repoPath: string, title: string, body: string, head: string, base: string, draft: boolean) =>
+    send<{ pr: GitHubPR }>('POST', '/api/github/pr/create', { repoPath, title, body, head, base, draft })
+      .then((r) => r.pr),
+
+  getPRDiff: (repoPath: string, number: number) =>
+    getJson<{ diff: string }>(
+      `/api/github/pr/diff?repoPath=${encodeURIComponent(repoPath)}&number=${number}`,
+    ).then((r) => r.diff),
+
+  editPR: (repoPath: string, number: number, options: {
+    addReviewers?: string[];
+    removeReviewers?: string[];
+    addAssignees?: string[];
+    removeAssignees?: string[];
+    addLabels?: string[];
+    removeLabels?: string[];
+  }) =>
+    send<{ ok: boolean }>('POST', '/api/github/pr/edit', { repoPath, number, ...options }),
+
+  getCollaborators: (repoPath: string) =>
+    getJson<{ collaborators: string[] }>(
+      `/api/github/collaborators?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.collaborators),
+
+  getRepoLabels: (repoPath: string) =>
+    getJson<{ labels: GitHubLabel[] }>(
+      `/api/github/labels?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.labels),
 };
 
 // ── Self-update ────────────────────────────────────────────────────────────────

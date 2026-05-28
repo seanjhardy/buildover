@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { RefreshCw, ChevronRight, ChevronDown } from "lucide-react";
+import { RefreshCw, ChevronRight, ChevronDown, Plus } from "lucide-react";
 import { githubApi, type GitHubPR } from "../lib/api.js";
 
 interface Props {
@@ -7,8 +7,12 @@ interface Props {
   activePrNumber: number | null;
   /** Called with the full PR object when a PR is selected. */
   onSelectPr: (pr: GitHubPR) => void;
+  /** Called when the user clicks the "New pull request" button. */
+  onCreatePr?: () => void;
   /** When true the sidebar is hidden (display:none) but stays mounted. */
   hidden?: boolean;
+  /** Increment to trigger a background refresh (e.g. after creating a PR). */
+  forceRefresh?: number;
 }
 
 function PrStatusDot({ pr }: { pr: GitHubPR }) {
@@ -29,7 +33,7 @@ function PrSkeletonRows() {
   );
 }
 
-export function PullRequestSidebar({ repoPath, activePrNumber, onSelectPr, hidden }: Props) {
+export function PullRequestSidebar({ repoPath, activePrNumber, onSelectPr, onCreatePr, hidden, forceRefresh }: Props) {
   const [prs, setPrs] = useState<GitHubPR[]>([]);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +83,15 @@ export function PullRequestSidebar({ repoPath, activePrNumber, onSelectPr, hidde
     }
   }, [hidden]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // External trigger: e.g. after a PR is created, the parent bumps forceRefresh.
+  const prevForceRefresh = useRef(forceRefresh ?? 0);
+  useEffect(() => {
+    if ((forceRefresh ?? 0) > prevForceRefresh.current) {
+      prevForceRefresh.current = forceRefresh ?? 0;
+      void refresh(false);
+    }
+  }, [forceRefresh]); // eslint-disable-line react-hooks/exhaustive-deps
+
   const openPrs = prs.filter((p) => p.state === 'OPEN');
   const closedPrs = prs.filter((p) => p.state !== 'OPEN');
   const showSkeleton = isLoading && prs.length === 0;
@@ -87,6 +100,16 @@ export function PullRequestSidebar({ repoPath, activePrNumber, onSelectPr, hidde
     <div className="pr-sidebar" style={hidden ? { display: 'none' } : undefined}>
       <div className="pr-sidebar-header">
         <span className="pr-sidebar-title">Pull Requests</span>
+        {onCreatePr && (
+          <button
+            className="sc-icon-btn"
+            onClick={onCreatePr}
+            title="New pull request"
+            aria-label="New pull request"
+          >
+            <Plus size={14} />
+          </button>
+        )}
         <button
           className="sc-icon-btn"
           onClick={() => void refresh(true)}
