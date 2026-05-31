@@ -118,9 +118,9 @@
 
 .repo-tabs-list {
   display: flex;
-  gap: 2px;
+  gap: 4px;
   align-items: stretch;
-  height: 36px;
+  height: 38px;
   overflow-x: auto;
 }
 
@@ -128,7 +128,7 @@
   display: inline-flex;
   align-items: center;
   gap: var(--app-spacing-medium);
-  padding: 0 var(--app-spacing-large);
+  padding: 0 var(--app-spacing-xlarge);
   background: transparent;
   border: 0;
   border-right: 1px solid var(--app-primary-border-color);
@@ -186,10 +186,19 @@
   width: 12px;
   height: 12px;
 }
-.repo-tab--home {
+.repo-tabs-nav-group {
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
   border-right: 1px solid var(--app-primary-border-color);
-  margin-right: 4px;
-  padding-right: 12px;
+  margin-right: 12px;
+}
+
+.repo-tabs-nav-group .repo-tab {
+  border-right: none;
+}
+
+.repo-tab--home {
   flex-shrink: 0;
 }
 .open-repo-trigger {

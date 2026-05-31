@@ -1,53 +1,29 @@
-/* Design tokens lifted from the Claude Code VS Code extension webview.
-   The extension reads from --vscode-* variables; here we hard-code a dark
-   theme that approximates VS Code dark+, with the Claude accent colors. */
+/* Design tokens — non-color values only.
+   Color variables (backgrounds, foregrounds, borders, brand colors) now
+   live in themes.css so they can be swapped per theme. */
 
 :root {
-  /* Claude brand */
-  --app-claude-orange: #d97757;
-  --app-claude-clay-button-orange: #c6613f;
+  /* ── Semantic status colors (not themed) ── */
+  --app-error: #f48771;
+  --app-success: #89d185;
+  --app-warning: #cca700;
+
+  /* ── Claude brand neutrals (not themed) ── */
   --app-claude-ivory: #faf9f5;
   --app-claude-slate: #141413;
 
-  /* Spacing */
+  /* ── Spacing ── */
   --app-spacing-small: 4px;
   --app-spacing-medium: 8px;
   --app-spacing-large: 12px;
   --app-spacing-xlarge: 16px;
 
-  /* Radius */
+  /* ── Radius ── */
   --corner-radius-small: 4px;
   --corner-radius-medium: 6px;
   --corner-radius-large: 8px;
 
-  /* Editor / chrome (dark theme defaults) */
-  --app-primary-foreground: #cccccc;
-  --app-primary-background: #181818;
-  --app-secondary-foreground: #969696;
-  --app-secondary-background: #1e1e1e;
-  --app-primary-border-color: #2b2b2b;
-
-  /* Inputs */
-  --app-input-foreground: #cccccc;
-  --app-input-background: #313131;
-  --app-input-border: #3c3c3c;
-  --app-input-active-border: var(--app-claude-orange);
-  --app-input-placeholder-foreground: #989898;
-
-  /* Tools */
-  --app-tool-background: #1e1e1e;
-  --app-tool-border: #2b2b2b;
-
-  /* Lists */
-  --app-list-hover-background: #2a2d2e;
-  --app-list-active-background: #04395e;
-
-  /* Text */
-  --app-error: #f48771;
-  --app-success: #89d185;
-  --app-warning: #cca700;
-
-  /* Typography */
+  /* ── Typography ── */
   --app-monospace-font-family: ui-monospace, SFMono-Regular, "SF Mono",
     Menlo, Consolas, "Liberation Mono", monospace;
   --app-monospace-font-size: 12px;

@@ -1,4 +1,5 @@
 import { startTransition, useCallback, useEffect, useRef, useState } from "react";
+import { useTheme } from "./hooks/useTheme.js";
 import { useRunConfig } from "./hooks/useRunConfig.js";
 import { PreviewPane } from "./components/PreviewPane.js";
 import type { TerminalPanelHandle } from "./components/TerminalPanel.js";
@@ -57,6 +58,7 @@ const PERMISSION_MODE_STORAGE_KEY = "buildover.permissionMode";
 
 export default function App() {
   const workspace = useWorkspace();
+  useTheme(); // Initialize theme from localStorage on mount
   const { activeRepo, activeChatId } = workspace;
 
   // Track chat statuses for all open repos so inactive tabs can show badges.

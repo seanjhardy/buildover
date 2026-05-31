@@ -35,24 +35,26 @@ export function RepoTabs({
   return (
     <div className="repo-tabs">
       <div className="repo-tabs-list">
-        <button
-          type="button"
-          className={`repo-tab repo-tab--home ${homeActive ? "active" : ""}`}
-          onClick={onHome}
-          title="Home"
-        >
-          <House size={13} />
-          <span className="repo-tab-name">Home</span>
-        </button>
-        <button
-          type="button"
-          className={`repo-tab repo-tab--market ${marketActive ? "active" : ""}`}
-          onClick={onMarket}
-          title="Plugin Marketplace"
-        >
-          <ShoppingBag size={13} />
-          <span className="repo-tab-name">Market</span>
-        </button>
+        <div className="repo-tabs-nav-group">
+          <button
+            type="button"
+            className={`repo-tab repo-tab--home ${homeActive ? "active" : ""}`}
+            onClick={onHome}
+            title="Home"
+          >
+            <House size={13} />
+            <span className="repo-tab-name">Home</span>
+          </button>
+          <button
+            type="button"
+            className={`repo-tab repo-tab--market ${marketActive ? "active" : ""}`}
+            onClick={onMarket}
+            title="Plugin Marketplace"
+          >
+            <ShoppingBag size={13} />
+            <span className="repo-tab-name">Market</span>
+          </button>
+        </div>
         {openRepos.map((repo) => {
           const badge = badges?.[repo.path] ?? null;
           return (

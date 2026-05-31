@@ -643,14 +643,13 @@
   overflow: hidden;
 }
 
-/* Full-width scroll container — tree + resize + rows side-by-side */
+/* Full-width scroll container — tree is absolutely positioned behind full-width rows */
 .git-graph-scroll {
-  display: flex;
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow-y: auto;
   overflow-x: hidden;
-  align-items: flex-start; /* children are their natural height so SVG and rows stay in sync */
 }
 
 /* ── Column header (pinned above scroll) ── */
@@ -664,13 +663,15 @@
   user-select: none;
 }
 
-/* ── Tree section ── */
+/* ── Tree section — absolutely positioned, paints above row backgrounds ── */
 .git-graph-tree {
-  flex-shrink: 0;
-  /* overflow: hidden prevents the SVG from creating an independent scroll context.
-     The parent .git-graph-scroll handles all vertical scrolling so tree + rows
-     always scroll in lockstep. */
-  overflow: hidden;
+  position: absolute;
+  left: 0;
+  top: 0;
+  /* z-index: 2 keeps SVG lines/dots visually above the row hover backgrounds.
+     pointer-events: none ensures the tree never blocks click/right-click on rows. */
+  z-index: 2;
+  pointer-events: none;
   background: rgba(255,255,255,0.025);
 }
 
@@ -678,24 +679,25 @@
   display: block;
 }
 
-/* ── Resize handle ── */
+/* ── Resize handle — absolutely positioned, sits above the tree ── */
 .git-graph-resize-handle {
-  flex-shrink: 0;
-  align-self: stretch;
+  position: absolute;
+  top: 0;
+  /* left, width, and height are set via inline style in the component */
   cursor: ew-resize;
   background: var(--app-primary-border-color);
   transition: background 100ms;
-  position: relative;
+  z-index: 2;
 }
 .git-graph-resize-handle:hover,
 .git-graph-resize-handle:active {
   background: var(--app-input-active-border);
 }
 
-/* ── Rows section ── */
+/* ── Rows section — full-width block; content is indented via --tree-pad ── */
 .git-graph-rows {
-  flex: 1;
-  min-width: 0;
+  position: relative;
+  z-index: 1;
 }
 
 /* ── Column header labels ── */
@@ -742,6 +744,8 @@
   transition: background 60ms;
   user-select: none;
   gap: 0;
+  /* Indent content past the tree+resize area; background still covers full width */
+  padding-left: var(--tree-pad, 0px);
 }
 .git-graph-row:hover { background: var(--app-list-hover-background); }
 .git-graph-row--selected { background: rgba(255,255,255,0.06) !important; }
@@ -873,6 +877,8 @@
   overflow: hidden;
   border-top: 1px solid rgba(255,255,255,0.06);
   border-bottom: 1px solid rgba(255,255,255,0.06);
+  /* Push the diff panel to start at the same offset as the row content */
+  margin-left: var(--tree-pad, 0px);
 }
 
 .ggraph-diff-panel {
@@ -952,7 +958,7 @@
 .git-graph-footer {
   display: flex;
   align-items: center;
-  padding: 5px 12px;
+  padding: 5px 12px 5px var(--tree-pad, 12px);
   border-top: 1px solid var(--app-primary-border-color);
   background: var(--app-secondary-background);
   font-size: 10px;

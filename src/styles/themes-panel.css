@@ -1,0 +1,407 @@
+/* ============================================================ */
+/* Themes Panel — App theme & syntax theme marketplace          */
+/* ============================================================ */
+
+.market-themes {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 4px 0 24px;
+}
+
+.market-themes-section {
+  padding: 16px 16px 20px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+
+.market-themes-section:last-child {
+  border-bottom: none;
+}
+
+.market-themes-section-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--app-secondary-foreground);
+  margin-bottom: 4px;
+}
+
+.market-themes-section-subtitle {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.7;
+  margin-bottom: 14px;
+  line-height: 1.5;
+}
+
+/* ── App Theme Cards ── */
+
+/* Flex-wrap row — cards have fixed pixel size, wrap to new rows automatically */
+.market-app-themes-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/*
+ * Card: 140 × 140 px — explicit width AND height, no aspect-ratio tricks.
+ * Two fit per row in a 308 px content area (2 × 140 + 8 = 288 px).
+ */
+.market-app-theme-card {
+  width: 140px;
+  height: 140px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  border: 2px solid transparent;
+  border-radius: 8px;
+  overflow: hidden;
+  cursor: pointer;
+  background: var(--theme-bg, #181818);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.12s;
+  padding: 0;
+  text-align: left;
+  box-sizing: border-box;
+}
+
+.market-app-theme-card:hover {
+  transform: translateY(-2px);
+  border-color: var(--theme-accent, var(--app-claude-orange));
+  box-shadow: 0 5px 18px rgba(0,0,0,0.35);
+}
+
+.market-app-theme-card--active {
+  border-color: var(--theme-accent, var(--app-claude-orange));
+  box-shadow: 0 0 0 1px var(--theme-accent, var(--app-claude-orange)), 0 4px 14px rgba(0,0,0,0.25);
+}
+
+/* ── Preview area: fills all card height above the footer ── */
+.market-app-theme-preview {
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+  display: flex;
+  overflow: hidden;
+}
+
+/* ── Activity bar: thin strip on far left ── */
+.market-app-theme-activity {
+  width: 13px;
+  flex-shrink: 0;
+  background: var(--theme-secondary, #1e1e1e);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 8px 0 7px;
+  gap: 7px;
+  border-right: 1px solid rgba(255,255,255,0.05);
+}
+
+/* Small square icon buttons in the activity bar */
+.market-app-theme-activity-icon {
+  width: 6px;
+  height: 6px;
+  border-radius: 1px;
+  background: var(--theme-fg, #cccccc);
+  opacity: 0.18;
+  flex-shrink: 0;
+}
+
+.market-app-theme-activity-icon--active {
+  background: var(--theme-accent, #d97757);
+  opacity: 0.9;
+}
+
+/* ── Sidebar: search bar + new-chat pill + session list ── */
+.market-app-theme-sidebar {
+  width: 40px;
+  flex-shrink: 0;
+  background: var(--theme-secondary, #1e1e1e);
+  display: flex;
+  flex-direction: column;
+  padding: 7px 4px 5px;
+  gap: 4px;
+  border-right: 1px solid rgba(255,255,255,0.04);
+  overflow: hidden;
+  box-sizing: border-box;
+}
+
+/* Search input bar */
+.market-app-theme-sidebar-search {
+  flex-shrink: 0;
+  height: 8px;
+  border-radius: 2px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.13);
+}
+
+/* "+New" pill button */
+.market-app-theme-sidebar-new {
+  flex-shrink: 0;
+  height: 9px;
+  width: 70%;
+  border-radius: 3px;
+  background: var(--theme-accent, #d97757);
+  opacity: 0.85;
+}
+
+/* Session row list */
+.market-app-theme-sidebar-sessions {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 1px;
+}
+
+.market-app-theme-session {
+  height: 7px;
+  border-radius: 2px;
+  background: var(--theme-fg, #cccccc);
+  opacity: 0.1;
+  flex-shrink: 0;
+}
+
+/* Active session: accent tint + left border */
+.market-app-theme-session--active {
+  background: var(--theme-accent, #d97757);
+  opacity: 0.22;
+  border-left: 2px solid var(--theme-accent, #d97757);
+  border-radius: 1px 2px 2px 1px;
+}
+
+/* ── Main chat area ── */
+.market-app-theme-main {
+  flex: 1;
+  min-width: 0;
+  background: var(--theme-bg, #181818);
+  padding: 7px 6px 6px;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+  overflow: hidden;
+}
+
+/* Skeleton message bubbles */
+.market-app-theme-msg {
+  height: 7px;
+  border-radius: 2px;
+  background: var(--theme-fg, #cccccc);
+  opacity: 0.1;
+  flex-shrink: 0;
+  align-self: flex-start;
+}
+
+/* Accent-colored message */
+.market-app-theme-msg--accent {
+  background: var(--theme-accent, #d97757);
+  opacity: 0.2;
+}
+
+/* Composer bar — stretches to full available width */
+.market-app-theme-composer {
+  margin-top: auto;
+  flex-shrink: 0;
+  align-self: stretch;
+  height: 13px;
+  border-radius: 5px;
+  background: rgba(255,255,255,0.03);
+  border: 1px solid rgba(255,255,255,0.1);
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  padding-right: 4px;
+  box-sizing: border-box;
+}
+
+/* Round send button */
+.market-app-theme-composer-btn {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--theme-accent, #d97757);
+  opacity: 0.9;
+  flex-shrink: 0;
+}
+
+/* ── Card footer ── */
+.market-app-theme-footer {
+  flex-shrink: 0;
+  height: 26px;
+  width: 100%;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  padding: 0 9px;
+  gap: 5px;
+  background: var(--theme-secondary, #1e1e1e);
+  border-top: 1px solid rgba(255,255,255,0.07);
+}
+
+.market-app-theme-name {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--theme-fg, #cccccc);
+  flex: 1;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.market-app-theme-check {
+  color: var(--theme-accent, #d97757);
+  flex-shrink: 0;
+}
+
+/* ── Custom Colors: horizontal swatch row ── */
+
+.market-custom-colors-grid {
+  display: flex;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.market-custom-color-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.market-custom-color-swatch-wrap {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  border-radius: var(--corner-radius-medium);
+  cursor: pointer;
+}
+
+.market-custom-color-swatch {
+  width: 48px;
+  height: 48px;
+  border-radius: var(--corner-radius-medium);
+  display: block;
+  cursor: pointer;
+}
+
+.market-custom-color-input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  opacity: 0;
+  cursor: pointer;
+  border: none;
+  padding: 0;
+}
+
+.market-custom-color-label {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  opacity: 0.75;
+}
+
+.market-custom-color-reset {
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0.85;
+  transition: opacity 0.12s;
+  padding: 0;
+  z-index: 1;
+}
+
+.market-custom-color-reset:hover {
+  opacity: 1;
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* ── Syntax Theme: split list + IDE preview ── */
+
+.market-syntax-themes-layout {
+  display: flex;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  overflow: hidden;
+  height: 330px;
+}
+
+.market-syntax-themes-list {
+  width: 148px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  border-right: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  padding: 4px 0;
+  scrollbar-width: thin;
+  scrollbar-color: var(--app-primary-border-color) transparent;
+}
+
+.market-syntax-theme-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  transition: background 0.1s, color 0.1s;
+  gap: 4px;
+  border: none;
+  background: none;
+  width: 100%;
+  text-align: left;
+}
+
+.market-syntax-theme-item:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.market-syntax-theme-item--active {
+  background: color-mix(in srgb, var(--app-claude-orange) 12%, transparent);
+  color: var(--app-primary-foreground);
+  font-weight: 500;
+}
+
+.market-syntax-theme-item-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.market-syntax-theme-item-check {
+  color: var(--app-claude-orange);
+  flex-shrink: 0;
+}
+
+.market-syntax-preview-pane {
+  flex: 1;
+  overflow: auto;
+  padding: 14px 18px;
+  font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+  font-size: 11.5px;
+  line-height: 1.7;
+  white-space: pre;
+  scrollbar-width: thin;
+  scrollbar-color: rgba(128,128,128,0.2) transparent;
+}

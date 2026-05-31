@@ -1,0 +1,156 @@
+/* ============================================================ */
+/* App Themes — CSS variable blocks for each named theme        */
+/* The :root block defines the default (sunset) theme for       */
+/* backward compatibility. data-theme blocks override colors.   */
+/* ============================================================ */
+
+/* ── Default / Sunset (warm orange — classic buildover style) ── */
+:root,
+[data-theme="sunset"] {
+  /* Brand */
+  --app-claude-orange: #d97757;
+  --app-claude-clay-button-orange: #c6613f;
+
+  /* Backgrounds */
+  --app-primary-background: #181818;
+  --app-secondary-background: #1e1e1e;
+
+  /* Foregrounds */
+  --app-primary-foreground: #cccccc;
+  --app-secondary-foreground: #969696;
+
+  /* Borders */
+  --app-primary-border-color: #2b2b2b;
+
+  /* Inputs */
+  --app-input-foreground: #cccccc;
+  --app-input-background: #313131;
+  --app-input-border: #3c3c3c;
+  --app-input-active-border: var(--app-claude-orange);
+  --app-input-placeholder-foreground: #989898;
+
+  /* Tools */
+  --app-tool-background: #1e1e1e;
+  --app-tool-border: #2b2b2b;
+
+  /* Lists */
+  --app-list-hover-background: #2a2d2e;
+  --app-list-active-background: #04395e;
+
+  /* Syntax highlight variables (VS Code Dark+ colors) */
+  --hljs-default: #d4d4d4;
+  --hljs-keyword: #569cd6;
+  --hljs-builtin: #4ec9b0;
+  --hljs-string: #ce9178;
+  --hljs-number: #b5cea8;
+  --hljs-comment: #6a9955;
+  --hljs-function: #dcdcaa;
+  --hljs-attr: #9cdcfe;
+  --hljs-regexp: #d16969;
+  --hljs-selector: #d7ba7d;
+  --hljs-meta: #9b9b9b;
+  --hljs-tag: #808080;
+  --hljs-name: #569cd6;
+}
+
+/* ── Arctic (cool silver steel, calm and minimal) ── */
+[data-theme="arctic"] {
+  /* Brand */
+  --app-claude-orange: #8aafc2;
+  --app-claude-clay-button-orange: #6a96b0;
+
+  /* Backgrounds */
+  --app-primary-background: #1a1a1e;
+  --app-secondary-background: #1f1f26;
+
+  /* Foregrounds */
+  --app-primary-foreground: #cfd4dc;
+  --app-secondary-foreground: #889098;
+
+  /* Borders */
+  --app-primary-border-color: #2e2e38;
+
+  /* Inputs */
+  --app-input-foreground: #cfd4dc;
+  --app-input-background: #26262e;
+  --app-input-border: #363644;
+  --app-input-active-border: var(--app-claude-orange);
+  --app-input-placeholder-foreground: #666e77;
+
+  /* Tools */
+  --app-tool-background: #1f1f26;
+  --app-tool-border: #2e2e38;
+
+  /* Lists */
+  --app-list-hover-background: #25252e;
+  --app-list-active-background: #1a3550;
+
+  /* Syntax highlight variables (Nord-inspired) */
+  --hljs-default: #d8dee9;
+  --hljs-keyword: #81a1c1;
+  --hljs-builtin: #88c0d0;
+  --hljs-string: #a3be8c;
+  --hljs-number: #b48ead;
+  --hljs-comment: #4e5a6e;
+  --hljs-function: #88c0d0;
+  --hljs-attr: #8fbcbb;
+  --hljs-regexp: #bf616a;
+  --hljs-selector: #ebcb8b;
+  --hljs-meta: #81a1c1;
+  --hljs-tag: #81a1c1;
+  --hljs-name: #88c0d0;
+}
+
+/* ── Ocean (deep blue, GitHub-inspired dark mode) ── */
+[data-theme="ocean"] {
+  /* Brand */
+  --app-claude-orange: #4d8cc8;
+  --app-claude-clay-button-orange: #3c7ab8;
+
+  /* Backgrounds */
+  --app-primary-background: #0d1117;
+  --app-secondary-background: #161b22;
+
+  /* Foregrounds */
+  --app-primary-foreground: #c9d1d9;
+  --app-secondary-foreground: #8b949e;
+
+  /* Borders */
+  --app-primary-border-color: #21262d;
+
+  /* Inputs */
+  --app-input-foreground: #c9d1d9;
+  --app-input-background: #21262d;
+  --app-input-border: #30363d;
+  --app-input-active-border: var(--app-claude-orange);
+  --app-input-placeholder-foreground: #6e7681;
+
+  /* Tools */
+  --app-tool-background: #161b22;
+  --app-tool-border: #21262d;
+
+  /* Lists */
+  --app-list-hover-background: #1c2128;
+  --app-list-active-background: #0c2d4a;
+
+  /* Syntax highlight variables (GitHub Dark) */
+  --hljs-default: #c9d1d9;
+  --hljs-keyword: #ff7b72;
+  --hljs-builtin: #ffa657;
+  --hljs-string: #a5d6ff;
+  --hljs-number: #79c0ff;
+  --hljs-comment: #768390;
+  --hljs-function: #d2a8ff;
+  --hljs-attr: #79c0ff;
+  --hljs-regexp: #ff7b72;
+  --hljs-selector: #7ee787;
+  --hljs-meta: #8b949e;
+  --hljs-tag: #7ee787;
+  --hljs-name: #7ee787;
+}
+
+/* ── Custom (starts as sunset, individual colors applied via inline style on :root) ── */
+[data-theme="custom"] {
+  /* Inherits from :root (sunset) by default; individual CSS vars can be
+     overridden via element.style.setProperty() in useTheme.ts */
+}

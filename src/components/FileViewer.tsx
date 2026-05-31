@@ -13,6 +13,21 @@ import bash from "highlight.js/lib/languages/bash";
 import sql from "highlight.js/lib/languages/sql";
 import markdown from "highlight.js/lib/languages/markdown";
 import yaml from "highlight.js/lib/languages/yaml";
+import java from "highlight.js/lib/languages/java";
+import kotlin from "highlight.js/lib/languages/kotlin";
+import cpp from "highlight.js/lib/languages/cpp";
+import csharp from "highlight.js/lib/languages/csharp";
+import swift from "highlight.js/lib/languages/swift";
+import php from "highlight.js/lib/languages/php";
+import ruby from "highlight.js/lib/languages/ruby";
+import scala from "highlight.js/lib/languages/scala";
+import r from "highlight.js/lib/languages/r";
+import lua from "highlight.js/lib/languages/lua";
+import perl from "highlight.js/lib/languages/perl";
+import graphql from "highlight.js/lib/languages/graphql";
+import toml from "highlight.js/lib/languages/ini"; // TOML uses ini grammar
+import dockerfile from "highlight.js/lib/languages/dockerfile";
+import nginx from "highlight.js/lib/languages/nginx";
 import { fileApi, gitApi } from "../lib/api.js";
 import type { FileEntry } from "../hooks/useFilesChanged.js";
 
@@ -31,6 +46,21 @@ hljs.registerLanguage("shell", bash);
 hljs.registerLanguage("sql", sql);
 hljs.registerLanguage("markdown", markdown);
 hljs.registerLanguage("yaml", yaml);
+hljs.registerLanguage("java", java);
+hljs.registerLanguage("kotlin", kotlin);
+hljs.registerLanguage("cpp", cpp);
+hljs.registerLanguage("csharp", csharp);
+hljs.registerLanguage("swift", swift);
+hljs.registerLanguage("php", php);
+hljs.registerLanguage("ruby", ruby);
+hljs.registerLanguage("scala", scala);
+hljs.registerLanguage("r", r);
+hljs.registerLanguage("lua", lua);
+hljs.registerLanguage("perl", perl);
+hljs.registerLanguage("graphql", graphql);
+hljs.registerLanguage("toml", toml);
+hljs.registerLanguage("dockerfile", dockerfile);
+hljs.registerLanguage("nginx", nginx);
 
 function getLanguage(filename: string): string {
   const ext = filename.split(".").pop()?.toLowerCase() ?? "";
@@ -50,9 +80,58 @@ function getLanguage(filename: string): string {
     md: "markdown", mdx: "markdown",
     yml: "yaml", yaml: "yaml",
     xml: "xml",
+    java: "java",
+    kt: "kotlin", kts: "kotlin",
+    cpp: "cpp", cc: "cpp", cxx: "cpp", c: "cpp", h: "cpp", hpp: "cpp",
+    cs: "csharp",
+    swift: "swift",
+    php: "php",
+    rb: "ruby",
+    scala: "scala",
+    r: "r",
+    lua: "lua",
+    pl: "perl", pm: "perl",
+    graphql: "graphql", gql: "graphql",
+    toml: "toml",
+    ini: "toml", cfg: "toml", properties: "toml",
+    dockerfile: "dockerfile",
+    nginx: "nginx",
   };
   return map[ext] ?? "plaintext";
 }
+
+/** Split highlight.js HTML output into one string per line,
+ *  closing/reopening spans at each newline so each line is self-contained. */
+function splitHighlightedHtml(html: string): string[] {
+  const lines: string[] = [];
+  let cur = "";
+  const stack: string[] = []; // opening <span ...> tags
+  let i = 0;
+  while (i < html.length) {
+    const ch = html[i]!;
+    if (ch === "<") {
+      const end = html.indexOf(">", i);
+      if (end === -1) { cur += html.slice(i); break; }
+      const tag = html.slice(i, end + 1);
+      cur += tag;
+      if (tag.startsWith("</")) stack.pop();
+      else if (!tag.endsWith("/>")) stack.push(tag);
+      i = end + 1;
+    } else if (ch === "\n") {
+      for (let j = stack.length - 1; j >= 0; j--) cur += "</span>";
+      lines.push(cur);
+      cur = stack.join("");
+      i++;
+    } else {
+      cur += ch;
+      i++;
+    }
+  }
+  lines.push(cur);
+  return lines;
+}
+
+const HIGHLIGHT_LINE_LIMIT = 5_000;
 
 interface RemovedGroup { after: number; lines: string[] }
 
@@ -187,6 +266,22 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
       return escapeHtml(text);
     }
   }, [lang]);
+
+  // ── Full-file syntax highlighting ───────────────────────────────────────
+  const highlightedLines = useMemo((): string[] | null => {
+    if (content === null || lang === "plaintext") return null;
+    const lines = content.split("\n");
+    // Remove trailing empty line
+    if (lines[lines.length - 1] === "") lines.pop();
+    if (lines.length > HIGHLIGHT_LINE_LIMIT) return null;
+    const src = lines.join("\n");
+    try {
+      const result = hljs.highlight(src, { language: lang });
+      return splitHighlightedHtml(result.value);
+    } catch {
+      return null;
+    }
+  }, [content, lang]);
 
   // ── Minimap canvas drawing ───────────────────────────────────────────────
   const drawMinimap = useCallback(() => {
@@ -325,6 +420,12 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
                         key={i}
                         className="file-viewer-row file-viewer-row--deleted"
                         dangerouslySetInnerHTML={{ __html: highlightLine(row.text) }}
+                      />
+                    ) : highlightedLines ? (
+                      <div
+                        key={i}
+                        className={`file-viewer-row${row.added ? " file-viewer-row--added" : ""}`}
+                        dangerouslySetInnerHTML={{ __html: (highlightedLines[row.lineNo - 1] ?? escapeHtml(row.text)) || "&nbsp;" }}
                       />
                     ) : (
                       <div

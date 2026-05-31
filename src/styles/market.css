@@ -1129,7 +1129,101 @@
 /* ── Market tab in repo-tabs ── */
 
 .repo-tab--market {
-  border-left: 1px solid var(--app-primary-border-color);
-  margin-left: 4px;
-  padding-left: 12px;
+  /* grouped with home — no extra borders or margins needed */
+}
+
+/* ── Modal overlay ── */
+
+.market-modal-backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.65);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 100;
+  backdrop-filter: blur(3px);
+  -webkit-backdrop-filter: blur(3px);
+}
+
+.market-modal {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  width: 500px;
+  max-width: calc(100% - 24px);
+  max-height: calc(100% - 40px);
+  overflow-y: auto;
+  position: relative;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  scrollbar-width: thin;
+}
+
+.market-modal-close {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  border-radius: var(--corner-radius-small);
+  border: none;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+}
+
+.market-modal-close:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* ── Add Plugin card (first slot in browse grid) ── */
+
+.market-plugin-card.market-add-plugin-card {
+  border: 1.5px dashed var(--app-primary-border-color);
+  background: transparent;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+  text-align: center;
+  min-height: 130px;
+}
+
+.market-plugin-card.market-add-plugin-card:hover {
+  border-color: var(--app-claude-orange);
+  background: color-mix(in srgb, var(--app-claude-orange) 6%, transparent);
+}
+
+.market-add-plugin-icon-wrap {
+  width: 36px;
+  height: 36px;
+  border-radius: 50%;
+  background: color-mix(in srgb, var(--app-claude-orange) 14%, transparent);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--app-claude-orange);
+}
+
+.market-add-plugin-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.market-add-plugin-sublabel {
+  font-size: 10.5px;
+  color: var(--app-secondary-foreground);
+  line-height: 1.4;
 }

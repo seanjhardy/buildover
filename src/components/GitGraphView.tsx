@@ -1479,12 +1479,17 @@ export const GitGraphView = forwardRef<GitGraphViewHandle, Props>(function GitGr
 
       {/* ── Body ── */}
       <div className="git-graph-body">
-        {/* Scrollable area */}
-        <div className="git-graph-scroll" ref={scrollRef}>
-          {/* Tree section */}
+        {/* Scrollable area — sets --tree-pad so rows indent their content past the tree */}
+        <div
+          className="git-graph-scroll"
+          ref={scrollRef}
+          style={{ '--tree-pad': `${treeWidth + RESIZE_W}px` } as React.CSSProperties}
+        >
+          {/* Tree section — absolutely positioned background; pointer-events:none so
+              clicks fall through to the full-width rows for unified highlight + right-click */}
           <div
             className="git-graph-tree"
-            style={{ width: treeWidth, flexShrink: 0 }}
+            style={{ width: treeWidth }}
           >
             {visibleNodes.length > 0 && (
               <GraphSvg
@@ -1499,14 +1504,14 @@ export const GitGraphView = forwardRef<GitGraphViewHandle, Props>(function GitGr
             )}
           </div>
 
-          {/* Resize handle */}
+          {/* Resize handle — absolutely positioned at the tree/rows boundary */}
           <div
             className="git-graph-resize-handle"
-            style={{ width: RESIZE_W }}
+            style={{ left: treeWidth, width: RESIZE_W, height: svgHeight }}
             onMouseDown={handleResizeMouseDown}
           />
 
-          {/* Rows */}
+          {/* Rows — full-width; each row's padding-left (--tree-pad) indents content */}
           <div className="git-graph-rows">
             {error && <div className="ggraph-error">{error}</div>}
             {loading && visibleNodes.length === 0 && (

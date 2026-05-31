@@ -6,5 +6,13 @@
     "type": "http",
     "url": "https://server.smithery.ai/github",
     "headers": {}
+  },
+  {
+    "id": "Supabase",
+    "name": "Supabase",
+    "description": "Search the Supabase docs for up-to-date guidance and troubleshoot errors quickly. Manage organizations, projects, databases, and Edge Functions, including migrations, SQL, logs, advisors, keys, and type generation, in one flow. Create and manage development branches to iterate safely, confirm costs up front, and merge changes to production with confidence.",
+    "type": "http",
+    "url": "https://server.smithery.ai/Supabase",
+    "headers": {}
   }
 ]
