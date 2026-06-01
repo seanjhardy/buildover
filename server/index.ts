@@ -1,6 +1,10 @@
 import express from "express";
 import { createServer } from "node:http";
-import { readFile as fsReadFile, readdir, readFile, writeFile } from "node:fs/promises";
+import { readFile as fsReadFile, readdir, readFile, writeFile, stat as fsStat } from "node:fs/promises";
+import { execFile } from "node:child_process";
+import { promisify } from "node:util";
+
+const execFileAsync = promisify(execFile);
 import { join, relative, isAbsolute as pathIsAbsolute, resolve as resolvePath } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import {
@@ -10,6 +14,7 @@ import {
   readChat,
   recoverStaleChatsForRepo,
   recoverStaleChatsForRepoWithIds,
+  setModel,
   setTitle,
   setUserFinished,
 } from "./chats.js";
@@ -84,6 +89,7 @@ import {
   pullLatestMain,
   startSelfUpdateChecker,
 } from "./selfUpdate.js";
+import { readCreds } from "./anthropicAuth.js";
 import {
   listGitHubPRs,
   getGitHubPR,
@@ -191,6 +197,38 @@ app.post("/api/env/set", async (req, res) => {
 app.get("/api/usage", async (_req, res) => {
   try {
     res.json(await fetchUsage());
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- Model list ----
+// Proxies the Anthropic models API so the frontend gets a live list without
+// exposing credentials to the browser.
+app.get("/api/models", async (_req, res) => {
+  try {
+    const creds = await readCreds();
+    const resp = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+      headers: {
+        Authorization: `Bearer ${creds.accessToken}`,
+        "anthropic-version": "2023-06-01",
+        "anthropic-beta": "anthropic-oauth-2025-04-20",
+      },
+    });
+    if (!resp.ok) {
+      const text = await resp.text().catch(() => "");
+      return res.status(resp.status).json({ error: text || resp.statusText });
+    }
+    const data = (await resp.json()) as {
+      data: { id: string; display_name: string; created_at: string }[];
+    };
+    // Return only claude-* models, newest first, shaped for the frontend.
+    const models = (data.data ?? [])
+      .filter((m) => m.id.startsWith("claude-"))
+      .map((m) => ({ id: m.id, label: m.display_name }));
+    res.json({ models });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
@@ -393,6 +431,9 @@ app.patch("/api/chats/:chatId", async (req, res) => {
           req.body.title.trim(),
           false,
         )) ?? record;
+    }
+    if (typeof req.body?.model === "string" && req.body.model.trim()) {
+      record = (await setModel(repoPath, req.params.chatId, req.body.model.trim())) ?? record;
     }
     res.json({ chat: record });
   } catch (err) {
@@ -940,6 +981,38 @@ app.get("/api/file/read", async (req, res) => {
   }
 });
 
+// ---- File serve (binary — for images and other binary assets) ----
+const SERVE_MIME_TYPES: Record<string, string> = {
+  png: "image/png",
+  jpg: "image/jpeg",
+  jpeg: "image/jpeg",
+  gif: "image/gif",
+  webp: "image/webp",
+  svg: "image/svg+xml",
+  ico: "image/x-icon",
+  bmp: "image/bmp",
+  avif: "image/avif",
+  tiff: "image/tiff",
+  tif: "image/tiff",
+};
+
+app.get("/api/file/serve", async (req, res) => {
+  try {
+    const filePath = String(req.query.path ?? "");
+    if (!filePath) throw new Error("path required");
+    if (!pathIsAbsolute(filePath)) throw new Error("absolute path required");
+    const resolved = resolvePath(filePath);
+    const ext = resolved.split(".").pop()?.toLowerCase() ?? "";
+    const mimeType = SERVE_MIME_TYPES[ext] ?? "application/octet-stream";
+    const buffer = await fsReadFile(resolved);
+    res.setHeader("Content-Type", mimeType);
+    res.setHeader("Cache-Control", "no-cache");
+    res.send(buffer);
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 // ---- File list ----
 const FILE_LIST_EXCLUDES = new Set([
   "node_modules", ".git", "dist", "build", "out",
@@ -972,6 +1045,99 @@ app.get("/api/file/list", async (req, res) => {
     const files: string[] = [];
     await walkDir(root, root, files);
     res.json({ files });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- File write ----
+app.post("/api/file/write", async (req, res) => {
+  try {
+    const filePath = String(req.body?.path ?? "");
+    const content = String(req.body?.content ?? "");
+    if (!filePath) throw new Error("path required");
+    const { resolve, isAbsolute } = await import("node:path");
+    if (!isAbsolute(filePath)) throw new Error("absolute path required");
+    await writeFile(resolve(filePath), content, "utf8");
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- File content search (pure Node.js — no external binary required) ----
+interface SearchLineMatch { line: number; text: string }
+interface SearchFileResult { relPath: string; lines: SearchLineMatch[] }
+
+const SEARCH_MAX_FILE_CHARS    = 500_000; // skip files larger than ~500 KB text
+const SEARCH_MAX_MATCHES_PER_FILE = 20;   // lines shown per file
+const SEARCH_PAGE_SIZE         = 50;      // matching files per page — stop early here
+
+app.get("/api/file/search", async (req, res) => {
+  try {
+    const repoPath    = String(req.query.path ?? "");
+    const query       = String(req.query.query ?? "");
+    const excludeExts = String(req.query.excludeExts ?? "");
+    const offset      = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10) || 0);
+
+    if (!repoPath) throw new Error("path required");
+    if (!query.trim()) { res.json({ matches: [], total: 0, hasMore: false }); return; }
+    if (!pathIsAbsolute(repoPath)) throw new Error("absolute path required");
+
+    const root       = resolvePath(repoPath);
+    const queryLower = query.toLowerCase();
+
+    const excludedExts = new Set(
+      excludeExts.split(",").map((e) => e.trim().replace(/^\./, "").toLowerCase()).filter(Boolean),
+    );
+
+    // Reuse the existing walkDir which already skips node_modules/.git/dist/…
+    const allFiles: string[] = [];
+    await walkDir(root, root, allFiles);
+
+    const results: SearchFileResult[] = [];
+    let total   = 0;   // matches in this page
+    let skipped = 0;   // matching files skipped due to offset
+    let hasMore = false;
+
+    for (const relPath of allFiles) {
+      const ext = relPath.split(".").pop()?.toLowerCase() ?? "";
+      if (excludedExts.has(ext)) continue;
+
+      const absPath = join(root, relPath);
+      let content: string;
+      try {
+        content = await fsReadFile(absPath, "utf8");
+      } catch { continue; }
+
+      if (content.length > SEARCH_MAX_FILE_CHARS) continue;
+
+      const rawLines = content.split("\n");
+      const matches: SearchLineMatch[] = [];
+
+      for (let i = 0; i < rawLines.length; i++) {
+        if (rawLines[i]!.toLowerCase().includes(queryLower)) {
+          matches.push({ line: i + 1, text: rawLines[i]! });
+          if (matches.length >= SEARCH_MAX_MATCHES_PER_FILE) break;
+        }
+      }
+
+      if (matches.length === 0) continue;
+
+      // Skip files that belong to earlier pages
+      if (skipped < offset) { skipped++; continue; }
+
+      results.push({ relPath, lines: matches });
+      total += matches.length;
+
+      // Stop as soon as we have a full page — don't read more files
+      if (results.length >= SEARCH_PAGE_SIZE) {
+        hasMore = true;
+        break;
+      }
+    }
+
+    res.json({ matches: results, total, hasMore });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }

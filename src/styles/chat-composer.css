@@ -357,6 +357,91 @@
   color: var(--app-primary-foreground);
   background: var(--app-list-hover-background);
 }
+
+/* Model selector — icon-only trigger button */
+.model-pill-btn {
+  background: transparent;
+  border: 0;
+  color: var(--app-secondary-foreground);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border-radius: 6px;
+  cursor: pointer;
+  padding: 0;
+  transition: color 0.1s, background 0.1s;
+}
+.model-pill-btn:hover {
+  color: var(--app-primary-foreground);
+  background: var(--app-list-hover-background);
+}
+.model-pill-btn.active {
+  color: var(--app-primary-foreground);
+  background: var(--app-list-hover-background);
+}
+.model-pill-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* Model popup — opens upward, anchored right so it stays on-screen */
+.model-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  min-width: 220px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: 6px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.model-popup-head {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-secondary-foreground);
+  padding: 4px 8px 6px;
+  opacity: 0.65;
+}
+.model-popup-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  background: transparent;
+  border: 0;
+  text-align: left;
+  padding: 7px 10px;
+  border-radius: var(--corner-radius-small);
+  color: inherit;
+  cursor: pointer;
+  width: 100%;
+}
+.model-popup-item:hover {
+  background: var(--app-list-hover-background);
+}
+.model-popup-item.active {
+  background: rgba(217, 119, 87, 0.06);
+}
+.model-popup-label {
+  font-size: 12px;
+  font-weight: 500;
+}
+.model-popup-check {
+  color: var(--app-claude-orange);
+  font-weight: 700;
+  font-size: 13px;
+  flex-shrink: 0;
+}
+
 .mode-pill-icon {
   display: inline-flex;
   width: 14px;
@@ -687,20 +772,7 @@
   align-items: center;
   gap: var(--app-spacing-medium);
 }
-.header-model select {
-  background: var(--app-input-background);
-  border: 1px solid var(--app-input-border);
-  color: var(--app-input-foreground);
-  border-radius: var(--corner-radius-medium);
-  padding: 4px 8px;
-  font: inherit;
-  font-size: 12px;
-  outline: none;
-  cursor: pointer;
-}
-.header-model select:focus {
-  border-color: var(--app-input-active-border);
-}
+
 .header-session {
   font-size: 11px;
   color: var(--app-secondary-foreground);

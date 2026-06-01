@@ -172,12 +172,17 @@ export const api = {
   patchChat: (
     repoPath: string,
     chatId: string,
-    body: { userMarkedFinished?: boolean; title?: string },
+    body: { userMarkedFinished?: boolean; title?: string; model?: string },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
       repoPath,
       ...body,
     }).then((r) => r.chat),
+
+  getModels: () =>
+    getJson<{ models: { id: string; label: string }[] }>("/api/models").then(
+      (r) => r.models,
+    ),
 
   deleteChat: (repoPath: string, chatId: string) =>
     send<{ ok: boolean }>(
@@ -280,6 +285,9 @@ export interface CommitDiffFile {
   removed: number;
 }
 
+export interface FileSearchLineMatch { line: number; text: string }
+export interface FileSearchResult { relPath: string; lines: FileSearchLineMatch[] }
+
 export const fileApi = {
   readFile: (filePath: string) =>
     getJson<{ content: string }>(
@@ -290,6 +298,14 @@ export const fileApi = {
     getJson<{ files: string[] }>(
       `/api/file/list?path=${encodeURIComponent(repoPath)}`,
     ).then((r) => r.files),
+
+  writeFile: (filePath: string, content: string) =>
+    send<{ ok: boolean }>('POST', '/api/file/write', { path: filePath, content }),
+
+  searchFiles: (repoPath: string, query: string, excludeExts = "", offset = 0) =>
+    getJson<{ matches: FileSearchResult[]; total: number; hasMore: boolean }>(
+      `/api/file/search?path=${encodeURIComponent(repoPath)}&query=${encodeURIComponent(query)}&excludeExts=${encodeURIComponent(excludeExts)}&offset=${offset}`,
+    ),
 };
 
 export interface ChangedFile {

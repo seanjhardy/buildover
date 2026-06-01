@@ -28,6 +28,8 @@ interface PreviewChatSidebarProps {
   model: Model;
   permissionMode: PermissionMode;
   onPermissionModeChange: (m: PermissionMode) => void;
+  onModelChange: (model: string) => void;
+  availableModels: { id: string; label: string }[];
   onToggleMcp: () => void;
 }
 
@@ -53,6 +55,8 @@ export function PreviewChatSidebar({
   model,
   permissionMode,
   onPermissionModeChange,
+  onModelChange,
+  availableModels,
   onToggleMcp,
 }: PreviewChatSidebarProps) {
   const [showChatList, setShowChatList] = useState(false);
@@ -265,6 +269,8 @@ export function PreviewChatSidebar({
             onPermissionModeChange(m);
             agent.setPermissionMode(m);
           }}
+          onModelChange={onModelChange}
+          availableModels={availableModels}
           onToggleMcp={onToggleMcp}
           contextUsage={agent.contextUsage}
           repoPath={repoPath}

@@ -20,6 +20,8 @@ import { ActivityBar, type WorkspaceView } from "./components/ActivityBar.js";
 import { SourceControlSidebar } from "./components/SourceControlSidebar.js";
 import { PullRequestSidebar } from "./components/PullRequestSidebar.js";
 import { PullRequestView } from "./components/PullRequestView.js";
+import { FileExplorerSidebar } from "./components/FileExplorerSidebar.js";
+import { FileEditorPane, type OpenEditorFile } from "./components/FileEditorPane.js";
 import { CreatePrForm } from "./components/CreatePrForm.js";
 import { RepoTabs } from "./components/RepoTabs.js";
 import { MarketPanel } from "./components/MarketPanel.js";
@@ -46,6 +48,7 @@ import type { GitHubPR, ChangedFile } from "./lib/api.js";
 import { useSelfUpdate } from "./hooks/useSelfUpdate.js";
 import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
+  DEFAULT_MODEL,
   MODELS,
   type Attachment,
   type Model,
@@ -87,7 +90,11 @@ export default function App() {
   // Self-update checker — polls /api/self/status every 10 minutes.
   const selfUpdate = useSelfUpdate();
 
-  const [model, setModel] = useState<Model>("claude-sonnet-4-6");
+  const [model, setModel] = useState<Model>(DEFAULT_MODEL);
+  const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>(MODELS);
+  useEffect(() => {
+    api.getModels().then(setAvailableModels).catch(() => { /* keep fallback */ });
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
     try {
       const stored = localStorage.getItem(PERMISSION_MODE_STORAGE_KEY);
@@ -113,8 +120,17 @@ export default function App() {
   // Reset selected PR when the active repo changes so we don't try to load a
   // PR number from a previous repo against the new one.
   useEffect(() => { setActivePrNumber(null); setActivePr(null); setCreatingPr(false); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Sync model to the active chat's stored model when switching chats.
+  useEffect(() => {
+    const chat = activeChatId != null
+      ? chats.chats.find((c) => c.id === activeChatId)
+      : null;
+    if (chat?.model) setModel(chat.model);
+  }, [activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clear source-control file preview when the active repo changes
   useEffect(() => { setScPreviewFile(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Clear file explorer editor tabs when the active repo changes
+  useEffect(() => { setEditorFiles([]); setActiveEditorPath(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [prBadge, setPrBadge] = useState(0);
   const [scBadge, setScBadge] = useState(0);
 
@@ -204,6 +220,11 @@ export default function App() {
   const [openFile, setOpenFile] = useState<FileEntry | null>(null);
   // Source-control inline file preview (replaces git graph when set)
   const [scPreviewFile, setScPreviewFile] = useState<ChangedFile | null>(null);
+  // File explorer editor tabs
+  const [editorFiles, setEditorFiles] = useState<OpenEditorFile[]>([]);
+  const [activeEditorPath, setActiveEditorPath] = useState<string | null>(null);
+  // Jump-to-line for search results clicking on already-open files
+  const [editorJumpTarget, setEditorJumpTarget] = useState<{ path: string; line: number } | null>(null);
   // Per-chat message queues: chatId → queued messages for that chat.
   // Stored as a map so navigating away from a chat doesn't lose its queue.
   const [messageQueues, setMessageQueues] = useState<Record<string, QueuedMessage[]>>({});
@@ -526,6 +547,13 @@ export default function App() {
     agent.interrupt();
   };
 
+  const handleModelChange = useCallback(async (newModel: string) => {
+    setModel(newModel);
+    if (activeChatId && activeRepo) {
+      await api.patchChat(activeRepo.path, activeChatId, { model: newModel }).catch(() => {});
+    }
+  }, [activeChatId, activeRepo]);
+
   const handleCreateChat = useCallback(async () => {
     if (!activeRepo) return;
     setOpenFile(null);
@@ -805,19 +833,6 @@ Important rules for commands:
               </button>
             )}
 
-            <div className="header-model">
-              <select
-                value={model}
-                onChange={(e) => setModel(e.target.value as Model)}
-                disabled={agent.isStreaming}
-              >
-                {MODELS.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.label}
-                  </option>
-                ))}
-              </select>
-            </div>
             {agent.sessionId && (
               <div className="header-session">
                 session {agent.sessionId.slice(0, 8)}
@@ -950,6 +965,8 @@ Important rules for commands:
                     setPermissionMode(m);
                     agent.setPermissionMode(m);
                   }}
+                  onModelChange={handleModelChange}
+                  availableModels={availableModels}
                   onToggleMcp={() => setMcpOpen((v) => !v)}
                 />
               ) : (
@@ -976,6 +993,30 @@ Important rules for commands:
                 />
               )
             )}
+            <FileExplorerSidebar
+              repoPath={activeRepo.path}
+              hidden={activeView !== 'files'}
+              activeFilePath={
+                activeEditorPath
+                  ? (editorFiles.find((f) => f.path === activeEditorPath)?.relPath ?? null)
+                  : null
+              }
+              openFilePaths={editorFiles.map((f) => f.relPath)}
+              onFileOpen={(relPath, line) => {
+                const absPath = `${activeRepo.path}/${relPath}`;
+                const alreadyOpen = editorFiles.some((f) => f.path === absPath);
+                setEditorFiles((prev) => {
+                  if (prev.some((f) => f.path === absPath)) return prev;
+                  return [...prev, { path: absPath, relPath, initialLine: line }];
+                });
+                setActiveEditorPath(absPath);
+                // For already-open files, use the jump target mechanism
+                if (alreadyOpen && line !== undefined) {
+                  setEditorJumpTarget({ path: absPath, line });
+                }
+              }}
+              onFileViewerOpen={(entry) => setOpenFile(entry)}
+            />
             <SourceControlSidebar
               repoPath={activeRepo.path}
               hidden={activeView !== 'source-control'}
@@ -1010,7 +1051,55 @@ Important rules for commands:
               className="workspace-panels"
               onClick={openFile ? () => setOpenFile(null) : undefined}
             >
-            {activeView === 'source-control' ? (
+            {activeView === 'files' ? (
+              /* File explorer view: multi-tab code editor */
+              <main className="chat-pane" ref={chatPaneRef}>
+                <div className="chat-pane-content">
+                  <FileEditorPane
+                    files={editorFiles}
+                    activeFilePath={activeEditorPath}
+                    repoPath={activeRepo.path}
+                    onActivate={(path) => setActiveEditorPath(path)}
+                    onClose={(path) => {
+                      setEditorFiles((prev) => prev.filter((f) => f.path !== path));
+                      setActiveEditorPath((prev) => {
+                        if (prev !== path) return prev;
+                        const remaining = editorFiles.filter((f) => f.path !== path);
+                        return remaining.length > 0
+                          ? (remaining[remaining.length - 1]?.path ?? null)
+                          : null;
+                      });
+                    }}
+                    onFileOpen={(relPath, line) => {
+                      const absPath = `${activeRepo.path}/${relPath}`;
+                      const alreadyOpen = editorFiles.some((f) => f.path === absPath);
+                      setEditorFiles((prev) => {
+                        if (prev.some((f) => f.path === absPath)) return prev;
+                        return [...prev, { path: absPath, relPath, initialLine: line }];
+                      });
+                      setActiveEditorPath(absPath);
+                      if (alreadyOpen && line !== undefined) {
+                        setEditorJumpTarget({ path: absPath, line });
+                      }
+                    }}
+                    jumpTarget={editorJumpTarget}
+                    onJumpConsumed={() => setEditorJumpTarget(null)}
+                  />
+                </div>
+                {workspace.openRepos.map((repo) => (
+                  <TerminalPanel
+                    key={repo.path}
+                    ref={(handle) => {
+                      if (handle) terminalRefs.current.set(repo.path, handle);
+                      else terminalRefs.current.delete(repo.path);
+                    }}
+                    repoPath={repo.path}
+                    defaultCwd={repo.path}
+                    hidden={repo.path !== activeRepo.path}
+                  />
+                ))}
+              </main>
+            ) : activeView === 'source-control' ? (
               /* Source control view: show file preview or GitGraphView */
               <main className="chat-pane" ref={chatPaneRef}>
                 <div className="chat-pane-content">
@@ -1198,6 +1287,8 @@ Important rules for commands:
                                   // suppresses future ones.
                                   agent.setPermissionMode(m);
                                 }}
+                                onModelChange={handleModelChange}
+                                availableModels={availableModels}
                                 onToggleMcp={() => setMcpOpen((v) => !v)}
                                 contextUsage={agent.contextUsage}
                                 repoPath={activeRepo?.path}

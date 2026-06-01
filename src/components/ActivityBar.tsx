@@ -1,8 +1,8 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { MessageSquare, GitBranch, GitPullRequest } from "lucide-react";
+import { MessageSquare, GitBranch, GitPullRequest, FolderOpen } from "lucide-react";
 
-export type WorkspaceView = 'chat' | 'source-control' | 'pr';
+export type WorkspaceView = 'chat' | 'source-control' | 'pr' | 'files';
 
 interface Props {
   activeView: WorkspaceView;
@@ -67,6 +67,7 @@ function ActivityBarItem({
 export function ActivityBar({ activeView, onViewChange, scBadge, prBadge }: Props) {
   const items: NavItem[] = [
     { id: 'chat', icon: <MessageSquare size={20} />, label: 'Chats' },
+    { id: 'files', icon: <FolderOpen size={20} />, label: 'Explorer' },
     {
       id: 'source-control',
       icon: <GitBranch size={20} />,

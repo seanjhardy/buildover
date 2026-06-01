@@ -1,15 +1,15 @@
 // Shared message types between server and client.
 
-export type Model =
-  | "claude-opus-4-7"
-  | "claude-sonnet-4-6"
-  | "claude-haiku-4-5";
+export type Model = string;
 
-export const MODELS: { id: Model; label: string }[] = [
-  { id: "claude-opus-4-7", label: "Opus 4.7" },
-  { id: "claude-sonnet-4-6", label: "Sonnet 4.6" },
-  { id: "claude-haiku-4-5", label: "Haiku 4.5" },
+/** Fallback model list used before the /api/models response arrives. */
+export const MODELS: { id: string; label: string }[] = [
+  { id: "claude-opus-4-5", label: "Claude Opus 4.5" },
+  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
 ];
+
+export const DEFAULT_MODEL: Model = "claude-sonnet-4-5";
 
 export type PermissionMode =
   | "default"

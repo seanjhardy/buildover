@@ -3,7 +3,7 @@
 /* Fallback values match VS Code Dark+ for backward compat.     */
 /* ============================================================ */
 
-.hljs                     { color: var(--hljs-default, #d4d4d4); background: transparent; }
+.hljs                     { color: var(--hljs-default, #d4d4d4); background: transparent !important; }
 .hljs-keyword             { color: var(--hljs-keyword, #569cd6); }
 .hljs-built_in            { color: var(--hljs-builtin, #4ec9b0); }
 .hljs-type                { color: var(--hljs-builtin, #4ec9b0); }

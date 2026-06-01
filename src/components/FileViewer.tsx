@@ -1,137 +1,13 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
 import { X, AlertCircle, Loader } from "lucide-react";
-import hljs from "highlight.js/lib/core";
-import typescript from "highlight.js/lib/languages/typescript";
-import javascript from "highlight.js/lib/languages/javascript";
-import xml from "highlight.js/lib/languages/xml";
-import css from "highlight.js/lib/languages/css";
-import json from "highlight.js/lib/languages/json";
-import python from "highlight.js/lib/languages/python";
-import rust from "highlight.js/lib/languages/rust";
-import go from "highlight.js/lib/languages/go";
-import bash from "highlight.js/lib/languages/bash";
-import sql from "highlight.js/lib/languages/sql";
-import markdown from "highlight.js/lib/languages/markdown";
-import yaml from "highlight.js/lib/languages/yaml";
-import java from "highlight.js/lib/languages/java";
-import kotlin from "highlight.js/lib/languages/kotlin";
-import cpp from "highlight.js/lib/languages/cpp";
-import csharp from "highlight.js/lib/languages/csharp";
-import swift from "highlight.js/lib/languages/swift";
-import php from "highlight.js/lib/languages/php";
-import ruby from "highlight.js/lib/languages/ruby";
-import scala from "highlight.js/lib/languages/scala";
-import r from "highlight.js/lib/languages/r";
-import lua from "highlight.js/lib/languages/lua";
-import perl from "highlight.js/lib/languages/perl";
-import graphql from "highlight.js/lib/languages/graphql";
-import toml from "highlight.js/lib/languages/ini"; // TOML uses ini grammar
-import dockerfile from "highlight.js/lib/languages/dockerfile";
-import nginx from "highlight.js/lib/languages/nginx";
 import { fileApi, gitApi } from "../lib/api.js";
 import type { FileEntry } from "../hooks/useFilesChanged.js";
-
-// Register languages
-hljs.registerLanguage("typescript", typescript);
-hljs.registerLanguage("javascript", javascript);
-hljs.registerLanguage("xml", xml);
-hljs.registerLanguage("html", xml);
-hljs.registerLanguage("css", css);
-hljs.registerLanguage("json", json);
-hljs.registerLanguage("python", python);
-hljs.registerLanguage("rust", rust);
-hljs.registerLanguage("go", go);
-hljs.registerLanguage("bash", bash);
-hljs.registerLanguage("shell", bash);
-hljs.registerLanguage("sql", sql);
-hljs.registerLanguage("markdown", markdown);
-hljs.registerLanguage("yaml", yaml);
-hljs.registerLanguage("java", java);
-hljs.registerLanguage("kotlin", kotlin);
-hljs.registerLanguage("cpp", cpp);
-hljs.registerLanguage("csharp", csharp);
-hljs.registerLanguage("swift", swift);
-hljs.registerLanguage("php", php);
-hljs.registerLanguage("ruby", ruby);
-hljs.registerLanguage("scala", scala);
-hljs.registerLanguage("r", r);
-hljs.registerLanguage("lua", lua);
-hljs.registerLanguage("perl", perl);
-hljs.registerLanguage("graphql", graphql);
-hljs.registerLanguage("toml", toml);
-hljs.registerLanguage("dockerfile", dockerfile);
-hljs.registerLanguage("nginx", nginx);
-
-function getLanguage(filename: string): string {
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  const map: Record<string, string> = {
-    ts: "typescript", tsx: "typescript",
-    mts: "typescript", cts: "typescript",
-    js: "javascript", jsx: "javascript",
-    mjs: "javascript", cjs: "javascript",
-    html: "html", htm: "html",
-    css: "css", scss: "css",
-    json: "json",
-    py: "python",
-    rs: "rust",
-    go: "go",
-    sh: "bash", bash: "bash", zsh: "bash",
-    sql: "sql",
-    md: "markdown", mdx: "markdown",
-    yml: "yaml", yaml: "yaml",
-    xml: "xml",
-    java: "java",
-    kt: "kotlin", kts: "kotlin",
-    cpp: "cpp", cc: "cpp", cxx: "cpp", c: "cpp", h: "cpp", hpp: "cpp",
-    cs: "csharp",
-    swift: "swift",
-    php: "php",
-    rb: "ruby",
-    scala: "scala",
-    r: "r",
-    lua: "lua",
-    pl: "perl", pm: "perl",
-    graphql: "graphql", gql: "graphql",
-    toml: "toml",
-    ini: "toml", cfg: "toml", properties: "toml",
-    dockerfile: "dockerfile",
-    nginx: "nginx",
-  };
-  return map[ext] ?? "plaintext";
-}
-
-/** Split highlight.js HTML output into one string per line,
- *  closing/reopening spans at each newline so each line is self-contained. */
-function splitHighlightedHtml(html: string): string[] {
-  const lines: string[] = [];
-  let cur = "";
-  const stack: string[] = []; // opening <span ...> tags
-  let i = 0;
-  while (i < html.length) {
-    const ch = html[i]!;
-    if (ch === "<") {
-      const end = html.indexOf(">", i);
-      if (end === -1) { cur += html.slice(i); break; }
-      const tag = html.slice(i, end + 1);
-      cur += tag;
-      if (tag.startsWith("</")) stack.pop();
-      else if (!tag.endsWith("/>")) stack.push(tag);
-      i = end + 1;
-    } else if (ch === "\n") {
-      for (let j = stack.length - 1; j >= 0; j--) cur += "</span>";
-      lines.push(cur);
-      cur = stack.join("");
-      i++;
-    } else {
-      cur += ch;
-      i++;
-    }
-  }
-  lines.push(cur);
-  return lines;
-}
-
-const HIGHLIGHT_LINE_LIMIT = 5_000;
+import {
+  getLanguage,
+  highlightLine as sharedHighlightLine,
+  highlightContent,
+  isImageFile,
+} from "../lib/highlight.js";
 
 interface RemovedGroup { after: number; lines: string[] }
 
@@ -161,9 +37,19 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
 
   const filename = entry.path.split("/").pop() ?? entry.relPath;
   const lang = getLanguage(filename);
+  const isImage = isImageFile(filename);
 
-  // ── Load file content ───────────────────────────────────────────────────
+  // ── Load file content (skip for images — rendered via <img> URL) ────────
   useEffect(() => {
+    if (isImage) {
+      setLoading(false);
+      setError(null);
+      setContent(null);
+      setAddedLines(new Set());
+      setRemovedGroups([]);
+      return;
+    }
+
     setLoading(true);
     setError(null);
     setContent(null);
@@ -177,7 +63,7 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
         setError(err instanceof Error ? err.message : String(err));
         setLoading(false);
       });
-  }, [entry.path]);
+  }, [entry.path, isImage]);
 
   // ── Load diff data ──────────────────────────────────────────────────────
   useEffect(() => {
@@ -257,31 +143,16 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
   const totalRows = displayRows.length;
 
   // ── Syntax-highlight deleted lines ──────────────────────────────────────
-  // Returns an HTML string with hljs spans for a single line of code.
-  const highlightLine = useCallback((text: string): string => {
-    if (lang === "plaintext" || !text.trim()) return escapeHtml(text) || "&nbsp;";
-    try {
-      return hljs.highlight(text, { language: lang }).value || escapeHtml(text);
-    } catch {
-      return escapeHtml(text);
-    }
-  }, [lang]);
+  const highlightLine = useCallback(
+    (text: string): string => sharedHighlightLine(text, lang),
+    [lang],
+  );
 
   // ── Full-file syntax highlighting ───────────────────────────────────────
-  const highlightedLines = useMemo((): string[] | null => {
-    if (content === null || lang === "plaintext") return null;
-    const lines = content.split("\n");
-    // Remove trailing empty line
-    if (lines[lines.length - 1] === "") lines.pop();
-    if (lines.length > HIGHLIGHT_LINE_LIMIT) return null;
-    const src = lines.join("\n");
-    try {
-      const result = hljs.highlight(src, { language: lang });
-      return splitHighlightedHtml(result.value);
-    } catch {
-      return null;
-    }
-  }, [content, lang]);
+  const highlightedLines = useMemo(
+    (): string[] | null => (content === null ? null : highlightContent(content, lang)),
+    [content, lang],
+  );
 
   // ── Minimap canvas drawing ───────────────────────────────────────────────
   const drawMinimap = useCallback(() => {
@@ -400,6 +271,17 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
               <AlertCircle size={18} /><span>{error}</span>
             </div>
           )}
+          {/* ── Image preview ── */}
+          {!loading && !error && isImage && (
+            <div className="file-viewer-image-wrap">
+              <img
+                src={`/api/file/serve?path=${encodeURIComponent(entry.path)}`}
+                alt={filename}
+                className="file-viewer-image"
+              />
+            </div>
+          )}
+          {/* ── Text / code view ── */}
           {!loading && !error && content !== null && (
             <div className="file-viewer-editor">
               {/* Gutter */}
@@ -413,7 +295,7 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
 
               {/* Code rows */}
               <div className="file-viewer-content-wrap">
-                <pre className="file-viewer-pre">
+                <pre className="file-viewer-pre hljs">
                   {displayRows.map((row, i) => (
                     row.kind === "deleted" ? (
                       <div
@@ -425,7 +307,7 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
                       <div
                         key={i}
                         className={`file-viewer-row${row.added ? " file-viewer-row--added" : ""}`}
-                        dangerouslySetInnerHTML={{ __html: (highlightedLines[row.lineNo - 1] ?? escapeHtml(row.text)) || "&nbsp;" }}
+                        dangerouslySetInnerHTML={{ __html: (highlightedLines[row.lineNo - 1] ?? sharedHighlightLine(row.text, "plaintext")) || "&nbsp;" }}
                       />
                     ) : (
                       <div
@@ -442,27 +324,35 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
           )}
         </div>
 
-        {/* Minimap */}
-        <div ref={minimapRef} className="file-viewer-minimap-wrap" aria-hidden="true">
-          <canvas
-            ref={canvasRef}
-            className="file-viewer-minimap"
-            onPointerDown={handleMinimapPointer}
-            title="Click or drag to scroll"
-          />
-        </div>
+        {/* Minimap — only for text files */}
+        {!isImage && (
+          <div ref={minimapRef} className="file-viewer-minimap-wrap" aria-hidden="true">
+            <canvas
+              ref={canvasRef}
+              className="file-viewer-minimap"
+              onPointerDown={handleMinimapPointer}
+              title="Click or drag to scroll"
+            />
+          </div>
+        )}
       </div>
 
       {/* Status bar */}
-      {!loading && !error && content !== null && (
+      {!loading && !error && (isImage || content !== null) && (
         <div className="file-viewer-statusbar">
-          <span>{lang}</span>
-          <span>{lineCount} lines</span>
-          {hasDiff && (
-            <span className="file-viewer-diff-stat">
-              {addedLines.size > 0 && <span className="file-viewer-diff-stat--add">+{addedLines.size}</span>}
-              {totalRemovedCount > 0 && <span className="file-viewer-diff-stat--remove">−{totalRemovedCount}</span>}
-            </span>
+          {isImage ? (
+            <span>{filename.split(".").pop()?.toUpperCase() ?? "Image"}</span>
+          ) : (
+            <>
+              <span>{lang}</span>
+              <span>{lineCount} lines</span>
+              {hasDiff && (
+                <span className="file-viewer-diff-stat">
+                  {addedLines.size > 0 && <span className="file-viewer-diff-stat--add">+{addedLines.size}</span>}
+                  {totalRemovedCount > 0 && <span className="file-viewer-diff-stat--remove">−{totalRemovedCount}</span>}
+                </span>
+              )}
+            </>
           )}
           <span className={`file-viewer-op file-viewer-op--${entry.op}`}>
             {entry.op === "write" ? "added" : entry.op === "delete" ? "deleted" : "modified"}
@@ -473,9 +363,3 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
   );
 }
 
-function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;");
-}

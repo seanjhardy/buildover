@@ -257,11 +257,14 @@
   margin: 0;
   padding: 14px 0;
   overflow: visible;
-  background: transparent;
+  /* Keep transparent even when a CDN hljs theme sets .hljs { background: ... } */
+  background: transparent !important;
   tab-size: 2;
 }
 
-/* Each display row — one div per line (real or ghost) */
+/* Each display row — one div per line (real or ghost).
+   No explicit colour here so the row inherits from .hljs on the parent <pre>,
+   letting CDN syntax themes change the base text colour correctly. */
 .file-viewer-row {
   display: block;
   height: 20px;
@@ -270,7 +273,6 @@
   white-space: pre;
   font-family: var(--app-monospace-font-family);
   font-size: 12.5px;
-  color: var(--app-foreground, #d4d4d4);
   min-width: 100%;
 }
 
@@ -343,3 +345,31 @@
 .file-viewer-op--write   { color: #9fefb4; }
 .file-viewer-op--edit    { color: #ffe0b0; }
 .file-viewer-op--delete  { color: #ffb3a7; }
+
+/* ── Image preview ───────────────────────────────────────────────────────── */
+.file-viewer-image-wrap {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 100%;
+  height: 100%;
+  min-height: 200px;
+  padding: 24px;
+  box-sizing: border-box;
+  background:
+    linear-gradient(45deg, var(--app-secondary-background) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--app-secondary-background) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--app-secondary-background) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--app-secondary-background) 75%);
+  background-size: 16px 16px;
+  background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+  background-color: var(--app-primary-background);
+}
+
+.file-viewer-image {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--corner-radius-small);
+  box-shadow: 0 4px 24px rgba(0, 0, 0, 0.35);
+}

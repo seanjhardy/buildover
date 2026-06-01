@@ -3,6 +3,7 @@ import type { ReactNode } from "react";
 import {
   Archive,
   ArrowUp,
+  Bot,
   ClipboardList,
   Hammer,
   ListPlus,
@@ -44,6 +45,8 @@ interface Props {
   sdkSlashCommands?: string[];
   /** Hide the permissions/mode pill (e.g. in compact embedded contexts) */
   hideModePill?: boolean;
+  onModelChange: (model: string) => void;
+  availableModels: { id: string; label: string }[];
 }
 
 const MAX_TEXT_BYTES = 256 * 1024;
@@ -212,8 +215,11 @@ export function Composer(props: Props) {
     onDraftChange,
     disabled,
     isStreaming,
+    model,
     permissionMode,
     onPermissionModeChange,
+    onModelChange,
+    availableModels,
     onToggleMcp,
     contextUsage,
     repoPath,
@@ -255,10 +261,12 @@ export function Composer(props: Props) {
   const [dragOver, setDragOver] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [modePopupOpen, setModePopupOpen] = useState(false);
+  const [modelPopupOpen, setModelPopupOpen] = useState(false);
   const [plusPopupOpen, setPlusPopupOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const modeWrapRef = useRef<HTMLDivElement>(null);
+  const modelWrapRef = useRef<HTMLDivElement>(null);
   const plusWrapRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -323,12 +331,15 @@ export function Composer(props: Props) {
 
   // Close popups on outside click.
   useEffect(() => {
-    if (!modePopupOpen && !plusPopupOpen && !atPopupOpen && !slashPopupOpen)
+    if (!modePopupOpen && !modelPopupOpen && !plusPopupOpen && !atPopupOpen && !slashPopupOpen)
       return;
     const onDoc = (e: MouseEvent) => {
       const target = e.target as Node;
       if (modePopupOpen && !modeWrapRef.current?.contains(target)) {
         setModePopupOpen(false);
+      }
+      if (modelPopupOpen && !modelWrapRef.current?.contains(target)) {
+        setModelPopupOpen(false);
       }
       if (plusPopupOpen && !plusWrapRef.current?.contains(target)) {
         setPlusPopupOpen(false);
@@ -342,7 +353,7 @@ export function Composer(props: Props) {
     };
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
-  }, [modePopupOpen, plusPopupOpen, atPopupOpen, slashPopupOpen]);
+  }, [modePopupOpen, modelPopupOpen, plusPopupOpen, atPopupOpen, slashPopupOpen]);
 
   // Auto-resize textarea to fit content, up to a maximum height.
   useEffect(() => {
@@ -931,6 +942,42 @@ export function Composer(props: Props) {
               <Mic className="mic-icon" size={14} aria-hidden="true" />
             )}
           </button>
+          <div ref={modelWrapRef} className="popup-wrap">
+            <button
+              className={`model-pill-btn${modelPopupOpen ? " active" : ""}`}
+              onClick={() => !isStreaming && setModelPopupOpen((v) => !v)}
+              disabled={isStreaming}
+              title={availableModels.find((m) => m.id === model)?.label ?? model}
+              aria-label="Switch model"
+            >
+              <Bot size={14} />
+            </button>
+            {modelPopupOpen && (
+              <div className="model-popup" role="listbox">
+                <div className="model-popup-head">Model</div>
+                {[...availableModels]
+                  .sort((a, b) => a.label.localeCompare(b.label))
+                  .map((m) => {
+                    const active = m.id === model;
+                    return (
+                      <button
+                        key={m.id}
+                        role="option"
+                        aria-selected={active}
+                        className={`model-popup-item${active ? " active" : ""}`}
+                        onClick={() => {
+                          onModelChange(m.id);
+                          setModelPopupOpen(false);
+                        }}
+                      >
+                        <span className="model-popup-label">{m.label}</span>
+                        {active && <span className="model-popup-check">✓</span>}
+                      </button>
+                    );
+                  })}
+              </div>
+            )}
+          </div>
           {!hideModePill && <div ref={modeWrapRef} className="popup-wrap">
             <button
               className="mode-pill"
