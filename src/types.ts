@@ -4,12 +4,14 @@ export type Model = string;
 
 /** Fallback model list used before the /api/models response arrives. */
 export const MODELS: { id: string; label: string }[] = [
-  { id: "claude-opus-4-5", label: "Claude Opus 4.5" },
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
+  { id: "claude-opus-4-7", label: "Claude Opus 4.7" },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
   { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
 ];
 
-export const DEFAULT_MODEL: Model = "claude-sonnet-4-5";
+export const DEFAULT_MODEL: Model = "claude-opus-4-8";
 
 export type PermissionMode =
   | "default"
@@ -282,6 +284,7 @@ export type ClientMessage =
       repoPath: string;
       userMessageId: string;
       newText: string;
+      attachments?: Attachment[];
       model: Model;
       permissionMode?: PermissionMode;
     }

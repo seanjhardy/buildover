@@ -644,6 +644,7 @@ class AgentSession {
   async runFork(args: {
     userMessageId: string;
     newText: string;
+    attachments?: Attachment[];
     model: Model;
     permissionMode: PermissionMode;
   }): Promise<void> {
@@ -654,6 +655,7 @@ class AgentSession {
       this.chatId,
       args.userMessageId,
       args.newText,
+      args.attachments,
     );
     if (!result) throw new Error("Message not found or already branched away");
 
@@ -679,6 +681,7 @@ class AgentSession {
       text: args.newText,
       model: args.model,
       permissionMode: args.permissionMode,
+      attachments: args.attachments,
       isRetry: true,
     });
   }

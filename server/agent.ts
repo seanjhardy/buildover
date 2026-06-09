@@ -245,11 +245,13 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
               }
             | undefined;
           if (iterUsage) {
-            const MODEL_CONTEXT_WINDOWS: Record<string, number> = {
-              "claude-opus-4-7": 1_000_000,
-              "claude-sonnet-4-6": 1_000_000,
-              "claude-haiku-4-5": 200_000,
-            };
+            // Determine context window size based on model family
+            // Models can have date suffixes (e.g., claude-sonnet-4-5-20250929)
+            let contextWindowSize = 200_000; // default for haiku
+            const modelLower = args.model.toLowerCase();
+            if (modelLower.includes("opus") || modelLower.includes("sonnet")) {
+              contextWindowSize = 1_000_000;
+            }
             const inputTokens = iterUsage.input_tokens ?? 0;
             const outputTokens = iterUsage.output_tokens ?? 0;
             const cacheReadTokens = iterUsage.cache_read_input_tokens ?? 0;
@@ -257,7 +259,6 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
             // Exclude outputTokens: they are generated tokens, not context window
             // consumption. The context window limit is an input constraint only.
             const usedTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-            const contextWindowSize = MODEL_CONTEXT_WINDOWS[args.model] ?? 200_000;
             const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
             emit({
               type: "context_usage",

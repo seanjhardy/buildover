@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { House, ShoppingBag } from "lucide-react";
 import { OpenRepoMenu } from "./OpenRepoMenu.js";
 import { StatusIcon } from "./StatusIcon.js";
@@ -12,6 +13,7 @@ interface Props {
   onClose: (path: string) => void;
   onOpen: (path: string) => Promise<void>;
   onForgetRecent: (path: string) => void;
+  onReorder?: (fromPath: string, toPath: string) => void;
   badges?: Record<string, ChatStatus | null>;
   marketActive?: boolean;
   homeActive?: boolean;
@@ -27,11 +29,44 @@ export function RepoTabs({
   onClose,
   onOpen,
   onForgetRecent,
+  onReorder,
   badges,
   marketActive,
   homeActive,
   onMarket,
 }: Props) {
+  const [draggedPath, setDraggedPath] = useState<string | null>(null);
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+
+  const handleDragStart = (path: string) => (e: React.DragEvent) => {
+    setDraggedPath(path);
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  const handleDragOver = (path: string) => (e: React.DragEvent) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    setDragOverPath(path);
+  };
+
+  const handleDragLeave = () => {
+    setDragOverPath(null);
+  };
+
+  const handleDrop = (toPath: string) => (e: React.DragEvent) => {
+    e.preventDefault();
+    if (draggedPath !== null && draggedPath !== toPath && onReorder) {
+      onReorder(draggedPath, toPath);
+    }
+    setDraggedPath(null);
+    setDragOverPath(null);
+  };
+
+  const handleDragEnd = () => {
+    setDraggedPath(null);
+    setDragOverPath(null);
+  };
+
   return (
     <div className="repo-tabs">
       <div className="repo-tabs-list">
@@ -57,14 +92,22 @@ export function RepoTabs({
         </div>
         {openRepos.map((repo) => {
           const badge = badges?.[repo.path] ?? null;
+          const isDragging = draggedPath === repo.path;
+          const isDragOver = dragOverPath === repo.path;
           return (
             <button
               key={repo.path}
               type="button"
+              draggable
               className={`repo-tab ${
                 repo.path === activeRepoPath ? "active" : ""
-              }`}
+              } ${isDragging ? "dragging" : ""} ${isDragOver ? "drag-over" : ""}`}
               onClick={() => onSelect(repo.path)}
+              onDragStart={handleDragStart(repo.path)}
+              onDragOver={handleDragOver(repo.path)}
+              onDragLeave={handleDragLeave}
+              onDrop={handleDrop(repo.path)}
+              onDragEnd={handleDragEnd}
               title={repo.path}
             >
               <span className="repo-tab-name">{repo.name}</span>

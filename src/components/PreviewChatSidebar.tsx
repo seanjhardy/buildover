@@ -230,8 +230,8 @@ export function PreviewChatSidebar({
           scrollRef={msgScrollRef}
           jumpBarRef={jumpBarRef}
           branchInfo={agent.branchInfo}
-          onForkMessage={(userMessageId: string, newText: string) =>
-            agent.forkMessage(userMessageId, newText, { model, permissionMode })
+          onForkMessage={(userMessageId: string, newText: string, attachments?: Attachment[]) =>
+            agent.forkMessage(userMessageId, newText, attachments, { model, permissionMode })
           }
           onSwitchBranch={agent.switchBranch}
           onRevert={agent.revertToCheckpoint}

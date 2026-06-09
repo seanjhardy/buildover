@@ -214,7 +214,6 @@ app.get("/api/models", async (_req, res) => {
       headers: {
         Authorization: `Bearer ${creds.accessToken}`,
         "anthropic-version": "2023-06-01",
-        "anthropic-beta": "anthropic-oauth-2025-04-20",
       },
     });
     if (!resp.ok) {
@@ -225,10 +224,56 @@ app.get("/api/models", async (_req, res) => {
       data: { id: string; display_name: string; created_at: string }[];
     };
     // Return only claude-* models, newest first, shaped for the frontend.
+    // Include context window sizes based on model family
     const models = (data.data ?? [])
       .filter((m) => m.id.startsWith("claude-"))
-      .map((m) => ({ id: m.id, label: m.display_name }));
+      .map((m) => {
+        let contextWindow = 200_000; // default
+        if (m.id.includes("opus") || m.id.includes("sonnet")) {
+          contextWindow = 1_000_000;
+        }
+        return { id: m.id, label: m.display_name, contextWindow };
+      });
     res.json({ models });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- Agent list ----
+// Returns the list of available agent types from the SDK
+app.get("/api/agents", async (_req, res) => {
+  try {
+    const { query, startup } = await import("@anthropic-ai/claude-agent-sdk");
+    await startup();
+
+    const stream = query({
+      prompt: [{
+        type: "user" as const,
+        message: { role: "user" as const, content: "test" },
+        parent_tool_use_id: null,
+        session_id: "",
+      }],
+      options: {
+        model: "claude-sonnet-4-5",
+        includePartialMessages: false,
+      },
+    });
+
+    let agents: string[] = [];
+    for await (const msg of stream as AsyncIterable<any>) {
+      if (msg.type === "system" && msg.subtype === "init") {
+        agents = msg.agents || [];
+        break;
+      }
+    }
+
+    // Interrupt the stream to clean up
+    await (stream as any).interrupt?.().catch(() => {});
+
+    res.json({ agents });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
@@ -385,7 +430,7 @@ app.get("/api/chats", async (req, res) => {
 app.post("/api/chats", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
-    const model = (req.body?.model as Model) ?? "claude-sonnet-4-6";
+    const model = (req.body?.model as Model) ?? "claude-opus-4-8";
     const permissionMode =
       (req.body?.permissionMode as PermissionMode) ?? "default";
     const record = await createChat(repoPath, { model, permissionMode });
@@ -1515,6 +1560,7 @@ wss.on("connection", (ws: WebSocket) => {
             .runFork({
               userMessageId: msg.userMessageId,
               newText: msg.newText,
+              attachments: msg.attachments,
               model: msg.model,
               permissionMode: msg.permissionMode ?? "default",
             })

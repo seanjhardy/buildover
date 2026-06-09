@@ -50,6 +50,7 @@ export interface UseWorkspaceReturn {
   closeRepo: (path: string) => void;
   setActiveRepo: (path: string) => void;
   setActiveChat: (chatId: string | null) => void;
+  reorderRepos: (fromPath: string, toPath: string) => void;
 }
 
 export function useWorkspace(): UseWorkspaceReturn {
@@ -127,6 +128,18 @@ export function useWorkspace(): UseWorkspaceReturn {
     [],
   );
 
+  const reorderRepos = useCallback((fromPath: string, toPath: string) => {
+    setState((prev) => {
+      const openRepos = [...prev.openRepos];
+      const fromIndex = openRepos.findIndex((r) => r.path === fromPath);
+      const toIndex = openRepos.findIndex((r) => r.path === toPath);
+      if (fromIndex === -1 || toIndex === -1) return prev;
+      const [moved] = openRepos.splice(fromIndex, 1);
+      openRepos.splice(toIndex, 0, moved);
+      return { ...prev, openRepos };
+    });
+  }, []);
+
   const activeRepo =
     state.openRepos.find((r) => r.path === state.activeRepoPath) ?? null;
   const activeChatId = activeRepo
@@ -143,5 +156,6 @@ export function useWorkspace(): UseWorkspaceReturn {
     closeRepo,
     setActiveRepo,
     setActiveChat,
+    reorderRepos,
   };
 }

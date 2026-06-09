@@ -147,7 +147,7 @@ interface UseAgentReturn {
   respondAttention: (attentionId: string, feedback?: string, interrupt?: boolean) => void;
   interrupt: () => void;
   setPermissionMode: (mode: PermissionMode) => void;
-  forkMessage: (userMessageId: string, newText: string, opts: SendOptions) => void;
+  forkMessage: (userMessageId: string, newText: string, attachments: Attachment[] | undefined, opts: SendOptions) => void;
   switchBranch: (parentMessageId: string, targetBranchId: string) => void;
 }
 
@@ -550,7 +550,7 @@ export function useAgent(
   }, []);
 
   const forkMessage = useCallback(
-    (userMessageId: string, newText: string, opts: SendOptions) => {
+    (userMessageId: string, newText: string, attachments: Attachment[] | undefined, opts: SendOptions) => {
       if (!repoPath || !chatId) return;
       agentSocket.send({
         type: "fork_message",
@@ -558,6 +558,7 @@ export function useAgent(
         repoPath,
         userMessageId,
         newText,
+        attachments,
         model: opts.model,
         permissionMode: opts.permissionMode,
       });

@@ -259,10 +259,40 @@
   gap: var(--app-spacing-small);
   padding-top: 2px;
 }
+.bubble-edit-error {
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  border-radius: var(--corner-radius-small);
+  background: color-mix(in srgb, var(--app-destructive) 10%, transparent);
+  border: 1px solid var(--app-destructive);
+  color: var(--app-destructive);
+  font-size: 12px;
+  line-height: 1.4;
+}
 .bubble-edit-btns {
   display: flex;
   gap: var(--app-spacing-small);
   margin-left: auto;
+}
+.bubble-edit-attach {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  margin-right: auto;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+.bubble-edit-attach:hover {
+  background: var(--app-secondary-background);
+  border-color: var(--app-accent-color);
+  color: var(--app-accent-color);
 }
 .bubble-edit-submit {
   background: var(--app-accent-color, #555);

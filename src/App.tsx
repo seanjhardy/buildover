@@ -93,7 +93,14 @@ export default function App() {
   const [model, setModel] = useState<Model>(DEFAULT_MODEL);
   const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>(MODELS);
   useEffect(() => {
-    api.getModels().then(setAvailableModels).catch(() => { /* keep fallback */ });
+    api.getModels().then((models) => {
+      setAvailableModels(models);
+      // Dynamically select the best (latest) Opus model as default
+      const latestOpus = models.find(m => m.id.includes("opus"));
+      if (latestOpus && !activeChatId) {
+        setModel(latestOpus.id);
+      }
+    }).catch(() => { /* keep fallback */ });
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
     try {
@@ -891,6 +898,7 @@ Important rules for commands:
             await workspace.openRepo(path);
           }}
           onForgetRecent={handleForgetRecent}
+          onReorder={workspace.reorderRepos}
           badges={repoTabBadges}
           marketActive={marketOpen}
           homeActive={homeOpen}
@@ -1236,8 +1244,8 @@ Important rules for commands:
                               scrollRef={msgScrollRef}
                               jumpBarRef={jumpBarRef}
                               branchInfo={agent.branchInfo}
-                              onForkMessage={(userMessageId, newText) =>
-                                agent.forkMessage(userMessageId, newText, { model, permissionMode })
+                              onForkMessage={(userMessageId, newText, attachments) =>
+                                agent.forkMessage(userMessageId, newText, attachments, { model, permissionMode })
                               }
                               onSwitchBranch={agent.switchBranch}
                               onRevert={agent.revertToCheckpoint}

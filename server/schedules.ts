@@ -116,7 +116,7 @@ export async function createTask(opts: NewTaskOpts): Promise<ScheduledTask> {
       prompt: opts.prompt,
       repoPath: opts.repoPath,
       chatId: opts.chatId,
-      model: opts.model ?? "claude-sonnet-4-6",
+      model: opts.model ?? "claude-opus-4-8",
       permissionMode: opts.permissionMode ?? "default",
       enabled: opts.enabled ?? true,
       createdAt: nowIso(),

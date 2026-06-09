@@ -407,6 +407,7 @@ export function Composer(props: Props) {
 
   const submit = () => {
     const trimmed = text.trim();
+    // Allow sending if there's either text OR attachments
     if (!trimmed && attachments.length === 0) return;
     if (disabled) {
       // If we have a queue handler, queue the message instead of dropping it
@@ -428,6 +429,7 @@ export function Composer(props: Props) {
   const queueSubmit = () => {
     if (!onQueueMessage) return;
     const trimmed = text.trim();
+    // Allow queueing if there's either text OR attachments
     if (!trimmed && attachments.length === 0) return;
     onQueueMessage(trimmed, attachments);
     setText("");
@@ -1026,7 +1028,7 @@ export function Composer(props: Props) {
             <button
               className="send-btn queue"
               onClick={queueSubmit}
-              disabled={!text.trim() && attachments.length === 0}
+              disabled={text.trim() === "" && attachments.length === 0}
               title="Add to queue"
             >
               <ListPlus size={16} />
@@ -1044,7 +1046,7 @@ export function Composer(props: Props) {
             <button
               className="send-btn"
               onClick={submit}
-              disabled={disabled || (!text.trim() && attachments.length === 0)}
+              disabled={disabled || (text.trim() === "" && attachments.length === 0)}
               title="Send"
             >
               <ArrowUp size={16} />

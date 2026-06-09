@@ -180,7 +180,7 @@ export const api = {
     }).then((r) => r.chat),
 
   getModels: () =>
-    getJson<{ models: { id: string; label: string }[] }>("/api/models").then(
+    getJson<{ models: { id: string; label: string; contextWindow?: number }[] }>("/api/models").then(
       (r) => r.models,
     ),
 

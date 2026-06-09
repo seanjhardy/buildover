@@ -1,8 +1,53 @@
 import { memo, useEffect, useRef, useState } from "react";
+import { Paperclip, X } from "lucide-react";
 import type { BranchInfo } from "../hooks/useAgent.js";
 import type { Attachment } from "../types.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 import { AttachmentPreviewModal } from "./AttachmentPreviewModal.js";
+
+const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+const MAX_TEXT_BYTES = 256 * 1024;
+const SUPPORTED_IMAGE_TYPES = [
+  "image/jpeg",
+  "image/png",
+  "image/gif",
+  "image/webp",
+];
+
+async function fileToAttachment(file: File): Promise<Attachment> {
+  const isImage = file.type.startsWith("image/");
+  const id = `att-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  if (isImage) {
+    if (!SUPPORTED_IMAGE_TYPES.includes(file.type)) {
+      throw new Error(
+        `Unsupported image type: ${file.type}. Supported: PNG, JPG, GIF, WebP.`,
+      );
+    }
+    if (file.size > MAX_IMAGE_BYTES) {
+      throw new Error(
+        `Image too large (max ${MAX_IMAGE_BYTES / 1024 / 1024}MB)`,
+      );
+    }
+    const dataUrl = await new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result));
+      reader.onerror = () => reject(reader.error);
+      reader.readAsDataURL(file);
+    });
+    return { id, name: file.name, mime: file.type, size: file.size, dataUrl };
+  }
+  if (file.size > MAX_TEXT_BYTES) {
+    throw new Error(`Text file too large (max ${MAX_TEXT_BYTES / 1024}KB)`);
+  }
+  const contents = await file.text();
+  return {
+    id,
+    name: file.name,
+    mime: file.type || "text/plain",
+    size: file.size,
+    contents,
+  };
+}
 
 interface Props {
   text: string;
@@ -11,7 +56,7 @@ interface Props {
   branchInfo?: BranchInfo;      // present when forks exist at this message
   isStreaming: boolean;
   checkpointId?: string;        // set when this turn can be reverted
-  onFork: (userMessageId: string, newText: string) => void;
+  onFork: (userMessageId: string, newText: string, attachments?: Attachment[]) => void;
   onRevert?: (checkpointId: string) => void;
   onSwitchBranch: (parentMessageId: string, targetBranchId: string) => void;
 }
@@ -45,13 +90,17 @@ export const UserMessage = memo(function UserMessage({
 }: Props) {
   const [isEditing, setIsEditing] = useState(false);
   const [editText, setEditText] = useState(text);
+  const [editAttachments, setEditAttachments] = useState<Attachment[]>(attachments || []);
   const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Reset draft if the underlying message text changes (e.g. branch switch).
+  // Reset draft if the underlying message text or attachments change (e.g. branch switch).
   useEffect(() => {
     setEditText(text);
-  }, [text]);
+    setEditAttachments(attachments || []);
+  }, [text, attachments]);
 
   // Auto-focus + select-all when edit mode opens.
   useEffect(() => {
@@ -63,13 +112,35 @@ export const UserMessage = memo(function UserMessage({
 
   const handleSubmit = () => {
     const trimmed = editText.trim();
-    if (!trimmed || trimmed === text) {
+    // Allow submitting if there's either text or attachments (or both)
+    if (!trimmed && editAttachments.length === 0) {
       setIsEditing(false);
       setEditText(text);
+      setEditAttachments(attachments || []);
       return;
     }
-    onFork(messageId, trimmed);
+    // Check if anything actually changed
+    const textChanged = trimmed !== text;
+    const attachmentsChanged = JSON.stringify(editAttachments) !== JSON.stringify(attachments || []);
+    if (!textChanged && !attachmentsChanged) {
+      setIsEditing(false);
+      return;
+    }
+    onFork(messageId, trimmed, editAttachments.length > 0 ? editAttachments : undefined);
     setIsEditing(false);
+  };
+
+  const addFiles = async (files: FileList | File[]) => {
+    setError(null);
+    const next: Attachment[] = [];
+    for (const f of Array.from(files)) {
+      try {
+        next.push(await fileToAttachment(f));
+      } catch (err) {
+        setError(err instanceof Error ? err.message : String(err));
+      }
+    }
+    if (next.length) setEditAttachments((a) => [...a, ...next]);
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -107,14 +178,16 @@ export const UserMessage = memo(function UserMessage({
         {isEditing ? (
           /* ---- Edit mode ---- */
           <div className="bubble bubble--editing">
-            {attachments && attachments.length > 0 && (
+            {error && <div className="bubble-edit-error">{error}</div>}
+            {editAttachments.length > 0 && (
               <div className="bubble-attachments">
-                {attachments.map((a) => (
+                {editAttachments.map((a) => (
                   <AttachmentChip
                     key={a.id}
                     attachment={a}
                     compact
                     onClick={() => setPreviewAttachment(a)}
+                    onRemove={() => setEditAttachments((list) => list.filter((x) => x.id !== a.id))}
                   />
                 ))}
               </div>
@@ -126,6 +199,16 @@ export const UserMessage = memo(function UserMessage({
               onChange={(e) => setEditText(e.target.value)}
               onKeyDown={handleKeyDown}
               rows={Math.max(2, editText.split("\n").length)}
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              style={{ display: "none" }}
+              onChange={(e) => {
+                if (e.target.files) addFiles(e.target.files);
+                e.target.value = "";
+              }}
             />
             <div className="bubble-edit-actions">
               {/* Branch navigation — left side of actions bar */}
@@ -156,10 +239,20 @@ export const UserMessage = memo(function UserMessage({
               )}
               <div className="bubble-edit-btns">
                 <button
+                  className="bubble-edit-attach"
+                  onClick={() => fileInputRef.current?.click()}
+                  title="Add files"
+                  aria-label="Add files"
+                >
+                  <Paperclip size={14} />
+                </button>
+                <button
                   className="bubble-edit-cancel"
                   onClick={() => {
                     setIsEditing(false);
                     setEditText(text);
+                    setEditAttachments(attachments || []);
+                    setError(null);
                   }}
                 >
                   Cancel
@@ -167,7 +260,10 @@ export const UserMessage = memo(function UserMessage({
                 <button
                   className="bubble-edit-submit"
                   onClick={handleSubmit}
-                  disabled={!editText.trim() || editText.trim() === text}
+                  disabled={
+                    (editText.trim() === "" && editAttachments.length === 0) ||
+                    (editText.trim() === text && JSON.stringify(editAttachments) === JSON.stringify(attachments || []))
+                  }
                 >
                   Send
                 </button>

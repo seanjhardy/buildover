@@ -1,0 +1,250 @@
+/* Error Boundary - Beautiful crash screen */
+
+.error-boundary {
+  position: fixed;
+  inset: 0;
+  z-index: 999999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, #1a1a1a 0%, #2d2d2d 100%);
+  color: #e0e0e0;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  overflow: auto;
+  padding: 2rem;
+}
+
+.error-boundary-content {
+  max-width: 600px;
+  width: 100%;
+  text-align: center;
+  animation: errorBoundaryFadeIn 0.5s ease-out;
+}
+
+@keyframes errorBoundaryFadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(20px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.error-boundary-logo {
+  width: 96px;
+  height: 96px;
+  margin: 0 auto 1.5rem;
+  display: block;
+  filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.3));
+  animation: errorBoundaryLogoFloat 3s ease-in-out infinite;
+}
+
+@keyframes errorBoundaryLogoFloat {
+  0%, 100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-8px);
+  }
+}
+
+.error-boundary-title {
+  font-size: 2rem;
+  font-weight: 600;
+  margin: 0 0 0.5rem;
+  color: #ffffff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.error-boundary-brand-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #ff6b6b 0%, #ff8787 100%);
+  display: inline-block;
+  animation: errorBoundaryPulse 2s ease-in-out infinite;
+}
+
+@keyframes errorBoundaryPulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(0.9);
+  }
+}
+
+.error-boundary-subtitle {
+  font-size: 1rem;
+  color: #999;
+  margin: 0 0 2rem;
+}
+
+.error-boundary-error {
+  background: rgba(0, 0, 0, 0.3);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 8px;
+  padding: 1.5rem;
+  margin: 0 0 2rem;
+  text-align: left;
+}
+
+.error-boundary-error-header {
+  font-size: 0.875rem;
+  font-weight: 600;
+  color: #ff6b6b;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 0.75rem;
+}
+
+.error-boundary-error-message {
+  font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  font-size: 0.875rem;
+  color: #ffffff;
+  background: rgba(255, 107, 107, 0.1);
+  border-left: 3px solid #ff6b6b;
+  padding: 0.75rem 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  word-break: break-word;
+}
+
+.error-boundary-error-stack {
+  margin-top: 1rem;
+  cursor: pointer;
+}
+
+.error-boundary-error-stack summary {
+  font-size: 0.875rem;
+  color: #999;
+  user-select: none;
+  padding: 0.5rem 0;
+  transition: color 0.2s;
+}
+
+.error-boundary-error-stack summary:hover {
+  color: #ccc;
+}
+
+.error-boundary-error-stack pre {
+  font-family: "SF Mono", Monaco, "Cascadia Code", "Roboto Mono", Consolas, monospace;
+  font-size: 0.75rem;
+  color: #bbb;
+  background: rgba(0, 0, 0, 0.4);
+  padding: 1rem;
+  border-radius: 4px;
+  overflow-x: auto;
+  margin: 0.5rem 0 0;
+  max-height: 300px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+.error-boundary-actions {
+  display: flex;
+  gap: 1rem;
+  justify-content: center;
+  margin-bottom: 2rem;
+}
+
+.error-boundary-button {
+  font-family: inherit;
+  font-size: 0.9375rem;
+  font-weight: 500;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  border: none;
+  cursor: pointer;
+  transition: all 0.2s;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  position: relative;
+  overflow: hidden;
+}
+
+.error-boundary-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.error-boundary-button--primary {
+  background: linear-gradient(135deg, #ff6b6b 0%, #ff8787 100%);
+  color: #ffffff;
+  box-shadow: 0 4px 12px rgba(255, 107, 107, 0.3);
+}
+
+.error-boundary-button--primary:hover:not(:disabled) {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 20px rgba(255, 107, 107, 0.4);
+}
+
+.error-boundary-button--primary:active:not(:disabled) {
+  transform: translateY(0);
+}
+
+.error-boundary-button--secondary {
+  background: rgba(255, 255, 255, 0.1);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
+.error-boundary-button--secondary:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.15);
+  border-color: rgba(255, 255, 255, 0.3);
+}
+
+.error-boundary-spinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid rgba(255, 255, 255, 0.3);
+  border-top-color: #ffffff;
+  border-radius: 50%;
+  display: inline-block;
+  animation: errorBoundarySpin 0.8s linear infinite;
+}
+
+@keyframes errorBoundarySpin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.error-boundary-hint {
+  font-size: 0.875rem;
+  color: #666;
+  line-height: 1.6;
+  margin: 0;
+}
+
+/* Responsive adjustments */
+@media (max-width: 640px) {
+  .error-boundary {
+    padding: 1.5rem;
+  }
+
+  .error-boundary-logo {
+    width: 72px;
+    height: 72px;
+  }
+
+  .error-boundary-title {
+    font-size: 1.5rem;
+  }
+
+  .error-boundary-actions {
+    flex-direction: column;
+  }
+
+  .error-boundary-button {
+    width: 100%;
+  }
+}
