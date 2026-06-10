@@ -1,10 +1,11 @@
 import { memo, useEffect, useMemo, useRef } from "react";
 import { Virtualizer, type VirtualizerHandle } from "virtua";
 import type { BranchInfo, ChatTurn } from "../hooks/useAgent.js";
-import type { ContentBlock } from "../types.js";
+import type { Attachment, ContentBlock } from "../types.js";
 import { AssistantMessage } from "./AssistantMessage.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { UserMessage } from "./UserMessage.js";
+import { SystemMessage } from "./SystemMessage.js";
 
 // Runs of 3+ consecutive tool calls (across consecutive assistant turns) are
 // collapsed under a single "N tools called" header.
@@ -36,7 +37,11 @@ interface Props {
   jumpBarRef?: React.RefObject<JumpBarHandle | null>;
   chatId?: string;
   branchInfo?: Map<string, BranchInfo>;
-  onForkMessage?: (userMessageId: string, newText: string) => void;
+  onForkMessage?: (
+    userMessageId: string,
+    newText: string,
+    attachments?: Attachment[],
+  ) => void;
   onSwitchBranch?: (parentMessageId: string, targetBranchId: string) => void;
   onRevert?: (checkpointId: string) => void;
 }
@@ -177,7 +182,9 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
   const userItems = useMemo(() => {
     const result: { id: string; text: string; itemIndex: number }[] = [];
     items.forEach((item, i) => {
-      if (item.kind === "user") {
+      // Only genuine user input belongs in the jump bar — injected system /
+      // subagent messages share the "user" slot but aren't the user's turns.
+      if (item.kind === "user" && (!item.origin || item.origin === "user")) {
         result.push({ id: item.id, text: item.text, itemIndex: i + 1 }); // +1 for spacer
       }
     });
@@ -326,6 +333,20 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
       );
     }
     if (item.kind === "user") {
+      // Messages injected by the app or another agent (subagent reports,
+      // coordinator feedback, plan relays) render as muted system chips —
+      // never as user bubbles.
+      if (item.origin && item.origin !== "user") {
+        return (
+          <div key={item.id} data-turn-id={item.id} data-turn-kind="system">
+            <SystemMessage
+              origin={item.origin}
+              label={item.originLabel}
+              text={item.text}
+            />
+          </div>
+        );
+      }
       return (
         <div key={item.id} data-turn-id={item.id} data-turn-kind="user">
           <UserMessage

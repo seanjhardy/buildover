@@ -3,6 +3,8 @@ import type {
   ChatSummary,
   Model,
   PermissionMode,
+  PlanTicket,
+  PlanTicketStatus,
   RecentRepoInfo,
   RepoInfo,
   SearchResult,
@@ -188,6 +190,52 @@ export const api = {
     send<{ ok: boolean }>(
       "DELETE",
       `/api/chats/${chatId}?repoPath=${encodeURIComponent(repoPath)}`,
+    ),
+
+  // ── Plans (coordinator ticket board) ─────────────────────────────────────
+  listPlans: (repoPath: string) =>
+    getJson<{ tickets: PlanTicket[] }>(
+      `/api/plans?repoPath=${encodeURIComponent(repoPath)}`,
+    ).then((r) => r.tickets),
+
+  createPlan: (
+    repoPath: string,
+    body: { title: string; description: string; status?: PlanTicketStatus; order?: number },
+  ) =>
+    send<{ ticket: PlanTicket }>("POST", `/api/plans`, {
+      repoPath,
+      ...body,
+    }).then((r) => r.ticket),
+
+  updatePlan: (
+    repoPath: string,
+    ticketId: string,
+    patch: {
+      title?: string;
+      description?: string;
+      status?: PlanTicketStatus;
+      order?: number;
+      /** Optional free-text relayed to the ticket's agent (e.g. on rejection). */
+      feedback?: string;
+    },
+  ) =>
+    send<{ ticket: PlanTicket }>("PATCH", `/api/plans/${ticketId}`, {
+      repoPath,
+      ...patch,
+    }).then((r) => r.ticket),
+
+  /** Ephemeral: delivered straight to the agent linked to the plan, not stored. */
+  messagePlanAgent: (repoPath: string, ticketId: string, text: string) =>
+    send<{ ok: boolean; chatId: string }>(
+      "POST",
+      `/api/plans/${ticketId}/message`,
+      { repoPath, text },
+    ),
+
+  deletePlan: (repoPath: string, ticketId: string) =>
+    send<{ ok: boolean }>(
+      "DELETE",
+      `/api/plans/${ticketId}?repoPath=${encodeURIComponent(repoPath)}`,
     ),
 
   // ── Dashboard ──────────────────────────────────────────────────────────

@@ -1,0 +1,194 @@
+/* ============================================================ */
+/* Plan Viewer — right-side detail pane for a plan ticket         */
+/* Shares the right-slot geometry via .detail-pane (file-viewer.css). */
+/* ============================================================ */
+
+.plan-viewer {
+  /* geometry + slide-in supplied by .detail-pane */
+  color: var(--app-primary-foreground);
+}
+
+/* --- Header --- */
+.plan-viewer-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 40px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  flex-shrink: 0;
+  user-select: none;
+}
+
+.plan-viewer-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.plan-viewer-close {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  background: transparent;
+  border-radius: var(--corner-radius-small);
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.plan-viewer-close:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* --- Body --- */
+.plan-viewer-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 16px;
+}
+
+.plan-viewer-markdown {
+  font-size: 13px;
+  line-height: 1.6;
+  word-break: break-word;
+}
+
+.plan-viewer-markdown :first-child { margin-top: 0; }
+.plan-viewer-markdown :last-child { margin-bottom: 0; }
+
+.plan-viewer-markdown pre {
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 6px;
+  padding: 10px 12px;
+  overflow-x: auto;
+  font-family: var(--app-monospace-font-family);
+  font-size: 12px;
+}
+
+.plan-viewer-markdown code {
+  font-family: var(--app-monospace-font-family);
+  font-size: 12px;
+}
+
+.plan-viewer-markdown :not(pre) > code {
+  background: var(--app-input-background);
+  padding: 1px 5px;
+  border-radius: 4px;
+}
+
+.plan-viewer-empty {
+  font-size: 12px;
+  color: var(--app-secondary-foreground);
+  font-style: italic;
+}
+
+/* --- Working indicator: pulsing dot inside the in-progress status chip --- */
+.plan-working-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 5px;
+  vertical-align: middle;
+  animation: plan-working-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes plan-working-pulse {
+  0%, 100% { opacity: 0.35; transform: scale(0.85); }
+  50% { opacity: 1; transform: scale(1); }
+}
+
+/* --- Pinned composer: messages the agent linked to the plan --- */
+.plan-viewer-composer {
+  flex-shrink: 0;
+  display: flex;
+  gap: 6px;
+  align-items: flex-end;
+  border-top: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  padding: 10px 12px;
+}
+
+.plan-viewer-composer textarea {
+  flex: 1;
+  resize: none;
+  min-height: 36px;
+  max-height: 140px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--app-primary-foreground);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.plan-viewer-composer textarea:focus {
+  outline: none;
+  border-color: var(--app-claude-orange);
+}
+
+.plan-viewer-composer textarea:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+/* --- Footer --- */
+.plan-viewer-footer {
+  flex-shrink: 0;
+  border-top: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  padding: 10px 12px;
+}
+
+.plan-viewer-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.plan-viewer-reject {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-viewer-reject textarea {
+  resize: vertical;
+  min-height: 48px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 6px;
+  padding: 6px 8px;
+  color: var(--app-primary-foreground);
+  font-family: inherit;
+  font-size: 12.5px;
+  line-height: 1.4;
+}
+
+.plan-viewer-reject textarea:focus {
+  outline: none;
+  border-color: var(--app-error, #e5534b);
+}
+
+.plan-viewer-reject-actions {
+  display: flex;
+  gap: 6px;
+}

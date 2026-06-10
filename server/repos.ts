@@ -38,6 +38,11 @@ export function indexPath(repoPath: string): string {
   return join(chatsDir(repoPath), "index.json");
 }
 
+/** Per-repo plans/tickets file used by the coordinator workflow. */
+export function plansPath(repoPath: string): string {
+  return join(repoBuildoverDir(repoPath), "plans.json");
+}
+
 async function readJson<T>(path: string): Promise<T | null> {
   try {
     const raw = await readFile(path, "utf8");

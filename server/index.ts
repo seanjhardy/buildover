@@ -17,7 +17,17 @@ import {
   setModel,
   setTitle,
   setUserFinished,
+  ensureCoordinatorChat,
+  CoordinatorDeleteError,
 } from "./chats.js";
+import {
+  listTickets,
+  createTicket,
+  updateTicket,
+  deleteTicket,
+  getTicket,
+} from "./plans.js";
+import { broadcastPlansUpdated } from "./coordinationTools.js";
 import { pickFolder } from "./picker.js";
 import {
   ensureRepo,
@@ -250,12 +260,16 @@ app.get("/api/agents", async (_req, res) => {
     await startup();
 
     const stream = query({
-      prompt: [{
-        type: "user" as const,
-        message: { role: "user" as const, content: "test" },
-        parent_tool_use_id: null,
-        session_id: "",
-      }],
+      // query() requires a string or AsyncIterable — wrap the single message
+      // in an async generator.
+      prompt: (async function* () {
+        yield {
+          type: "user" as const,
+          message: { role: "user" as const, content: "test" },
+          parent_tool_use_id: null,
+          session_id: "",
+        };
+      })(),
       options: {
         model: "claude-sonnet-4-5",
         includePartialMessages: false,
@@ -408,6 +422,9 @@ function readRepoPath(req: express.Request): string {
 app.get("/api/chats", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
+    // Every repo has a permanent Coordinator chat pinned in the sidebar;
+    // create it lazily the first time the chat list is requested.
+    await ensureCoordinatorChat(repoPath);
     const chats = await listChats(repoPath);
     // Overlay live "awaiting_input" for any chats whose session has a pending
     // attention. This state is never persisted to disk, so listChats() alone
@@ -491,13 +508,139 @@ app.patch("/api/chats/:chatId", async (req, res) => {
 app.delete("/api/chats/:chatId", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
+    // Delete first: this throws CoordinatorDeleteError for coordinator chats,
+    // so we never interrupt a coordinator that can't actually be deleted.
+    const ok = await deleteChat(repoPath, req.params.chatId);
+    if (!ok) return res.status(404).json({ error: "Not found" });
     const session = tryGetSession(repoPath, req.params.chatId);
     session?.interrupt();
     dropSession(repoPath, req.params.chatId);
-    const ok = await deleteChat(repoPath, req.params.chatId);
-    if (!ok) return res.status(404).json({ error: "Not found" });
     // Remove embeddings for the deleted chat
     removeIndexedChat(repoPath, req.params.chatId);
+    res.json({ ok: true });
+  } catch (err) {
+    if (err instanceof CoordinatorDeleteError) {
+      return res.status(403).json({ error: err.message });
+    }
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- Plans (coordinator ticket board) ----
+app.get("/api/plans", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const tickets = await listTickets(repoPath);
+    res.json({ tickets });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/plans", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const title = String(req.body?.title ?? "").trim();
+    const description = String(req.body?.description ?? "");
+    if (!title) return res.status(400).json({ error: "title required" });
+    const ticket = await createTicket(repoPath, {
+      title,
+      description,
+      status: req.body?.status,
+      order: typeof req.body?.order === "number" ? req.body.order : undefined,
+    });
+    await broadcastPlansUpdated(repoPath);
+    res.json({ ticket });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.patch("/api/plans/:ticketId", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const prevStatus = (
+      await listTickets(repoPath)
+    ).find((t) => t.id === req.params.ticketId)?.status;
+    const ticket = await updateTicket(repoPath, req.params.ticketId, {
+      title: req.body?.title,
+      description: req.body?.description,
+      status: req.body?.status,
+      order: typeof req.body?.order === "number" ? req.body.order : undefined,
+    });
+    if (!ticket) return res.status(404).json({ error: "Not found" });
+    await broadcastPlansUpdated(repoPath);
+    // Panel status changes are board-only: the coordinator deliberately gets
+    // NO message for approvals/rejections/sign-offs — it reads the board with
+    // list_tickets whenever it's next active, so working the panel never
+    // spams it. The one exception is rejection feedback, which goes straight
+    // to the agent that owns the ticket (its worker, else its drafter).
+    if (
+      ticket.status === "rejected" &&
+      ticket.status !== prevStatus &&
+      typeof req.body?.feedback === "string" &&
+      req.body.feedback.trim()
+    ) {
+      const target = ticket.subagentChatId ?? ticket.createdByChatId;
+      if (target && (await readChat(repoPath, target))) {
+        void getSession(repoPath, target)
+          .deliverMessage({
+            text: `The user rejected the plan "${ticket.title}" with this feedback: ${req.body.feedback.trim()}`,
+            origin: "system",
+            originLabel: "Plan rejected",
+          })
+          .catch((e) => console.warn("[plans] feedback delivery failed:", e));
+      }
+    }
+    res.json({ ticket });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// Ephemeral feedback on a plan: delivered straight into the chat of the agent
+// linked to the ticket (the worker if one was spawned, otherwise the agent
+// that drafted it). Nothing is persisted on the ticket itself, and the
+// coordinator is never involved.
+app.post("/api/plans/:ticketId/message", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const text = String(req.body?.text ?? "").trim();
+    if (!text) return res.status(400).json({ error: "text required" });
+    const ticket = await getTicket(repoPath, req.params.ticketId);
+    if (!ticket) return res.status(404).json({ error: "Not found" });
+    const target = ticket.subagentChatId ?? ticket.createdByChatId;
+    const targetChat = target ? await readChat(repoPath, target) : null;
+    if (!target || !targetChat) {
+      return res
+        .status(409)
+        .json({ error: "No agent is linked to this plan yet" });
+    }
+    await getSession(repoPath, target).deliverMessage({
+      text: `(About the plan "${ticket.title}") ${text}`,
+    });
+    res.json({ ok: true, chatId: target });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.delete("/api/plans/:ticketId", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const ok = await deleteTicket(repoPath, req.params.ticketId);
+    if (!ok) return res.status(404).json({ error: "Not found" });
+    await broadcastPlansUpdated(repoPath);
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({

@@ -10,6 +10,7 @@ import type {
   ContentBlock,
   ContextUsage,
   McpServerInfo,
+  MessageOrigin,
   Model,
   PermissionMode,
 } from "../types.js";
@@ -86,7 +87,16 @@ const chatCache = new Map<string, CachedChat>();
 const MAX_CACHE_SIZE = 20;
 
 export type ChatTurn =
-  | { kind: "user"; id: string; text: string; attachments?: Attachment[]; checkpointId?: string }
+  | {
+      kind: "user";
+      id: string;
+      text: string;
+      attachments?: Attachment[];
+      checkpointId?: string;
+      /** Absent === genuine user input; "subagent"/"system" === injected. */
+      origin?: MessageOrigin;
+      originLabel?: string;
+    }
   | { kind: "assistant"; id: string; content: ContentBlock[] }
   | { kind: "tool_results"; id: string; content: ContentBlock[] }
   | {
@@ -103,6 +113,7 @@ export interface PendingPermission {
   toolName: string;
   input: Record<string, unknown>;
   suggestions: unknown[];
+  toolUseId?: string; // ID of the tool_use block this permission is for
 }
 
 export interface PendingAttention {
@@ -183,6 +194,17 @@ export function useAgent(
   // without needing to be re-registered on every chatId change.
   const chatIdRef = useRef(chatId);
   chatIdRef.current = chatId;
+
+  // Track permission requestId -> tool_use block ID mapping for live updates
+  const requestToToolUseIdRef = useRef(new Map<string, string>());
+
+  // Mirror turns in a ref so event handlers can access the current state
+  const turnsRef = useRef<ChatTurn[]>([]);
+
+  // Keep turnsRef in sync with turns state
+  useEffect(() => {
+    turnsRef.current = turns;
+  }, [turns]);
 
   useEffect(() => agentSocket.onConnection(setConnection), []);
 
@@ -457,6 +479,7 @@ export function useAgent(
         setContextUsage: cachedSetContextUsage,
         setBranchInfo: cachedSetBranchInfo,
         setSlashCommands: cachedSetSlashCommands,
+        requestToToolUseId: requestToToolUseIdRef.current,
       });
     };
 
@@ -641,6 +664,9 @@ interface Setters {
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
   setBranchInfo: (info: Map<string, BranchInfo>) => void;
   setSlashCommands: React.Dispatch<React.SetStateAction<string[]>>;
+  // Map of permission requestId -> tool_use block ID, used to apply
+  // permission_response updatedInput back to the originating tool_use block.
+  requestToToolUseId: Map<string, string>;
 }
 
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
@@ -705,6 +731,8 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
           id: event.id,
           text: event.text,
           attachments: event.attachments,
+          origin: event.origin,
+          originLabel: event.originLabel,
         },
       ]);
       break;
@@ -753,19 +781,91 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         ];
       });
       break;
-    case "permission_request":
+    case "permission_request": {
       // RequestUserAttention is now handled via the pending_attention event —
       // the tool handler blocks on attention_ack, not the permission system.
       // Skip setting pendingPermission for it so the old permission UI doesn't
       // also appear (it would be auto-resolved server-side anyway in bypass mode).
       if (event.toolName === "RequestUserAttention") break;
+
+      // Find the matching tool_use block from recent assistant turns.
+      // We use setTurns with a function to access the current state synchronously,
+      // since refs might not be updated yet when this event arrives.
+      let foundToolUseId: string | undefined;
+
+      s.setTurns((currentTurns) => {
+        // Search backwards through turns to find the most recent tool_use block
+        // with this toolName that hasn't been mapped to a permission yet
+        for (let i = currentTurns.length - 1; i >= 0; i--) {
+          const turn = currentTurns[i];
+          if (turn.kind === "assistant") {
+            for (const block of turn.content) {
+              if (block.type === "tool_use" && block.name === event.toolName) {
+                // Check if this block is already mapped to a different request
+                const alreadyMapped = Array.from(s.requestToToolUseId.values()).includes(block.id);
+                if (!alreadyMapped) {
+                  foundToolUseId = block.id;
+                  break;
+                }
+              }
+            }
+            if (foundToolUseId) break;
+          }
+        }
+        // Return unchanged - we're just reading
+        return currentTurns;
+      });
+
+      // Store the mapping
+      if (foundToolUseId) {
+        s.requestToToolUseId.set(event.requestId, foundToolUseId);
+      }
+
       s.setPendingPermission({
         requestId: event.requestId,
         toolName: event.toolName,
         input: event.input,
         suggestions: event.suggestions ?? [],
+        toolUseId: foundToolUseId,
       });
       break;
+    }
+    case "permission_response": {
+      // Update the tool_use block's input with the updatedInput from the response.
+      // Hoist updatedInput into a local so TypeScript keeps the "allow" narrowing
+      // inside the setTurns closure below.
+      const updatedInput =
+        event.result.behavior === "allow" ? event.result.updatedInput : undefined;
+      if (updatedInput) {
+        const toolUseId = s.requestToToolUseId.get(event.requestId);
+        if (toolUseId) {
+          s.setTurns((prevTurns) => {
+            return prevTurns.map((turn) => {
+              if (turn.kind === "assistant") {
+                const updatedContent = turn.content.map((block) => {
+                  if (block.type === "tool_use" && block.id === toolUseId) {
+                    const baseInput =
+                      block.input && typeof block.input === "object"
+                        ? (block.input as Record<string, unknown>)
+                        : {};
+                    return {
+                      ...block,
+                      input: { ...baseInput, ...updatedInput },
+                    };
+                  }
+                  return block;
+                });
+                return { ...turn, content: updatedContent };
+              }
+              return turn;
+            });
+          });
+          // Clean up the mapping
+          s.requestToToolUseId.delete(event.requestId);
+        }
+      }
+      break;
+    }
     case "error":
       // Server-restart interruptions are silently suppressed from the turn list
       // — the retry banner in the chat pane already communicates this clearly.
@@ -847,11 +947,23 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
 function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   const turns: ChatTurn[] = [];
   let initSeen = false;
+
+  // Build a map to track which tool_use blocks need their input updated.
+  // We'll map tool_use block IDs to their updatedInput after we process all events.
+  const toolUseIdToUpdatedInput = new Map<string, Record<string, unknown>>();
+
+  // Track tool_use blocks as we encounter them, mapped by toolName
+  const toolUseBlocksByName = new Map<string, Array<{ id: string; input: unknown }>>();
+
   // Track whether the current agent turn had a real user message driving it.
   // Auto-compact turns have no user_message — their `result` events should not
   // be rendered as visible result lines (they were already suppressed from live
   // broadcasts, but old records may have them persisted on disk).
   let currentTurnHasUserMessage = false;
+
+  // Map permission requestIds to their corresponding tool_use block IDs
+  const requestIdToToolUseId = new Map<string, string>();
+
   for (const ev of record.events) {
     if (ev.type === "user_message") {
       // user_message is persisted *before* turn_start, so we set the flag here
@@ -870,7 +982,35 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
         }
       }
       continue; // revert_checkpoint is not a visible turn itself
+    } else if (ev.type === "assistant") {
+      // Track tool_use blocks from this assistant message
+      for (const block of ev.content) {
+        if (block.type === "tool_use") {
+          const list = toolUseBlocksByName.get(block.name) ?? [];
+          list.push({ id: block.id, input: block.input });
+          toolUseBlocksByName.set(block.name, list);
+        }
+      }
+    } else if (ev.type === "permission_request") {
+      // Match this permission request to a tool_use block
+      const blocks = toolUseBlocksByName.get(ev.toolName) ?? [];
+      // Find the first unmatched block for this tool name
+      for (const block of blocks) {
+        if (!Array.from(requestIdToToolUseId.values()).includes(block.id)) {
+          requestIdToToolUseId.set(ev.requestId, block.id);
+          break;
+        }
+      }
+    } else if (ev.type === "permission_response") {
+      // Store updatedInput for the matching tool_use block
+      if (ev.result.behavior === "allow" && ev.result.updatedInput) {
+        const toolUseId = requestIdToToolUseId.get(ev.requestId);
+        if (toolUseId) {
+          toolUseIdToUpdatedInput.set(toolUseId, ev.result.updatedInput);
+        }
+      }
     }
+
     // Skip result events for turns that had no user message — these are
     // silent auto-compact turns whose results should never be shown.
     if (ev.type === "result" && !currentTurnHasUserMessage) continue;
@@ -885,6 +1025,35 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
       s.setSlashCommands(ev.slashCommands ?? []);
     }
   }
+
+  // Second pass: Apply permission updates to tool_use blocks
+  if (toolUseIdToUpdatedInput.size > 0) {
+    for (let i = 0; i < turns.length; i++) {
+      const turn = turns[i];
+      if (turn.kind === "assistant") {
+        const updatedContent = turn.content.map((block) => {
+          if (block.type === "tool_use") {
+            const updatedInput = toolUseIdToUpdatedInput.get(block.id);
+            if (updatedInput) {
+              const baseInput =
+                block.input && typeof block.input === "object"
+                  ? (block.input as Record<string, unknown>)
+                  : {};
+              return {
+                ...block,
+                input: { ...baseInput, ...updatedInput },
+              };
+            }
+          }
+          return block;
+        });
+        if (updatedContent !== turn.content) {
+          turns[i] = { ...turn, content: updatedContent };
+        }
+      }
+    }
+  }
+
   s.setTurns(turns);
   if (record.sessionId) s.setSessionId(record.sessionId);
   // Restore the last known context usage from the persisted record, but only
@@ -903,15 +1072,38 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   s.setBranchInfo(computeBranchInfo(record));
 }
 
+// Messages injected by coordination tools BEFORE the origin field existed were
+// persisted as plain user messages with only a recognisable text prefix. Infer
+// their origin so they render as system chips (and stay off the jump bar)
+// instead of masquerading as the user.
+function inferLegacyOrigin(
+  text: string,
+): { origin: MessageOrigin; originLabel: string } | undefined {
+  if (/^\[Subagent ch_/.test(text)) {
+    return { origin: "subagent", originLabel: "Subagent" };
+  }
+  if (/^\[Coordinator ch_/.test(text)) {
+    return { origin: "system", originLabel: "Coordinator" };
+  }
+  if (/^\[System\]/.test(text)) {
+    return { origin: "system", originLabel: "System" };
+  }
+  return undefined;
+}
+
 function chatEventToTurn(ev: ChatEvent): ChatTurn | null {
   switch (ev.type) {
-    case "user_message":
+    case "user_message": {
+      const legacy = ev.origin ? undefined : inferLegacyOrigin(ev.text);
       return {
         kind: "user",
         id: ev.id,
         text: ev.text,
         attachments: ev.attachments,
+        origin: ev.origin ?? legacy?.origin,
+        originLabel: ev.originLabel ?? legacy?.originLabel,
       };
+    }
     case "assistant":
       return { kind: "assistant", id: ev.uuid, content: ev.content };
     case "user_tool_results":

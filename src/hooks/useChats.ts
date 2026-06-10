@@ -237,6 +237,9 @@ function recordToSummary(record: ChatRecord): ChatSummary {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     preview: previewParts.join(" ").slice(0, 600),
+    kind: record.kind,
+    parentChatId: record.parentChatId,
+    task: record.task,
   };
 }
 
@@ -276,6 +279,16 @@ function applyEventToList(
               }
             : c,
         ),
+      );
+      break;
+    case "chat_created":
+      // A coordinator (or subagent) spawned a new chat — surface it in the
+      // sidebar immediately. The subscription interval in useChats picks it
+      // up for live status updates shortly after.
+      setChats((prev) =>
+        prev.some((c) => c.id === event.summary.id)
+          ? prev
+          : [event.summary, ...prev],
       );
       break;
   }

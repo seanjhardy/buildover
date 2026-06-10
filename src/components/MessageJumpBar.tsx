@@ -13,6 +13,15 @@ const PAD_V        = 14;
 const SVG_W        = 20;
 // Half-spread of the glow in SVG px (i.e. how tall the fade is either side)
 const GLOW_PX      = 50;
+// The track never grows beyond this height. With many messages the dot gap
+// compresses (and dots shrink) so the bar becomes a dense minimap instead of
+// getting longer with every message.
+const MAX_TRACK_H  = 400;
+
+function gapFor(n: number): number {
+  if (n <= 1) return DOT_GAP;
+  return Math.min(DOT_GAP, (MAX_TRACK_H - 2 * PAD_V) / (n - 1));
+}
 
 export function MessageJumpBar({ jumpBarRef }: Props) {
   const [activeIdx, setActiveIdx]   = useState(0);
@@ -121,13 +130,13 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
         }
 
         // Map float dot-index → SVG Y coordinate
-        const newGlowY = PAD_V + floatIdx * DOT_GAP;
+        const newGlowY = PAD_V + floatIdx * gapFor(n);
 
         // ── Directly mutate gradient stops — no React re-render, zero lag ──
         const grad = gradRef.current;
         if (grad) {
           const lineTop = PAD_V;
-          const lineBot = PAD_V + (n - 1) * DOT_GAP;
+          const lineBot = PAD_V + (n - 1) * gapFor(n);
           const lineLen = lineBot - lineTop;
           const pct = (y: number) =>
             lineLen > 0 ? `${(((y - lineTop) / lineLen) * 100).toFixed(2)}%` : "0%";
@@ -203,16 +212,20 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
   );
 
   const handleDotEnter = (idx: number) => {
-    setTooltipY(PAD_V + idx * DOT_GAP);
+    setTooltipY(PAD_V + idx * gapFor(userMsgs.length));
     setHoveredIdx(idx);
   };
 
   if (userMsgs.length === 0) return null;
 
   const n       = userMsgs.length;
-  const svgH    = PAD_V * 2 + (n - 1) * DOT_GAP;
+  const gap     = gapFor(n);
+  // Dots scale down as the gap compresses so they stay distinct.
+  const dotR       = Math.max(1.5, Math.min(DOT_R, gap * 0.4));
+  const dotActiveR = Math.min(DOT_ACTIVE_R, dotR + 1.5);
+  const svgH    = PAD_V * 2 + (n - 1) * gap;
   const lineTop = PAD_V;
-  const lineBot = PAD_V + (n - 1) * DOT_GAP;
+  const lineBot = PAD_V + (n - 1) * gap;
   // Initial gradient stop values (will be immediately overridden by the
   // scroll handler's direct DOM mutation, but need sensible defaults for SSR
   // and the initial render before the first scroll event fires).
@@ -292,7 +305,7 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
 
           {/* Dots */}
           {userMsgs.map((msg, idx) => {
-            const cy        = PAD_V + idx * DOT_GAP;
+            const cy        = PAD_V + idx * gap;
             const isActive  = idx === activeIdx;
             const isHovered = idx === hoveredIdx;
             const itemIndex = jumpBarRef.current?.userItems[idx]?.itemIndex ?? 0;
@@ -301,7 +314,7 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
                 key={msg.id}
                 cx={SVG_W / 2}
                 cy={cy}
-                r={isActive ? DOT_ACTIVE_R : isHovered ? DOT_R * 1.5 : DOT_R}
+                r={isActive ? dotActiveR : isHovered ? Math.max(dotR * 1.5, 4) : dotR}
                 fill={isActive || isHovered ? "#d97757" : "#3c3c3c"}
                 stroke={isActive ? "rgba(217,119,87,0.35)" : "none"}
                 strokeWidth={isActive ? 3 : 0}

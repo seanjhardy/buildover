@@ -3,6 +3,13 @@ import { SvgBlock } from "./SvgBlock.js";
 import { TableBlock } from "./TableBlock.js";
 import { ChartBlock } from "./ChartBlock.js";
 import type { ChartDataset } from "./ChartBlock.js";
+import { AskUserQuestionBlock } from "./AskUserQuestionBlock.js";
+import { FileOperationBlock } from "./FileOperationBlock.js";
+import { BashCommandBlock } from "./BashCommandBlock.js";
+import { SearchBlock } from "./SearchBlock.js";
+import { AgentTaskBlock } from "./AgentTaskBlock.js";
+import { WebBlock } from "./WebBlock.js";
+import { AttentionBlock } from "./AttentionBlock.js";
 
 interface Props {
   name: string;
@@ -26,15 +33,12 @@ function summarize(name: string, input: unknown, cwd?: string): string {
   const i = input as Record<string, unknown>;
   switch (name) {
     case "Read":
-      return relativizePath(String(i.file_path ?? ""), cwd);
     case "Write":
-      return relativizePath(String(i.file_path ?? ""), cwd);
     case "Edit":
       return relativizePath(String(i.file_path ?? ""), cwd);
     case "Bash":
       return String(i.description ?? i.command ?? "");
     case "Glob":
-      return String(i.pattern ?? "");
     case "Grep":
       return String(i.pattern ?? "");
     case "WebFetch":
@@ -47,17 +51,6 @@ function summarize(name: string, input: unknown, cwd?: string): string {
     case "RequestUserAttention":
     case "mcp__buildover-custom-tools__RequestUserAttention":
       return String(i.message ?? "Attention needed");
-    case "RenderSVG":
-    case "mcp__buildover-custom-tools__RenderSVG":
-      return String(i.title ?? "inline SVG");
-    case "RenderTable":
-    case "mcp__buildover-custom-tools__RenderTable":
-      return String(i.title ?? "table");
-    case "RenderChart":
-    case "mcp__buildover-custom-tools__RenderChart": {
-      const chartType = String(i.type ?? "chart");
-      return i.title ? `${chartType} · ${i.title}` : chartType;
-    }
     default:
       try {
         return JSON.stringify(input).slice(0, 120);
@@ -150,6 +143,112 @@ export function ToolUseBlock({ name, input, result, cwd }: Props) {
     }
   }
 
+  // Enhanced visual rendering for common tools
+  if (input && typeof input === "object") {
+    const i = input as Record<string, unknown>;
+
+    // AskUserQuestion - show questions and answers
+    if (name === "AskUserQuestion") {
+      return <AskUserQuestionBlock input={i} result={result} />;
+    }
+
+    // Attention prompts
+    if (
+      name === "RequestUserAttention" ||
+      name === "mcp__buildover-custom-tools__RequestUserAttention"
+    ) {
+      return (
+        <AttentionBlock
+          message={String(i.message ?? "Attention needed")}
+          summary={i.summary ? String(i.summary) : undefined}
+        />
+      );
+    }
+
+    // File operations - Read, Write, Edit
+    if (name === "Read" && i.file_path) {
+      return (
+        <FileOperationBlock
+          operation="read"
+          filePath={String(i.file_path)}
+          result={result}
+          cwd={cwd}
+        />
+      );
+    }
+
+    if (name === "Write" && i.file_path) {
+      return (
+        <FileOperationBlock
+          operation="write"
+          filePath={String(i.file_path)}
+          content={typeof i.content === "string" ? i.content : undefined}
+          result={result}
+          cwd={cwd}
+        />
+      );
+    }
+
+    if (name === "Edit" && i.file_path) {
+      return (
+        <FileOperationBlock
+          operation="edit"
+          filePath={String(i.file_path)}
+          oldString={typeof i.old_string === "string" ? i.old_string : undefined}
+          newString={typeof i.new_string === "string" ? i.new_string : undefined}
+          result={result}
+          cwd={cwd}
+        />
+      );
+    }
+
+    // Bash commands
+    if (name === "Bash" && i.command) {
+      return (
+        <BashCommandBlock
+          command={String(i.command)}
+          description={i.description ? String(i.description) : undefined}
+          result={result}
+        />
+      );
+    }
+
+    // Search tools
+    if (name === "Grep" && i.pattern) {
+      return (
+        <SearchBlock kind="grep" pattern={String(i.pattern)} result={result} />
+      );
+    }
+
+    if (name === "Glob" && i.pattern) {
+      return (
+        <SearchBlock kind="glob" pattern={String(i.pattern)} result={result} />
+      );
+    }
+
+    // Web tools
+    if (name === "WebFetch" && i.url) {
+      return <WebBlock kind="fetch" target={String(i.url)} result={result} />;
+    }
+
+    if (name === "WebSearch" && i.query) {
+      return <WebBlock kind="search" target={String(i.query)} result={result} />;
+    }
+
+    // Agent / Task delegation
+    if ((name === "Task" || name === "Agent") && (i.description || i.prompt)) {
+      return (
+        <AgentTaskBlock
+          description={String(i.description ?? "Agent task")}
+          prompt={i.prompt ? String(i.prompt) : undefined}
+          subagentType={i.subagent_type ? String(i.subagent_type) : undefined}
+          result={result}
+        />
+      );
+    }
+  }
+
+  // Fallback: generic collapsed/expanded tool card
   const summary = summarize(name, input, cwd);
   const status = result ? (result.isError ? "error" : "done") : "running";
 

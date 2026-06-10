@@ -28,7 +28,9 @@ import { MarketPanel } from "./components/MarketPanel.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
 import { TodoPanel } from "./components/TodoPanel.js";
 import { FilesPanel } from "./components/FilesPanel.js";
+import { PlansPanel } from "./components/PlansPanel.js";
 import { FileViewer } from "./components/FileViewer.js";
+import { PlanViewer } from "./components/PlanViewer.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { useAgent } from "./hooks/useAgent.js";
 import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
@@ -37,6 +39,7 @@ import { useChats } from "./hooks/useChats.js";
 import { useNotifications } from "./hooks/useNotifications.js";
 import { useRepoTabBadges } from "./hooks/useRepoTabBadges.js";
 import { useTodos } from "./hooks/useTodos.js";
+import { usePlans } from "./hooks/usePlans.js";
 import { useFilesChanged } from "./hooks/useFilesChanged.js";
 import { useWakeWord } from "./hooks/useWakeWord.js";
 import { useWorkspace } from "./hooks/useWorkspace.js";
@@ -78,6 +81,12 @@ export default function App() {
   const chats = useChats(activeRepo?.path ?? null, prefetchedChats);
   const agent = useAgent(activeRepo?.path ?? null, activeChatId);
   const todos = useTodos(agent.turns);
+  // Coordinator plan board — shown beside the chat when the coordinator chat
+  // is active.
+  const coordinatorChat = chats.chats.find((c) => c.kind === "coordinator") ?? null;
+  const isCoordinatorActive =
+    activeChatId != null && coordinatorChat?.id === activeChatId;
+  const plans = usePlans(activeRepo?.path ?? null, coordinatorChat?.id ?? null);
   const filesChanged = useFilesChanged(
     agent.turns,
     agent.cwd ?? activeRepo?.path ?? "",
@@ -225,6 +234,22 @@ export default function App() {
   }, [runSetupActive, runConfig.config, activeRepo?.path]);
   // File viewer: null = hidden, FileEntry = open
   const [openFile, setOpenFile] = useState<FileEntry | null>(null);
+  // Plan viewer: null = hidden, ticket id = open. We store the id (not a
+  // snapshot) so the pane always reflects the latest ticket from plans.tickets.
+  const [openPlan, setOpenPlan] = useState<string | null>(null);
+  const openPlanTicket = openPlan
+    ? (plans.tickets.find((t) => t.id === openPlan) ?? null)
+    : null;
+  const openPlanIndex = openPlan
+    ? plans.tickets.findIndex((t) => t.id === openPlan)
+    : -1;
+  // The plan board only exists for the coordinator chat — close the pane when
+  // navigating away from it (or if the ticket disappears).
+  useEffect(() => {
+    if (openPlan && (!isCoordinatorActive || !openPlanTicket)) {
+      setOpenPlan(null);
+    }
+  }, [openPlan, isCoordinatorActive, openPlanTicket]);
   // Source-control inline file preview (replaces git graph when set)
   const [scPreviewFile, setScPreviewFile] = useState<ChangedFile | null>(null);
   // File explorer editor tabs
@@ -564,6 +589,7 @@ export default function App() {
   const handleCreateChat = useCallback(async () => {
     if (!activeRepo) return;
     setOpenFile(null);
+    setOpenPlan(null);
     const record = await chats.createChat(model, permissionMode);
     workspace.setActiveChat(record.id);
   }, [activeRepo, chats, model, permissionMode, workspace]);
@@ -651,6 +677,7 @@ Important rules for commands:
 
   const handleSelectChat = useCallback((id: string) => {
     setOpenFile(null);
+    setOpenPlan(null);
     setGitGraphOpen(false); // clicking a chat always exits the git graph
     workspace.setActiveChat(id);
   }, [workspace, setGitGraphOpen]);
@@ -778,7 +805,10 @@ Important rules for commands:
       ? (chats.chats.find((c) => c.id === activeChatId) ?? null)
       : null;
 
-  const hasSidePanels = filesChanged.length > 0 || todos.length > 0;
+  const hasSidePanels =
+    filesChanged.length > 0 ||
+    todos.length > 0 ||
+    (isCoordinatorActive && plans.tickets.length > 0);
 
   // Wake word button title
   const wakeWordTitle = !wakeWord.isSupported
@@ -926,7 +956,7 @@ Important rules for commands:
             display:none instead of unmounting it when home/market is active. */}
         {activeRepo && (
           <div
-            className={`workspace${openFile ? " workspace--file-open" : ""}`}
+            className={`workspace${openFile ? " workspace--file-open" : ""}${openPlanTicket ? " workspace--plan-open" : ""}`}
             style={{
               display: (marketOpen || homeOpen) ? "none" : undefined,
               '--sidebar-width': `${sidebarWidth}px`,
@@ -938,6 +968,28 @@ Important rules for commands:
                 entry={openFile}
                 repoPath={activeRepo.path}
                 onClose={() => setOpenFile(null)}
+              />
+            )}
+
+            {/* Plan viewer shares the same right slot — only one pane at a time */}
+            {openPlanTicket && (
+              <PlanViewer
+                ticket={openPlanTicket}
+                onClose={() => setOpenPlan(null)}
+                onSetStatus={(status, feedback) =>
+                  void plans.setStatus(openPlanTicket.id, status, feedback)
+                }
+                onDelete={() => {
+                  void plans.remove(openPlanTicket.id);
+                  setOpenPlan(null);
+                }}
+                onSendMessage={(text) =>
+                  void plans.sendMessage(openPlanTicket.id, text)
+                }
+                onReorder={(order) => void plans.reorder(openPlanTicket.id, order)}
+                index={openPlanIndex}
+                total={plans.tickets.length}
+                onOpenChat={handleSelectChat}
               />
             )}
 
@@ -1057,7 +1109,13 @@ Important rules for commands:
                 When a file is open, clicking the exposed strip closes it. */}
             <div
               className="workspace-panels"
-              onClick={openFile ? () => setOpenFile(null) : undefined}
+              onClick={
+                openFile
+                  ? () => setOpenFile(null)
+                  : openPlanTicket
+                    ? () => setOpenPlan(null)
+                    : undefined
+              }
             >
             {activeView === 'files' ? (
               /* File explorer view: multi-tab code editor */
@@ -1310,12 +1368,19 @@ Important rules for commands:
                             <MessageJumpBar
                               jumpBarRef={jumpBarRef}
                             />
-                            {!todoNarrow && (filesChanged.length > 0 || todos.length > 0) && (
+                            {!todoNarrow && (filesChanged.length > 0 || todos.length > 0 || (isCoordinatorActive && plans.tickets.length > 0)) && (
                               <div className="right-rail-panels">
+                                {isCoordinatorActive && (
+                                  <PlansPanel
+                                    tickets={plans.tickets}
+                                    onOpen={(t) => { setOpenFile(null); setOpenPlan(t.id); }}
+                                    activePlanId={openPlan}
+                                  />
+                                )}
                                 {filesChanged.length > 0 && (
                                   <FilesPanel
                                     files={filesChanged}
-                                    onFileOpen={setOpenFile}
+                                    onFileOpen={(entry) => { setOpenPlan(null); setOpenFile(entry); }}
                                     activeFilePath={openFile?.path ?? null}
                                   />
                                 )}
@@ -1324,9 +1389,18 @@ Important rules for commands:
                                 )}
                               </div>
                             )}
-                            {todoNarrow && todos.length > 0 && (
+                            {todoNarrow && (todos.length > 0 || (isCoordinatorActive && plans.tickets.length > 0)) && (
                               <div className="right-rail-panels">
-                                <TodoPanel todos={todos} compact={true} />
+                                {isCoordinatorActive && plans.tickets.length > 0 && (
+                                  <PlansPanel
+                                    tickets={plans.tickets}
+                                    onOpen={(t) => { setOpenFile(null); setOpenPlan(t.id); }}
+                                    activePlanId={openPlan}
+                                  />
+                                )}
+                                {todos.length > 0 && (
+                                  <TodoPanel todos={todos} compact={true} />
+                                )}
                               </div>
                             )}
                           </div>

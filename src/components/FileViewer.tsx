@@ -244,7 +244,7 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
   }, []);
 
   return (
-    <div className={`file-viewer${inline ? " file-viewer--inline" : ""}`}>
+    <div className={inline ? "file-viewer file-viewer--inline" : "file-viewer detail-pane"}>
       {/* Header */}
       <div className="file-viewer-header">
         <div className="file-viewer-tab">

@@ -222,12 +222,19 @@ export function ChatSidebar({
     };
   }, [query, repoPath]);
 
+  // The permanent coordinator chat is pinned above the grouped list.
+  const coordinator = useMemo(
+    () => chats.find((c) => c.kind === "coordinator") ?? null,
+    [chats],
+  );
+
   // Normal grouped list (used when not in search mode)
   const grouped = useMemo(() => {
     const archive: ChatSummary[] = [];
     const groups = new Map<ChatStatus, ChatSummary[]>();
     for (const status of GROUP_ORDER) groups.set(status, []);
     for (const c of chats) {
+      if (c.kind === "coordinator") continue; // pinned separately
       if (c.status === "finished") {
         archive.push(c);
       } else {
@@ -323,6 +330,18 @@ export function ChatSidebar({
         ) : (
           /* ── Normal grouped chat list ── */
           <>
+            {coordinator && (
+              <div className="chat-coordinator-pin">
+                <ChatSidebarItem
+                  chat={coordinator}
+                  active={coordinator.id === activeChatId}
+                  onSelect={onSelect}
+                  onToggleFinished={onToggleFinished}
+                  onDelete={onDelete}
+                  draftText={chatDrafts[coordinator.id]}
+                />
+              </div>
+            )}
             {GROUP_ORDER.map((status) => {
               const items = grouped.groups.get(status) ?? [];
               if (items.length === 0) return null;

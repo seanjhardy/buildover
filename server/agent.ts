@@ -1,4 +1,8 @@
-import { query, type CanUseTool } from "@anthropic-ai/claude-agent-sdk";
+import {
+  query,
+  type CanUseTool,
+  type McpSdkServerConfigWithInstance,
+} from "@anthropic-ai/claude-agent-sdk";
 import {
   createCustomToolsServer,
   type RequestAttentionAck,
@@ -77,6 +81,12 @@ interface RunArgs {
   // MultiEdit) executes.  The session uses this to snapshot the target file's
   // current content so it can be restored on revert.
   onBeforeFileTool?: (toolName: string, input: unknown) => Promise<void>;
+  // Extra instructions appended to the default Claude Code system prompt.
+  // Used by coordinator/subagent chats to describe their role and workflow.
+  systemPromptAppend?: string;
+  // Additional in-process MCP servers for this turn (e.g. the
+  // "buildover-agents" coordination toolset for coordinator/subagent chats).
+  extraMcpServers?: Record<string, McpSdkServerConfigWithInstance>;
 }
 
 // Runs one user-turn through the SDK, normalizing messages into our wire
@@ -178,10 +188,23 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       // Pass the controller so the SDK terminates its CLI subprocess on
       // abort; relying on stream.interrupt() alone left the turn running.
       abortController,
+      // Coordinator/subagent chats get extra role instructions appended to
+      // the default Claude Code system prompt.
+      ...(args.systemPromptAppend
+        ? {
+            systemPrompt: {
+              type: "preset" as const,
+              preset: "claude_code" as const,
+              append: args.systemPromptAppend,
+            },
+          }
+        : {}),
       // Register custom tools (e.g. RequestUserAttention) so the SDK
       // knows about them and routes them through canUseTool → requestPermission.
       mcpServers: {
         "buildover-custom-tools": customToolsServer,
+        // Coordination tools for coordinator/subagent chats.
+        ...(args.extraMcpServers ?? {}),
         // User-installed servers from mcp-servers.json — re-read on every
         // turn so installs/removals take effect without a server restart.
         ...toSdkMcpConfig(readInstalledServers()),
@@ -385,9 +408,24 @@ function normalizeContent(blocks: any[]): ContentBlock[] {
 // Renders attachments into a content block array so the SDK can forward them
 // to Claude correctly. Text files become a fenced text block; images become a
 // proper base64 image block so Claude can actually see them.
+type ImageMediaType = "image/jpeg" | "image/png" | "image/gif" | "image/webp";
+
 type PromptContentBlock =
   | { type: "text"; text: string }
-  | { type: "image"; source: { type: "base64"; media_type: string; data: string } };
+  | { type: "image"; source: { type: "base64"; media_type: ImageMediaType; data: string } };
+
+function toImageMediaType(mime: string): ImageMediaType {
+  switch (mime) {
+    case "image/jpeg":
+    case "image/png":
+    case "image/gif":
+    case "image/webp":
+      return mime;
+    default:
+      // Anthropic only accepts these four; png is the safest fallback.
+      return "image/png";
+  }
+}
 
 function renderPromptWithAttachments(
   text: string,
@@ -411,7 +449,7 @@ function renderPromptWithAttachments(
         type: "image",
         source: {
           type: "base64",
-          media_type: a.mime,
+          media_type: toImageMediaType(a.mime),
           data: base64Data,
         },
       });

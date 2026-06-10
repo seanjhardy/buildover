@@ -547,6 +547,83 @@
   color: var(--app-error);
 }
 
+/* ---- Coordinator (pinned) + agent-spawned chats ---- */
+.chat-coordinator-pin {
+  padding: 8px var(--app-spacing-medium) 12px;
+  margin-bottom: var(--app-spacing-small);
+  border-bottom: 1px solid var(--app-border-color, rgba(127, 127, 127, 0.15));
+}
+/* Renders as a self-contained button rather than a full-width list row. */
+.chat-item--coordinator {
+  min-height: 46px;
+  padding: 10px 12px;
+  border: 1px solid var(--app-primary-border-color, rgba(127, 127, 127, 0.22));
+  border-left: 1px solid var(--app-primary-border-color, rgba(127, 127, 127, 0.22));
+  border-radius: 10px;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.18);
+  background: linear-gradient(
+    135deg,
+    rgba(217, 119, 87, 0.12),
+    rgba(124, 92, 217, 0.12)
+  );
+  transition: box-shadow 120ms ease, border-color 120ms ease, transform 80ms ease;
+}
+.chat-item--coordinator:hover {
+  background: linear-gradient(
+    135deg,
+    rgba(217, 119, 87, 0.2),
+    rgba(124, 92, 217, 0.2)
+  );
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.24);
+}
+.chat-item--coordinator:active {
+  transform: translateY(1px);
+}
+.chat-item--coordinator.active {
+  border-color: var(--app-claude-orange);
+  border-left-color: var(--app-claude-orange);
+  box-shadow: 0 0 0 1px var(--app-claude-orange), 0 2px 8px rgba(217, 119, 87, 0.25);
+  background: linear-gradient(
+    135deg,
+    rgba(217, 119, 87, 0.22),
+    rgba(124, 92, 217, 0.2)
+  );
+}
+.chat-item--coordinator .chat-item-title {
+  font-weight: 600;
+}
+.chat-item-agent-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--app-claude-orange);
+}
+.chat-item--subagent {
+  background: linear-gradient(
+    90deg,
+    rgba(124, 92, 217, 0.08),
+    var(--app-secondary-background) 65%
+  );
+}
+.chat-item--subagent:hover {
+  background: linear-gradient(
+    90deg,
+    rgba(124, 92, 217, 0.14),
+    var(--app-list-hover-background) 65%
+  );
+}
+.chat-item-agent-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: rgb(148, 119, 230);
+}
+
 /* ---- Status icon variants ---- */
 .chat-status-icon {
   display: inline-flex;

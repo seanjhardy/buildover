@@ -18,7 +18,8 @@
   will-change: transform;
 }
 
-.workspace--file-open .workspace-panels {
+.workspace--file-open .workspace-panels,
+.workspace--plan-open .workspace-panels {
   transform: translateX(calc(-50vw + 200px));
 }
 
@@ -45,12 +46,14 @@
   transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-.workspace--file-open .chat-sidebar-fade {
+.workspace--file-open .chat-sidebar-fade,
+.workspace--plan-open .chat-sidebar-fade {
   opacity: 1;
 }
 
-/* When a file is open, clicking the chat strip closes the viewer. */
-.workspace--file-open .workspace-panels {
+/* When a detail pane is open, clicking the chat strip closes it. */
+.workspace--file-open .workspace-panels,
+.workspace--plan-open .workspace-panels {
   cursor: pointer;
 }
 
@@ -58,10 +61,11 @@
 /* File Viewer                                                   */
 /* ============================================================ */
 
-/* Absolutely positioned on the right edge of .workspace, full height.
-   Lives outside workspace-panels so it never compresses or displaces
-   anything inside the flex layout. */
-.file-viewer {
+/* Shared right-slot geometry for slide-in detail panes (file viewer + plan
+   viewer). Absolutely positioned on the right edge of .workspace, full height.
+   Lives outside workspace-panels so it never compresses or displaces anything
+   inside the flex layout. One source of truth for both panes. */
+.detail-pane {
   position: absolute;
   top: 0;
   right: 0;
@@ -76,6 +80,13 @@
   animation: viewer-slide-in 0.32s cubic-bezier(0.4, 0, 0.2, 1) both;
   overflow: hidden;
   z-index: 30; /* above overlay (z-index: 10) */
+}
+
+/* Base file-viewer layout (geometry comes from .detail-pane when overlaid;
+   the inline variant supplies its own positioning). */
+.file-viewer {
+  display: flex;
+  flex-direction: column;
 }
 
 @keyframes viewer-slide-in {

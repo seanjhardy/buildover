@@ -427,7 +427,8 @@ function AskShell({
       // Radio: replace, then auto-advance after a short confirm flash.
       return { ...prev, [q.question]: [label] };
     });
-    if (!q.multiSelect && active < questions.length - 1) {
+    // Only auto-advance for regular options, not "Other" (which needs text input)
+    if (!q.multiSelect && label !== "Other" && active < questions.length - 1) {
       setTimeout(() => setActive((a) => a + 1), 280);
     }
   };

@@ -442,3 +442,244 @@
 .files-stat-removed {
   color: #f85149;
 }
+
+/* ---- Plans Panel (coordinator ticket board, right rail) ---- */
+
+.plans-panel {
+  width: 340px;
+  flex-shrink: 0;
+  align-self: flex-start;
+  max-height: 60%;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 10px;
+  display: flex;
+  flex-direction: column;
+  font-size: 12px;
+  overflow: hidden;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.2);
+}
+
+.plans-panel-header {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--app-secondary-foreground);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  padding: 8px 10px 6px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+
+.plans-panel-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 6px;
+  overflow-y: auto;
+  -webkit-overflow-scrolling: touch;
+  overscroll-behavior: contain;
+}
+
+.plans-panel-empty {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  font-style: italic;
+  padding: 4px 6px;
+}
+
+/* Collapsed bucket for done/rejected tickets at the bottom of the board */
+.plans-panel-closed-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 4px 6px;
+  margin-top: 2px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  cursor: pointer;
+  text-align: left;
+}
+
+.plans-panel-closed-toggle:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.plan-ticket {
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 7px;
+  overflow: hidden;
+}
+
+.plan-ticket--closed {
+  opacity: 0.55;
+}
+
+.plan-ticket--in_progress {
+  border-color: color-mix(in srgb, var(--app-claude-orange) 45%, transparent);
+}
+
+.plan-ticket--agent_done {
+  border-color: color-mix(in srgb, #4caf78 55%, transparent);
+}
+
+.plan-ticket--active {
+  border-color: var(--app-claude-orange);
+  background: var(--app-list-hover-background);
+}
+
+.plan-ticket-open-chevron {
+  flex-shrink: 0;
+  color: var(--app-secondary-foreground);
+  opacity: 0.5;
+}
+
+.plan-ticket-main {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 6px 8px;
+  background: transparent;
+  border: 0;
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.plan-ticket-main:hover {
+  background: var(--app-list-hover-background);
+}
+
+.plan-ticket-order {
+  flex-shrink: 0;
+  width: 16px;
+  height: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 4px;
+  background: var(--app-input-background);
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.plan-ticket-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  line-height: 1.4;
+}
+
+.plan-ticket-chip {
+  flex-shrink: 0;
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: var(--app-input-background);
+  color: var(--app-secondary-foreground);
+}
+
+.plan-ticket-chip--approved {
+  background: color-mix(in srgb, #5b8def 18%, transparent);
+  color: #5b8def;
+}
+
+.plan-ticket-chip--in_progress {
+  background: color-mix(in srgb, var(--app-claude-orange) 16%, transparent);
+  color: var(--app-claude-orange);
+}
+
+.plan-ticket-chip--agent_done {
+  background: color-mix(in srgb, #4caf78 16%, transparent);
+  color: #4caf78;
+}
+
+.plan-ticket-chip--done {
+  background: color-mix(in srgb, #4caf78 12%, transparent);
+  color: #4caf78;
+}
+
+.plan-ticket-chip--rejected {
+  background: color-mix(in srgb, var(--app-error, #e5534b) 14%, transparent);
+  color: var(--app-error, #e5534b);
+}
+
+.plan-ticket-detail {
+  padding: 0 8px 8px;
+  border-top: 1px solid var(--app-primary-border-color);
+}
+
+.plan-ticket-desc {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  line-height: 1.5;
+  padding: 7px 0 4px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 180px;
+  overflow-y: auto;
+}
+
+.plan-ticket-actions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-wrap: wrap;
+  padding-top: 6px;
+}
+
+.plan-ticket-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 5px;
+  color: var(--app-primary-foreground);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.plan-ticket-btn:hover {
+  background: var(--app-list-hover-background);
+}
+
+.plan-ticket-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.plan-ticket-btn--approve {
+  color: #4caf78;
+  border-color: color-mix(in srgb, #4caf78 40%, transparent);
+}
+
+.plan-ticket-btn--reject {
+  color: var(--app-error, #e5534b);
+  border-color: color-mix(in srgb, var(--app-error, #e5534b) 40%, transparent);
+}
+
+.plan-ticket-btn--icon {
+  padding: 3px 5px;
+}
+
+.plan-ticket-btn--danger:hover {
+  color: var(--app-error, #e5534b);
+}

@@ -1,4 +1,6 @@
 import { runAgentTurn, type RawAgentEvent } from "./agent.js";
+import { makeCoordinationMcp } from "./coordinationTools.js";
+import { coordinatorPrompt, subagentPrompt } from "./prompts.js";
 import {
   appendEvent,
   computeStatus,
@@ -19,6 +21,7 @@ import type {
   Attachment,
   ChatEvent,
   ChatRecord,
+  MessageOrigin,
   Model,
   PermissionMode,
 } from "../src/types.js";
@@ -122,6 +125,57 @@ class AgentSession {
     return () => this.subscribers.delete(sub);
   }
 
+  // Broadcasts an externally-produced event (e.g. plans_updated when the user
+  // edits a ticket via the plans panel, or chat_created when this chat spawns
+  // a subagent) to everyone subscribed to this chat's channel.
+  pushEvent(event: AgentEvent): void {
+    this.broadcast(event);
+  }
+
+  // Delivers a message to this chat from outside the normal composer flow —
+  // a subagent reporting back to its parent, or the server notifying the
+  // coordinator that a ticket was approved. If a turn is already in flight the
+  // message is persisted + echoed immediately and parked; the runTurn finally
+  // block drains the queue as soon as the session frees up, so nothing is lost.
+  async deliverMessage(args: {
+    text: string;
+    model?: Model;
+    permissionMode?: PermissionMode;
+    // Marks where this message came from so the UI can render delivered
+    // messages (subagent reports, system notices) distinctly from genuine
+    // user input. Absent === "user".
+    origin?: MessageOrigin;
+    originLabel?: string;
+  }): Promise<void> {
+    const record = await readChat(this.repoPath, this.chatId);
+    if (!record) throw new Error(`Chat ${this.chatId} not found`);
+    const model = args.model ?? record.model;
+    const permissionMode = args.permissionMode ?? record.permissionMode;
+    if (this.running) {
+      const userId = `u-${Date.now()}`;
+      const ts = new Date().toISOString();
+      void this.record({
+        type: "user_message",
+        id: userId,
+        text: args.text,
+        origin: args.origin,
+        originLabel: args.originLabel,
+        ts,
+      });
+      this.broadcastUserEcho(userId, args.text, undefined, args.origin, args.originLabel);
+      // isRetry: the parked turn must not double-persist/echo the message.
+      this.pendingUserTurns.push({ text: args.text, model, permissionMode, isRetry: true });
+      return;
+    }
+    void this.runTurn({
+      text: args.text,
+      model,
+      permissionMode,
+      origin: args.origin,
+      originLabel: args.originLabel,
+    });
+  }
+
   private broadcast(event: AgentEvent): void {
     for (const sub of this.subscribers) {
       try {
@@ -130,6 +184,28 @@ class AgentSession {
         // Subscriber failures must not break the session.
       }
     }
+  }
+
+  // Broadcasts the live echo for a freshly-recorded user-slot message. origin /
+  // originLabel tag delivered (non-user) messages — subagent reports, system
+  // notices — so the UI can render them distinctly from genuine user input.
+  // They ride on the echo via a cast until they are added to the
+  // user_message_echo variant of AgentEvent in src/types.ts.
+  private broadcastUserEcho(
+    id: string,
+    text: string,
+    attachments?: Attachment[],
+    origin?: MessageOrigin,
+    originLabel?: string,
+  ): void {
+    const echo: AgentEvent = {
+      type: "user_message_echo",
+      chatId: this.chatId,
+      id,
+      text,
+      attachments,
+    };
+    this.broadcast({ ...echo, origin, originLabel } as AgentEvent);
   }
 
   private async record(event: ChatEvent): Promise<ChatRecord | null> {
@@ -301,6 +377,10 @@ class AgentSession {
     attachments?: Attachment[];
     isRetry?: boolean;
     silent?: boolean;
+    // Carried through from deliverMessage so a delivered (non-user) message
+    // routed via runTurn keeps its origin tag on persist + echo.
+    origin?: MessageOrigin;
+    originLabel?: string;
   }): Promise<void> {
     if (this.running) {
       if (this.currentTurnSilent && !args.silent) {
@@ -317,17 +397,19 @@ class AgentSession {
             text: args.text,
             attachments: args.attachments,
             ts,
+            origin: args.origin,
+            originLabel: args.originLabel,
           };
           // appendEvent uses withChatLock internally — it will queue behind any
           // lock already held by the compact turn (no deadlock, just ordering).
           void this.record(userEvent);
-          this.broadcast({
-            type: "user_message_echo",
-            chatId: this.chatId,
-            id: userId,
-            text: args.text,
-            attachments: args.attachments,
-          });
+          this.broadcastUserEcho(
+            userId,
+            args.text,
+            args.attachments,
+            args.origin,
+            args.originLabel,
+          );
         }
         // Mark as retry so the parked turn doesn't double-persist/echo.
         this.pendingUserTurns.push({ ...args, isRetry: true });
@@ -367,19 +449,23 @@ class AgentSession {
         text: args.text,
         attachments: args.attachments,
         ts,
+        origin: args.origin,
+        originLabel: args.originLabel,
       };
       const afterUser = await this.record(userEvent);
-      this.broadcast({
-        type: "user_message_echo",
-        chatId: this.chatId,
-        id: userId,
-        text: args.text,
-        attachments: args.attachments,
-      });
+      this.broadcastUserEcho(
+        userId,
+        args.text,
+        args.attachments,
+        args.origin,
+        args.originLabel,
+      );
       await this.pushStatusFor(afterUser);
 
-      if (isFirstUserTurn) {
-        // Fire-and-forget title generation — never blocks the turn.
+      // Fire-and-forget title generation — never blocks the turn. Skipped for
+      // coordinator chats (always titled "Coordinator") and subagent chats
+      // (titled by the agent that spawned them).
+      if (isFirstUserTurn && (record.kind ?? "user") === "user") {
         void this.generateAndApplyTitle(args.text);
       }
     }
@@ -397,6 +483,31 @@ class AgentSession {
 
     // Track the latest model so we can use it for the auto-compact turn.
     this.lastModel = args.model;
+
+    // Coordinator / subagent chats get role instructions and the coordination
+    // toolset on every turn.
+    const chatKind = record.kind ?? "user";
+    const coordination =
+      chatKind === "coordinator" || chatKind === "subagent"
+        ? {
+            systemPromptAppend:
+              chatKind === "coordinator"
+                ? coordinatorPrompt()
+                : subagentPrompt({
+                    parentChatId: record.parentChatId ?? "unknown",
+                    task: record.task,
+                  }),
+            extraMcpServers: {
+              "buildover-agents": makeCoordinationMcp({
+                repoPath: this.repoPath,
+                chatId: this.chatId,
+                kind: chatKind,
+                parentChatId: record.parentChatId,
+                task: record.task,
+              }),
+            },
+          }
+        : {};
 
     // Events that should be hidden from subscribers during a silent (auto-compact) turn.
     // We still persist assistant/result events so the session history is correct,
@@ -430,15 +541,22 @@ class AgentSession {
       void this.persistAgentEvent(tagged);
     };
 
+    // Code-editing subagents run their SDK session in an isolated git worktree
+    // so their edits don't touch the live main working tree until merged back.
+    // Everything else — coordination, persistence, broadcast — stays keyed to
+    // the main repoPath; only the SDK's execution cwd changes.
+    const execCwd = record.worktreePath ?? this.repoPath;
+
     try {
       await runAgentTurn({
         prompt: args.text,
         model: args.model,
         sessionId: record.sessionId,
-        cwd: this.repoPath,
+        cwd: execCwd,
         permissionMode: args.permissionMode,
         getPermissionMode: () => this.currentPermissionMode,
         attachments: args.attachments,
+        ...coordination,
         emit,
         requestCompact: (reason) => {
           console.log(`[session] ClearContext requested by agent${reason ? `: ${reason}` : ""}`);
@@ -671,6 +789,7 @@ class AgentSession {
       chatId: this.chatId,
       record: result.record,
       pendingPermissions: [],
+      pendingAttentions: [],
     });
 
     await rebuildIndex(this.repoPath);
@@ -707,6 +826,7 @@ class AgentSession {
       chatId: this.chatId,
       record,
       pendingPermissions: [],
+      pendingAttentions: [],
     });
     this.broadcast({
       type: "chat_status",
@@ -731,6 +851,7 @@ class AgentSession {
       chatId: this.chatId,
       record,
       pendingPermissions: [],
+      pendingAttentions: [],
     });
     this.broadcast({
       type: "chat_status",

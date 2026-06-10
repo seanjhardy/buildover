@@ -19,6 +19,13 @@ export type PermissionMode =
   | "plan"
   | "bypassPermissions";
 
+// Where a chat message came from. Absent ⇒ "user" (a genuine user-typed
+// message). "subagent" = a report delivered from a child subagent; "system" =
+// an automated notice (ticket approvals, plan notes, coordinator→subagent
+// relays). Used by the UI to render delivered messages distinctly from the
+// user's own bubble.
+export type MessageOrigin = "user" | "subagent" | "system";
+
 // ---- Attachments ----
 
 export interface Attachment {
@@ -77,6 +84,12 @@ export type ChatStatus =
   | "finished"
   | "error";
 
+// What kind of chat this is. "coordinator" is the always-present, undeletable
+// chat pinned at the top of each repo's sidebar that delegates work to
+// subagents. "subagent" chats are spawned by another chat (their parent) via
+// the spawn_subagent tool. Absent/"user" means a normal user-created chat.
+export type ChatKind = "user" | "coordinator" | "subagent";
+
 export interface RepoInfo {
   id: string;
   path: string;
@@ -99,6 +112,12 @@ export interface ChatSummary {
   createdAt: string;
   updatedAt: string;
   preview: string;
+  /** Chat kind — absent means "user" (a normal user-created chat). */
+  kind?: ChatKind;
+  /** For subagent chats: the chat that spawned this one. */
+  parentChatId?: string;
+  /** For subagent chats: short description of the assigned task. */
+  task?: string;
 }
 
 // Persisted chat events. These are a superset of the live AgentEvent stream
@@ -110,6 +129,10 @@ export type ChatEvent =
       id: string;
       text: string;
       attachments?: Attachment[];
+      /** Source of this message. Absent === "user" (legacy / genuine user). */
+      origin?: MessageOrigin;
+      /** Display label for non-user origins (e.g. the subagent's title). */
+      originLabel?: string;
       ts: string;
     }
   | {
@@ -207,6 +230,57 @@ export interface ChatRecord {
   /** Diverging conversation branches created via message editing. Absent on
    *  linear chats. record.events is always the currently active branch. */
   branches?: ChatBranch[];
+  /** Chat kind — absent means "user" (a normal user-created chat). */
+  kind?: ChatKind;
+  /** For subagent chats: the chat that spawned this one. */
+  parentChatId?: string;
+  /** For subagent chats: short description of the assigned task. */
+  task?: string;
+  /** For code-editing subagent chats: the isolated git worktree its SDK
+   *  session runs in, so its edits don't touch the live main working tree until
+   *  merged back. Absent for research/read-only subagents and normal chats. */
+  worktreePath?: string;
+  /** Branch checked out in `worktreePath` (e.g. `subagent/<chatId>`). */
+  worktreeBranch?: string;
+}
+
+// ---- Plans / tickets (coordinator workflow) ----
+
+// Lifecycle of a plan ticket:
+//   draft        — proposed by the coordinator, waiting for user approval
+//   approved     — user (or coordinator on the user's behalf) approved it
+//   in_progress  — a subagent is actively working on it
+//   agent_done   — the coordinator judged the work complete; awaiting the
+//                  user's final sign-off
+//   done         — user confirmed the result
+//   rejected     — user rejected the ticket
+export type PlanTicketStatus =
+  | "draft"
+  | "approved"
+  | "in_progress"
+  | "agent_done"
+  | "done"
+  | "rejected";
+
+export interface PlanTicket {
+  id: string;
+  title: string;
+  /** Markdown body — the high-level plan / acceptance criteria. */
+  description: string;
+  status: PlanTicketStatus;
+  /** Position in the priority list (0 = highest priority). */
+  order: number;
+  /** Chat id of the subagent currently (or most recently) working this ticket. */
+  subagentChatId?: string;
+  /** Chat id of the agent that drafted this ticket (coordinator or research subagent). */
+  createdByChatId?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PlansFile {
+  tickets: PlanTicket[];
+  updatedAt: string;
 }
 
 // ---- Wire protocol ----
@@ -380,6 +454,22 @@ export type AgentEvent =
       input: Record<string, unknown>;
       suggestions?: unknown[];
     }
+  | {
+      // Broadcast when a permission request is resolved so live clients can
+      // update the originating tool_use block's input (e.g. AskUserQuestion
+      // answers) without waiting for a full chat_replay.
+      type: "permission_response";
+      chatId: string;
+      requestId: string;
+      result:
+        | {
+            behavior: "allow";
+            updatedInput?: Record<string, unknown>;
+            updatedPermissions?: unknown[];
+          }
+        | { behavior: "deny"; message: string; interrupt?: boolean };
+      ts?: string;
+    }
   | { type: "error"; chatId: string; message: string }
   | { type: "turn_start"; chatId: string }
   | { type: "turn_end"; chatId: string }
@@ -401,6 +491,10 @@ export type AgentEvent =
       id: string;
       text: string;
       attachments?: Attachment[];
+      /** Source of this message. Absent === "user" (genuine user input). */
+      origin?: MessageOrigin;
+      /** Display label for non-user origins (e.g. the subagent's title). */
+      originLabel?: string;
     }
   // Status / metadata pushes.
   | {
@@ -437,6 +531,22 @@ export type AgentEvent =
       type: "revert_checkpoint";
       chatId: string;
       checkpointId: string;
+    }
+  // Broadcast when a chat spawns a subagent chat. Tagged with the *parent's*
+  // chatId (the channel the sidebar is already subscribed to) and carries the
+  // new chat's summary so the sidebar can show it immediately.
+  | {
+      type: "chat_created";
+      chatId: string;
+      summary: ChatSummary;
+    }
+  // Broadcast whenever the repo's plans/tickets file changes (coordinator tool
+  // call or user action via the plans panel). Tagged with the coordinator's
+  // chatId so existing per-chat subscriptions deliver it.
+  | {
+      type: "plans_updated";
+      chatId: string;
+      tickets: PlanTicket[];
     };
 
 // ---- Orchestrator wire protocol ----
