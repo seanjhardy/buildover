@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 import {
   Archive,
@@ -259,6 +260,11 @@ export function Composer(props: Props) {
   const [error, setError] = useState<string | null>(null);
   const [modePopupOpen, setModePopupOpen] = useState(false);
   const [modelPopupOpen, setModelPopupOpen] = useState(false);
+  const [modelTooltipOpen, setModelTooltipOpen] = useState(false);
+  // Viewport coords for the model tooltip (fixed positioning via portal so it
+  // escapes overflow/stacking-context ancestors — same approach as ContextRing).
+  const [modelTooltipPos, setModelTooltipPos] = useState({ x: 0, y: 0 });
+  const modelBtnRef = useRef<HTMLButtonElement>(null);
   const [plusPopupOpen, setPlusPopupOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -351,6 +357,14 @@ export function Composer(props: Props) {
     document.addEventListener("mousedown", onDoc);
     return () => document.removeEventListener("mousedown", onDoc);
   }, [modePopupOpen, modelPopupOpen, plusPopupOpen, atPopupOpen, slashPopupOpen]);
+
+  // Recalculate the model tooltip position whenever it opens.
+  useEffect(() => {
+    if (!modelTooltipOpen || !modelBtnRef.current) return;
+    const rect = modelBtnRef.current.getBoundingClientRect();
+    // Centre horizontally on the button, sit 8px above its top edge.
+    setModelTooltipPos({ x: rect.left + rect.width / 2, y: rect.top - 8 });
+  }, [modelTooltipOpen]);
 
   // Auto-resize textarea to fit content, up to a maximum height.
   useEffect(() => {
@@ -927,14 +941,39 @@ export function Composer(props: Props) {
           </button>
           <div ref={modelWrapRef} className="popup-wrap">
             <button
+              ref={modelBtnRef}
               className={`model-pill-btn${modelPopupOpen ? " active" : ""}`}
-              onClick={() => !isStreaming && setModelPopupOpen((v) => !v)}
+              onClick={() => {
+                if (isStreaming) return;
+                setModelTooltipOpen(false);
+                setModelPopupOpen((v) => !v);
+              }}
+              onMouseEnter={() => setModelTooltipOpen(true)}
+              onMouseLeave={() => setModelTooltipOpen(false)}
               disabled={isStreaming}
-              title={availableModels.find((m) => m.id === model)?.label ?? model}
               aria-label="Switch model"
             >
               <Bot size={14} />
             </button>
+            {modelTooltipOpen && !modelPopupOpen &&
+              createPortal(
+                <div
+                  className="model-tooltip"
+                  role="tooltip"
+                  style={{
+                    position: "fixed",
+                    left: `${modelTooltipPos.x}px`,
+                    top: `${modelTooltipPos.y}px`,
+                    transform: "translate(-50%, -100%)",
+                  }}
+                >
+                  <span className="model-tooltip-label">Model</span>
+                  <span className="model-tooltip-value">
+                    {availableModels.find((m) => m.id === model)?.label ?? model}
+                  </span>
+                </div>,
+                document.body,
+              )}
             {modelPopupOpen && (
               <div className="model-popup" role="listbox">
                 <div className="model-popup-head">Model</div>

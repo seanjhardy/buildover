@@ -386,6 +386,35 @@
   cursor: default;
 }
 
+/* Model tooltip — shows the chat's current model on hover.
+   position/left/top/transform are set inline (fixed coords from
+   getBoundingClientRect) so it escapes overflow/stacking ancestors. */
+.model-tooltip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--app-secondary-background, #1e1e1e);
+  border: 1px solid var(--app-primary-border-color, rgba(255, 255, 255, 0.12));
+  border-radius: var(--corner-radius-medium, 8px);
+  padding: 6px 10px;
+  font-size: 11.5px;
+  z-index: 99999;
+  pointer-events: none;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.5);
+  white-space: nowrap;
+}
+.model-tooltip-label {
+  color: var(--app-placeholder-foreground, rgba(255, 255, 255, 0.4));
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.model-tooltip-value {
+  color: var(--app-primary-foreground);
+  font-weight: 500;
+}
+
 /* Model popup — opens upward, anchored right so it stays on-screen */
 .model-popup {
   position: absolute;

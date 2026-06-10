@@ -167,13 +167,22 @@ class AgentSession {
       this.pendingUserTurns.push({ text: args.text, model, permissionMode, isRetry: true });
       return;
     }
-    void this.runTurn({
+    // Guarded fire-and-forget: a rejection here (e.g. a race on the running
+    // flag, or a transient IO failure) must never become an unhandled promise
+    // rejection — that would crash the whole backend, and under a dev watcher
+    // it then restarts, retries the sender's turn, and loops.
+    this.runTurn({
       text: args.text,
       model,
       permissionMode,
       origin: args.origin,
       originLabel: args.originLabel,
-    });
+    }).catch((e) =>
+      console.warn(
+        `[deliver] turn failed for ${this.chatId}:`,
+        e instanceof Error ? e.message : e,
+      ),
+    );
   }
 
   private broadcast(event: AgentEvent): void {
