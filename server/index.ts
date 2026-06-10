@@ -1654,8 +1654,11 @@ wss.on("connection", (ws: WebSocket) => {
         case "user_message": {
           await subscribe(msg.repoPath, msg.chatId, false);
           const session = getSession(msg.repoPath, msg.chatId);
-          // runTurn rejects if a turn is already running. Surface that as an
-          // error event rather than crashing the connection.
+          // A turn already running is no longer an error: runTurn persists +
+          // echoes the message and parks it to run when the session frees up
+          // (the server owns the queue). The catch below is only a safety net
+          // for genuinely unexpected failures, surfaced rather than crashing
+          // the connection.
           session
             .runTurn({
               text: msg.text,

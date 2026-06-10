@@ -383,34 +383,35 @@ class AgentSession {
     originLabel?: string;
   }): Promise<void> {
     if (this.running) {
-      if (this.currentTurnSilent && !args.silent) {
-        // A silent auto-compact is in progress. The user has no idea — the UI
-        // showed the chat as done. Persist + echo the message immediately so it
-        // is durable and visible in the UI, then queue the agent turn to run
-        // once compaction finishes (see the finally block below).
-        if (!args.isRetry) {
-          const userId = `u-${Date.now()}`;
-          const ts = new Date().toISOString();
-          const userEvent: ChatEvent = {
-            type: "user_message",
-            id: userId,
-            text: args.text,
-            attachments: args.attachments,
-            ts,
-            origin: args.origin,
-            originLabel: args.originLabel,
-          };
-          // appendEvent uses withChatLock internally — it will queue behind any
-          // lock already held by the compact turn (no deadlock, just ordering).
-          void this.record(userEvent);
-          this.broadcastUserEcho(
-            userId,
-            args.text,
-            args.attachments,
-            args.origin,
-            args.originLabel,
-          );
-        }
+      // A turn is already in flight (a normal visible turn, or an invisible
+      // auto-compact). Rather than rejecting the message — which would surface
+      // a "Chat already running" error and make the composer feel broken — we
+      // persist + echo it immediately so it's durable and visible, then park
+      // the turn. The finally block below drains pendingUserTurns FIFO as soon
+      // as the session frees up, so the chat always accepts input like a normal
+      // text box. The server is the single owner of this queue.
+      if (!args.silent && !args.isRetry) {
+        const userId = `u-${Date.now()}`;
+        const ts = new Date().toISOString();
+        const userEvent: ChatEvent = {
+          type: "user_message",
+          id: userId,
+          text: args.text,
+          attachments: args.attachments,
+          ts,
+          origin: args.origin,
+          originLabel: args.originLabel,
+        };
+        // appendEvent uses withChatLock internally — it will queue behind any
+        // lock already held by the in-flight turn (no deadlock, just ordering).
+        void this.record(userEvent);
+        this.broadcastUserEcho(
+          userId,
+          args.text,
+          args.attachments,
+          args.origin,
+          args.originLabel,
+        );
         // Mark as retry so the parked turn doesn't double-persist/echo.
         this.pendingUserTurns.push({ ...args, isRetry: true });
         return;

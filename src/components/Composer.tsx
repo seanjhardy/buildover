@@ -6,7 +6,6 @@ import {
   Bot,
   ClipboardList,
   Hammer,
-  ListPlus,
   MessageCircleQuestion,
   Mic,
   Paperclip,
@@ -30,7 +29,6 @@ import { fileApi } from "../lib/api.js";
 interface Props {
   chatId: string;
   onSend: (text: string, attachments: Attachment[]) => void;
-  onQueueMessage?: (text: string, attachments: Attachment[]) => void;
   onInterrupt: () => void;
   onDraftChange?: (text: string) => void;
   disabled: boolean;
@@ -210,7 +208,6 @@ export function Composer(props: Props) {
   const {
     chatId,
     onSend,
-    onQueueMessage,
     onInterrupt,
     onDraftChange,
     disabled,
@@ -409,29 +406,11 @@ export function Composer(props: Props) {
     const trimmed = text.trim();
     // Allow sending if there's either text OR attachments
     if (!trimmed && attachments.length === 0) return;
-    if (disabled) {
-      // If we have a queue handler, queue the message instead of dropping it
-      if (onQueueMessage) {
-        onQueueMessage(trimmed, attachments);
-        setText("");
-        setAttachments([]);
-        clearDraft();
-      }
-      return;
-    }
+    // `disabled` means the socket isn't connected — there's nowhere to send.
+    // While a turn is streaming we are NOT disabled: the message is sent to the
+    // server, which persists + parks it and runs it when the current turn ends.
+    if (disabled) return;
     onSend(trimmed, attachments);
-    setText("");
-    setAttachments([]);
-    clearDraft();
-  };
-
-  // Explicitly queue a message regardless of streaming state.
-  const queueSubmit = () => {
-    if (!onQueueMessage) return;
-    const trimmed = text.trim();
-    // Allow queueing if there's either text OR attachments
-    if (!trimmed && attachments.length === 0) return;
-    onQueueMessage(trimmed, attachments);
     setText("");
     setAttachments([]);
     clearDraft();
@@ -730,10 +709,12 @@ export function Composer(props: Props) {
           className="composer-input"
           placeholder={
             disabled
-              ? "Claude is working…"
-              : permissionMode === "plan"
-                ? "Describe what you want Claude to plan…"
-                : "Message Claude (@ for files, / for commands)"
+              ? "Connecting…"
+              : isStreaming
+                ? "Message Claude (Enter sends — runs after this turn)"
+                : permissionMode === "plan"
+                  ? "Describe what you want Claude to plan…"
+                  : "Message Claude (@ for files, / for commands)"
           }
           value={text}
           onChange={(e) => {
@@ -1024,24 +1005,24 @@ export function Composer(props: Props) {
             )}
           </div>}
 
-          {onQueueMessage && (
-            <button
-              className="send-btn queue"
-              onClick={queueSubmit}
-              disabled={text.trim() === "" && attachments.length === 0}
-              title="Add to queue"
-            >
-              <ListPlus size={16} />
-            </button>
-          )}
           {isStreaming ? (
-            <button
-              className="send-btn stop"
-              onClick={onInterrupt}
-              title="Stop"
-            >
-              <Square size={12} />
-            </button>
+            <>
+              <button
+                className="send-btn stop"
+                onClick={onInterrupt}
+                title="Stop"
+              >
+                <Square size={12} />
+              </button>
+              <button
+                className="send-btn"
+                onClick={submit}
+                disabled={disabled || (text.trim() === "" && attachments.length === 0)}
+                title="Send — runs after the current turn"
+              >
+                <ArrowUp size={16} />
+              </button>
+            </>
           ) : (
             <button
               className="send-btn"

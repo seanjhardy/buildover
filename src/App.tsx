@@ -12,7 +12,6 @@ import { MessageJumpBar } from "./components/MessageJumpBar.js";
 import { MessageList, type JumpBarHandle } from "./components/MessageList.js";
 import { OrchestratorBar, type OrchestratorWakeTrigger } from "./components/OrchestratorBar.js";
 import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt.js";
-import { QueuedMessages, type QueuedMessage } from "./components/QueuedMessages.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
 import { PreviewChatSidebar } from "./components/PreviewChatSidebar.js";
 import { GitGraphView, type GitGraphViewHandle } from "./components/GitGraphView.js";
@@ -53,7 +52,6 @@ import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
   DEFAULT_MODEL,
   MODELS,
-  type Attachment,
   type Model,
   type OrchestratorNav,
   type PermissionMode,
@@ -257,23 +255,6 @@ export default function App() {
   const [activeEditorPath, setActiveEditorPath] = useState<string | null>(null);
   // Jump-to-line for search results clicking on already-open files
   const [editorJumpTarget, setEditorJumpTarget] = useState<{ path: string; line: number } | null>(null);
-  // Per-chat message queues: chatId → queued messages for that chat.
-  // Stored as a map so navigating away from a chat doesn't lose its queue.
-  const [messageQueues, setMessageQueues] = useState<Record<string, QueuedMessage[]>>({});
-  // Derive the active chat's queue from the map.
-  const messageQueue = activeChatId ? (messageQueues[activeChatId] ?? []) : [];
-  // Scoped setter that always writes into the active chat's slot.
-  const setMessageQueue = useCallback(
-    (updater: QueuedMessage[] | ((prev: QueuedMessage[]) => QueuedMessage[])) => {
-      if (!activeChatId) return;
-      setMessageQueues((prev) => {
-        const current = prev[activeChatId] ?? [];
-        const next = typeof updater === "function" ? updater(current) : updater;
-        return { ...prev, [activeChatId]: next };
-      });
-    },
-    [activeChatId],
-  );
   // Per-chat draft text: chatId → current unsent composer text.
   // Populated live by the Composer's onDraftChange callback so the sidebar
   // can show the draft as a subtitle even for non-active chats.
@@ -336,7 +317,6 @@ export default function App() {
     window.addEventListener("resize", onResize);
     return () => window.removeEventListener("resize", onResize);
   }, []);
-  const prevStreamingRef = useRef(false);
   // msgScrollRef points at .message-area (the scroll container).
   // MessageList and MessageJumpBar both use it for scroll operations.
   const msgScrollRef = useRef<HTMLDivElement>(null);
@@ -345,26 +325,6 @@ export default function App() {
   const jumpBarRef = useRef<JumpBarHandle | null>(null);
   const chatPaneRef = useRef<HTMLElement>(null);
   const rightRailRef = useRef<HTMLDivElement>(null);
-  // Keep refs to the latest values so the streaming effect never reads stale closures.
-  const messageQueueRef = useRef(messageQueue);
-  messageQueueRef.current = messageQueue;
-  // Full queues map ref — used by the background auto-send effect so it always
-  // reads the current queue for any chat without re-registering socket listeners.
-  const messageQueuesRef = useRef(messageQueues);
-  messageQueuesRef.current = messageQueues;
-  // Active chat id ref — used by the background effect to skip the active chat
-  // (which is already handled by the streaming effect below) to avoid double-sends.
-  const activeChatIdRef = useRef(activeChatId);
-  activeChatIdRef.current = activeChatId;
-  // Active repo path ref — needed when sending messages for background chats.
-  const activeRepoPathRef = useRef(activeRepo?.path ?? null);
-  activeRepoPathRef.current = activeRepo?.path ?? null;
-  const modelRef = useRef(model);
-  modelRef.current = model;
-  const permissionModeRef = useRef(permissionMode);
-  permissionModeRef.current = permissionMode;
-  const agentRef = useRef(agent);
-  agentRef.current = agent;
 
   // Imperative handle so the wake word hook can activate the orchestrator mic.
   const wakeWordTriggerRef = useRef<OrchestratorWakeTrigger>(null);
@@ -463,121 +423,11 @@ export default function App() {
     agent.respondPermission(pending.requestId, { behavior: "allow" });
   }, [permissionMode, agent.pendingPermission, agent.respondPermission]);
 
-  // When the agent finishes a turn, automatically send the next queued message.
-  // We read all mutable values through refs so this effect never captures stale
-  // closures – the only thing that should re-trigger it is the streaming flag.
-  useEffect(() => {
-    const wasStreaming = prevStreamingRef.current;
-    prevStreamingRef.current = agent.isStreaming;
-    if (wasStreaming && !agent.isStreaming && messageQueueRef.current.length > 0) {
-      const [next, ...rest] = messageQueueRef.current;
-      setMessageQueue(rest);
-      agentRef.current.send(next.text, {
-        model: modelRef.current,
-        permissionMode: permissionModeRef.current,
-        attachments: next.attachments,
-      });
-    }
-  }, [agent.isStreaming]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Background auto-send: fire queued messages for chats that are NOT currently
-  // active. The effect above handles the active chat; this one covers the case
-  // where the user navigated away while messages were queued. We subscribe
-  // directly to agentSocket so we receive events for any chat, not just the
-  // active one. The effect re-runs whenever messageQueues changes so listeners
-  // are registered/unregistered as chats gain or lose queued messages.
-  useEffect(() => {
-    // chatId → cleanup fn for the background listener on that chat.
-    const cleanups = new Map<string, () => void>();
-
-    // Register listeners for chats with a non-empty queue, and drop listeners
-    // for chats whose queue has been drained.
-    const syncListeners = () => {
-      const queues = messageQueuesRef.current;
-
-      // Drop listeners for chats that no longer have queued messages.
-      for (const [chatId, cleanup] of cleanups) {
-        if (!queues[chatId]?.length) {
-          cleanup();
-          cleanups.delete(chatId);
-        }
-      }
-
-      // Add listeners for chats that now have queued messages.
-      for (const [chatId, queue] of Object.entries(queues)) {
-        if (!queue.length) continue;
-        if (cleanups.has(chatId)) continue;
-
-        const prevWasStreaming = { value: false };
-        const unsub = agentSocket.onChatEvent(chatId, (event) => {
-          // The active chat is already handled by the streaming effect above;
-          // skip it here to avoid sending the same message twice.
-          if (chatId === activeChatIdRef.current) return;
-
-          if (event.type === "turn_start") {
-            prevWasStreaming.value = true;
-          }
-          const turnFinished =
-            event.type === "turn_end" ||
-            (event.type === "chat_status" &&
-              event.status !== "running" &&
-              prevWasStreaming.value);
-          if (!turnFinished) return;
-
-          prevWasStreaming.value = false;
-          const currentQueue = messageQueuesRef.current[chatId] ?? [];
-          if (!currentQueue.length) return;
-          const [next, ...rest] = currentQueue;
-          // Dequeue the message optimistically before the send.
-          setMessageQueues((prev) => ({ ...prev, [chatId]: rest }));
-          const repoPath = activeRepoPathRef.current;
-          if (!repoPath) return;
-          agentSocket.send({
-            type: "user_message",
-            chatId,
-            repoPath,
-            text: next.text,
-            model: modelRef.current,
-            permissionMode: permissionModeRef.current,
-            attachments: next.attachments,
-          });
-        });
-        cleanups.set(chatId, unsub);
-      }
-    };
-
-    syncListeners();
-
-    return () => {
-      for (const cleanup of cleanups.values()) cleanup();
-    };
-  }, [messageQueues]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  const addToQueue = (text: string, attachments: Attachment[]) => {
-    setMessageQueue((prev) => [
-      ...prev,
-      {
-        id: `q-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
-        text,
-        attachments,
-      },
-    ]);
-  };
-
-  const removeFromQueue = (id: string) => {
-    setMessageQueue((prev) => prev.filter((m) => m.id !== id));
-  };
-
-  // Move a queued message to the front and interrupt the current turn. The
-  // existing streaming->idle transition effect will then auto-send it.
-  const fastForwardQueued = (id: string) => {
-    setMessageQueue((prev) => {
-      const target = prev.find((m) => m.id === id);
-      if (!target) return prev;
-      return [target, ...prev.filter((m) => m.id !== id)];
-    });
-    agent.interrupt();
-  };
+  // Queueing of messages sent while a turn is in flight is owned entirely by
+  // the server: agent.send delivers the message even while streaming, and the
+  // server persists + echoes + parks it, then drains parked turns FIFO when the
+  // session frees up. The client keeps no in-memory queue, so there is exactly
+  // one drain owner and a message can never be dispatched twice.
 
   const handleModelChange = useCallback(async (newModel: string) => {
     setModel(newModel);
@@ -666,13 +516,6 @@ Important rules for commands:
           })[0] ?? null;
       workspace.setActiveChat(nextChat?.id ?? null);
     }
-    // Drop any queued messages for the deleted chat so they don't linger in state.
-    setMessageQueues((prev) => {
-      if (!prev[chatId]) return prev;
-      const next = { ...prev };
-      delete next[chatId];
-      return next;
-    });
   }, [chats, activeChatId, workspace]);
 
   const handleSelectChat = useCallback((id: string) => {
@@ -1322,11 +1165,6 @@ Important rules for commands:
                               />
                             )}
                             <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
-                              <QueuedMessages
-                                queue={messageQueue}
-                                onRemove={removeFromQueue}
-                                onFastForward={fastForwardQueued}
-                              />
                               <Composer
                                 key={activeChatId ?? "none"}
                                 chatId={activeChatId ?? ""}
@@ -1337,12 +1175,9 @@ Important rules for commands:
                                     attachments,
                                   })
                                 }
-                                onQueueMessage={addToQueue}
                                 onInterrupt={agent.interrupt}
                                 onDraftChange={handleDraftChange}
-                                disabled={
-                                  agent.isStreaming || agent.connection !== "connected"
-                                }
+                                disabled={agent.connection !== "connected"}
                                 isStreaming={agent.isStreaming}
                                 model={model}
                                 permissionMode={permissionMode}
