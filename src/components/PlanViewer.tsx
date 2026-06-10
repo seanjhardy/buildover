@@ -3,10 +3,12 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import {
   ArrowUp,
+  BookOpen,
   Check,
   CheckCheck,
   ChevronDown,
   ChevronUp,
+  Code,
   MessageSquare,
   Trash2,
   X,
@@ -53,6 +55,17 @@ export function PlanViewer({
   const [rejecting, setRejecting] = useState(false);
   const [feedback, setFeedback] = useState("");
   const [messageText, setMessageText] = useState("");
+  // Plans carry two bodies: a plain-language overview for the user
+  // (humanDescription, shown by default) and the technical spec written for
+  // the implementing agent (description, behind the toggle). Older tickets
+  // may only have the technical version — then it's shown without a toggle.
+  const [showTechnical, setShowTechnical] = useState(false);
+  const hasHuman = Boolean(ticket.humanDescription?.trim());
+
+  // Always land on the overview when switching to a different ticket.
+  useEffect(() => {
+    setShowTechnical(false);
+  }, [ticket.id]);
 
   // Close on Escape — unless the user is mid-typing in a textarea.
   useEffect(() => {
@@ -107,18 +120,47 @@ export function PlanViewer({
         </button>
       </div>
 
+      {/* View toggle: plain-language overview vs technical spec */}
+      {hasHuman && (
+        <div className="plan-viewer-view-toggle" role="tablist">
+          <button
+            type="button"
+            role="tab"
+            aria-selected={!showTechnical}
+            className={`plan-viewer-view-btn${!showTechnical ? " plan-viewer-view-btn--active" : ""}`}
+            onClick={() => setShowTechnical(false)}
+            title="Plain-language overview of this plan"
+          >
+            <BookOpen size={12} /> Overview
+          </button>
+          <button
+            type="button"
+            role="tab"
+            aria-selected={showTechnical}
+            className={`plan-viewer-view-btn${showTechnical ? " plan-viewer-view-btn--active" : ""}`}
+            onClick={() => setShowTechnical(true)}
+            title="Detailed technical specification for the implementing agent"
+          >
+            <Code size={12} /> Technical spec
+          </button>
+        </div>
+      )}
+
       {/* Body */}
       <div className="plan-viewer-body">
-        {ticket.description ? (
-          <div className="plan-viewer-markdown">
-            <ReactMarkdown remarkPlugins={[remarkGfm]}>
-              {ticket.description}
-            </ReactMarkdown>
-          </div>
-        ) : (
-          <div className="plan-viewer-empty">No description.</div>
-        )}
-
+        {(() => {
+          const body =
+            hasHuman && !showTechnical
+              ? ticket.humanDescription!
+              : ticket.description;
+          return body ? (
+            <div className="plan-viewer-markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{body}</ReactMarkdown>
+            </div>
+          ) : (
+            <div className="plan-viewer-empty">No description.</div>
+          );
+        })()}
       </div>
 
       {/* Footer actions */}

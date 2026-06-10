@@ -550,6 +550,10 @@ app.post("/api/plans", async (req, res) => {
     const ticket = await createTicket(repoPath, {
       title,
       description,
+      humanDescription:
+        typeof req.body?.humanDescription === "string"
+          ? req.body.humanDescription
+          : undefined,
       status: req.body?.status,
       order: typeof req.body?.order === "number" ? req.body.order : undefined,
     });
@@ -571,6 +575,10 @@ app.patch("/api/plans/:ticketId", async (req, res) => {
     const ticket = await updateTicket(repoPath, req.params.ticketId, {
       title: req.body?.title,
       description: req.body?.description,
+      humanDescription:
+        typeof req.body?.humanDescription === "string"
+          ? req.body.humanDescription
+          : undefined,
       status: req.body?.status,
       order: typeof req.body?.order === "number" ? req.body.order : undefined,
     });

@@ -52,6 +52,41 @@
   color: var(--app-primary-foreground);
 }
 
+/* --- View toggle: overview vs technical spec --- */
+.plan-viewer-view-toggle {
+  display: flex;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 8px 16px 0;
+  user-select: none;
+}
+
+.plan-viewer-view-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 10px;
+  border: 1px solid transparent;
+  border-radius: var(--corner-radius-small, 5px);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 11.5px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.12s, color 0.12s, border-color 0.12s;
+}
+
+.plan-viewer-view-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.plan-viewer-view-btn--active {
+  background: var(--app-secondary-background);
+  border-color: var(--app-primary-border-color);
+  color: var(--app-primary-foreground);
+}
+
 /* --- Body --- */
 .plan-viewer-body {
   flex: 1;

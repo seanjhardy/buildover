@@ -200,7 +200,14 @@ export const api = {
 
   createPlan: (
     repoPath: string,
-    body: { title: string; description: string; status?: PlanTicketStatus; order?: number },
+    body: {
+      title: string;
+      description: string;
+      /** Plain-language version of the plan shown to the user by default. */
+      humanDescription?: string;
+      status?: PlanTicketStatus;
+      order?: number;
+    },
   ) =>
     send<{ ticket: PlanTicket }>("POST", `/api/plans`, {
       repoPath,
@@ -213,6 +220,8 @@ export const api = {
     patch: {
       title?: string;
       description?: string;
+      /** Plain-language version of the plan shown to the user by default. */
+      humanDescription?: string;
       status?: PlanTicketStatus;
       order?: number;
       /** Optional free-text relayed to the ticket's agent (e.g. on rejection). */

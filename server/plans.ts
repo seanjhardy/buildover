@@ -84,6 +84,8 @@ export async function listTickets(repoPath: string): Promise<PlanTicket[]> {
 export interface NewTicketOpts {
   title: string;
   description: string;
+  /** Plain-language version of the plan shown to the user by default. */
+  humanDescription?: string;
   status?: PlanTicketStatus;
   /** Insert position; appended to the end when omitted. */
   order?: number;
@@ -102,6 +104,7 @@ export async function createTicket(
       id: makeTicketId(),
       title: opts.title,
       description: opts.description,
+      humanDescription: opts.humanDescription,
       status: opts.status ?? "draft",
       order: opts.order ?? file.tickets.length,
       createdByChatId: opts.createdByChatId,
@@ -124,6 +127,8 @@ export async function createTicket(
 export interface TicketPatch {
   title?: string;
   description?: string;
+  /** Plain-language version of the plan shown to the user by default. */
+  humanDescription?: string;
   status?: PlanTicketStatus;
   order?: number;
   subagentChatId?: string;
@@ -140,6 +145,7 @@ export async function updateTicket(
     if (!ticket) return null;
     if (patch.title != null) ticket.title = patch.title;
     if (patch.description != null) ticket.description = patch.description;
+    if (patch.humanDescription != null) ticket.humanDescription = patch.humanDescription;
     if (patch.status != null) ticket.status = patch.status;
     if (patch.subagentChatId != null) ticket.subagentChatId = patch.subagentChatId;
     if (patch.order != null && patch.order !== ticket.order) {

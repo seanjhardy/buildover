@@ -289,13 +289,17 @@ export function makeCoordinationMcp(
 
   const create_ticket = tool(
     "create_ticket",
-    "Add a ticket to the repository's plan board (shown to the user beside the coordinator chat). New tickets start as drafts awaiting the user's approval. You are recorded as the ticket's author — if the user sends feedback on it from the panel before a worker is linked, that feedback arrives in this chat.",
+    "Add a ticket to the repository's plan board (shown to the user beside the coordinator chat). A ticket is one fully self-contained piece of work — like a coding ticket, never a todo-style step. Never create multiple tickets for the same piece of work; whoever picks it up can split execution internally. New tickets start as drafts awaiting the user's approval. You are recorded as the ticket's author — if the user sends feedback on it from the panel before a worker is linked, that feedback arrives in this chat.",
     {
       title: z.string().min(3),
       description: z
         .string()
         .min(10)
-        .describe("Markdown body: the plan, relevant context, acceptance criteria."),
+        .describe("Technical specification (markdown), written for the agent that will implement it: concrete files, symbols, data structures, approach, and acceptance criteria — rich enough that a fresh agent could pick it up cold."),
+      humanDescription: z
+        .string()
+        .min(10)
+        .describe("Plain-language version (markdown), written strictly for the user: the high-level business logic of the change and any big-picture structural shifts that matter — core concepts only, no file paths, function names, or variable names. Shown to the user by default."),
       order: z.number().int().min(0).optional()
         .describe("Insert position in the priority list (0 = top). Appends when omitted."),
     },
@@ -303,6 +307,7 @@ export function makeCoordinationMcp(
       const ticket = await createTicket(ctx.repoPath, {
         title: args.title,
         description: args.description,
+        humanDescription: args.humanDescription,
         order: args.order,
         createdByChatId: ctx.chatId,
       });
@@ -320,7 +325,10 @@ export function makeCoordinationMcp(
     {
       ticketId: z.string(),
       title: z.string().optional(),
-      description: z.string().optional(),
+      description: z.string().optional()
+        .describe("Technical specification (markdown) for the implementing agent."),
+      humanDescription: z.string().optional()
+        .describe("Plain-language version (markdown) for the user — no code-level detail."),
       status: z
         .enum(["draft", "approved", "in_progress", "agent_done", "done", "rejected"])
         .optional(),
@@ -473,6 +481,41 @@ export function makeCoordinationMcp(
       },
       async (args) => {
         try {
+          // Idempotence guard. Merging this subagent's edits into the live
+          // backend's own code restarts that backend, which kills this very
+          // turn before the tool result reaches the model — the SDK then
+          // retries the turn and the model calls mark_task_finished again.
+          // If our finish report already reached the parent since our last
+          // instruction, this call IS that retry: acknowledge and do nothing
+          // (no duplicate report, and crucially no re-merge to re-trigger the
+          // restart loop).
+          const me0 = await readChat(ctx.repoPath, ctx.chatId);
+          const parentRecord = await readChat(ctx.repoPath, parentChatId);
+          const lastInstructionTs =
+            [...(me0?.events ?? [])]
+              .reverse()
+              .find((e) => e.type === "user_message")?.ts ?? "";
+          const finishPrefix = `[Subagent ${ctx.chatId} — task finished]`;
+          const alreadyReported = (parentRecord?.events ?? []).some(
+            (e) =>
+              e.type === "user_message" &&
+              e.text.startsWith(finishPrefix) &&
+              e.ts >= lastInstructionTs,
+          );
+          if (alreadyReported) {
+            return ok(
+              [
+                "Your finish report was already delivered to the coordinator — an earlier mark_task_finished call completed its delivery but was interrupted (most likely by a backend restart triggered by merging your changes) before you saw its result.",
+                "The assignment is wrapped up; do NOT call mark_task_finished again.",
+                me0?.worktreePath
+                  ? `Note: your worktree branch (${me0.worktreeBranch}) is still in place — the merge into the main tree did not complete. Leave it for the coordinator/user to resolve.`
+                  : "",
+              ]
+                .filter(Boolean)
+                .join(" "),
+            );
+          }
+
           // Move the linked ticket (matched by subagentChatId) to agent_done.
           const tickets = await listTickets(ctx.repoPath);
           const mine = tickets.find(

@@ -265,8 +265,18 @@ export type PlanTicketStatus =
 export interface PlanTicket {
   id: string;
   title: string;
-  /** Markdown body — the high-level plan / acceptance criteria. */
+  /**
+   * Markdown body — the technical specification: concrete files, symbols,
+   * data structures and acceptance criteria a fresh agent needs to pick the
+   * work up cold.
+   */
   description: string;
+  /**
+   * Markdown body — the human-readable version of the plan: high-level
+   * business logic in plain language, no file paths or variable names.
+   * Shown to the user by default; the technical spec is behind a toggle.
+   */
+  humanDescription?: string;
   status: PlanTicketStatus;
   /** Position in the priority list (0 = highest priority). */
   order: number;
