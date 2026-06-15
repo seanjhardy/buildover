@@ -17,6 +17,13 @@ import type {
   PermissionMode,
 } from "../src/types.js";
 
+// Appended to every chat's system prompt. The native Task* progress tools are
+// disabled (see disallowedTools below), so we explicitly steer the model to use
+// the TodoWrite tool instead — our sidebar (useTodos / TodoPanel) renders
+// progress from TodoWrite, and without this nudge the model stops tracking
+// progress at all once the Task tools disappear.
+const TODO_TRACKING_INSTRUCTION = `Track progress using the TodoWrite tool, not the Task tools. Maintain a todo list for any multi-step work: add items as you plan, mark exactly one item in_progress while you work on it, and mark it completed as soon as it is done. This list is rendered in the user's sidebar, so keep it current.`;
+
 // The agent emits events without a chatId — the session wraps emit() to tag
 // each one before broadcasting / persisting. This keeps agent.ts unaware of
 // session identity. Distributive Omit so each union member loses chatId
@@ -45,6 +52,11 @@ interface RunArgs {
   prompt: string;
   model: Model;
   sessionId?: string;
+  // When set (by fork / branch-switch / revert), resume `sessionId` only up
+  // to and including this SDK message uuid, forking into a fresh session.
+  // Without it the SDK would replay the session's full transcript — including
+  // the messages the user just edited away or reverted.
+  resumeSessionAt?: string;
   cwd?: string;
   permissionMode: PermissionMode;
   // Read at every canUseTool invocation so toggling bypass mid-turn takes
@@ -96,6 +108,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     prompt,
     model,
     sessionId,
+    resumeSessionAt,
     cwd,
     permissionMode,
     getPermissionMode,
@@ -106,7 +119,37 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     abortController,
   } = args;
 
-  const customToolsServer = createCustomToolsServer(requestAttentionAck, args.requestCompact, cwd);
+  // Collect all assistant messages so getCurrentTodos can scan for TodoWrite calls
+  const allMessages: any[] = [];
+
+  // Helper to extract current todos from conversation history (same logic as useTodos hook)
+  const getCurrentTodos = () => {
+    // Walk messages in reverse to find the latest TodoWrite call
+    for (let i = allMessages.length - 1; i >= 0; i--) {
+      const msg = allMessages[i];
+      if (msg.type !== "assistant") continue;
+
+      const content = msg.message?.content ?? msg.content ?? [];
+      for (let j = content.length - 1; j >= 0; j--) {
+        const block = content[j];
+        if (block.type === "tool_use" &&
+            (block.name === "TodoWrite" || block.name === "mcp__buildover-custom-tools__TodoWrite")) {
+          const input = block.input as { todos?: any[] };
+          if (Array.isArray(input?.todos)) {
+            return input.todos;
+          }
+        }
+      }
+    }
+    return [];
+  };
+
+  const customToolsServer = createCustomToolsServer(
+    requestAttentionAck,
+    args.requestCompact,
+    cwd,
+    getCurrentTodos
+  );
 
   const finalPromptContent = renderPromptWithAttachments(prompt, attachments);
 
@@ -182,23 +225,45 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       model,
       cwd: cwd ?? process.cwd(),
       resume: sessionId,
+      // Truncated resume after an edit / branch-switch / revert: cut the
+      // resumed history at this message uuid and fork into a new session so
+      // the abandoned branch's session file stays intact for future branch
+      // switches. The forked session's id arrives via system_init and
+      // replaces record.sessionId (which also clears the one-shot marker).
+      ...(sessionId && resumeSessionAt
+        ? { resumeSessionAt, forkSession: true }
+        : {}),
       permissionMode,
       canUseTool,
       includePartialMessages: false,
+      // The claude_code preset exposes the harness's native TaskCreate/
+      // TaskUpdate/TaskList tools and periodically nudges the model to use
+      // them for progress tracking. We render progress from our own TodoWrite
+      // tool (see useTodos / TodoPanel), so disable the Task tools to stop the
+      // model defaulting to them — otherwise the sidebar never populates.
+      disallowedTools: [
+        "TaskCreate",
+        "TaskUpdate",
+        "TaskList",
+        "TaskGet",
+        "TaskOutput",
+        "TaskStop",
+      ],
       // Pass the controller so the SDK terminates its CLI subprocess on
       // abort; relying on stream.interrupt() alone left the turn running.
       abortController,
-      // Coordinator/subagent chats get extra role instructions appended to
-      // the default Claude Code system prompt.
-      ...(args.systemPromptAppend
-        ? {
-            systemPrompt: {
-              type: "preset" as const,
-              preset: "claude_code" as const,
-              append: args.systemPromptAppend,
-            },
-          }
-        : {}),
+      // Every chat gets a base instruction steering progress tracking to our
+      // TodoWrite tool (rendered in the sidebar via useTodos/TodoPanel). The
+      // native Task tools are disabled above, so without this the model would
+      // simply stop tracking progress. Coordinator/subagent chats get extra
+      // role instructions appended on top.
+      systemPrompt: {
+        type: "preset" as const,
+        preset: "claude_code" as const,
+        append: [TODO_TRACKING_INSTRUCTION, args.systemPromptAppend]
+          .filter(Boolean)
+          .join("\n\n"),
+      },
       // Register custom tools (e.g. RequestUserAttention) so the SDK
       // knows about them and routes them through canUseTool → requestPermission.
       mcpServers: {
@@ -250,6 +315,8 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
 
         case "assistant": {
           const content = normalizeContent(message.message?.content ?? []);
+          // Store assistant messages so getCurrentTodos can scan for TodoWrite calls
+          allMessages.push({ type: "assistant", message: message.message, content });
           emit({
             type: "assistant",
             uuid: message.uuid ?? cryptoRandomId(),

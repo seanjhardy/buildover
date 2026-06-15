@@ -2,6 +2,7 @@ import { useRef, useCallback } from "react";
 import type React from "react";
 import { OpenRepoMenu } from "./OpenRepoMenu.js";
 import { SetupPanel } from "./SetupPanel.js";
+import { RemoteAccessCard } from "./RemoteAccessCard.js";
 import type { RecentRepoInfo } from "../types.js";
 
 interface EmptyWorkspaceProps {
@@ -167,7 +168,10 @@ export function EmptyWorkspace({
       </div>
 
       {/* Setup panel — right column */}
-      <SetupPanel />
+      <div className="ew-right-col">
+        <SetupPanel />
+        <RemoteAccessCard />
+      </div>
       </div>
     </div>
   );

@@ -1,0 +1,217 @@
+/* ============================================================ */
+/* Mobile / phone layout (PWA served over Tailscale).            */
+/*                                                               */
+/* Desktop/Electron is unaffected: the layout rules live inside  */
+/* a max-width breakpoint, and the safe-area insets evaluate to  */
+/* 0 on non-notched displays so they're harmless everywhere.     */
+/* ============================================================ */
+
+/* Keep the top bar clear of the iPhone status bar / notch. With
+   viewport-fit=cover + a translucent status bar, web content extends
+   under the status bar, so we pad by the safe-area inset (0 on desktop). */
+.app-header {
+  padding-top: calc(var(--app-spacing-large) + env(safe-area-inset-top, 0px));
+}
+
+/* The slide-out drawer toggles are desktop-hidden; shown only on mobile. */
+.mobile-drawer-toggle {
+  display: none;
+}
+.mobile-drawer-overlay {
+  display: none;
+}
+.chat-pane-drawer-toggle {
+  display: none;
+}
+
+@media (max-width: 768px) {
+  /* ---- Header: avoid horizontal overflow, respect side insets ---- */
+  .app-header {
+    padding-left: calc(var(--app-spacing-medium) + env(safe-area-inset-left, 0px));
+    padding-right: calc(var(--app-spacing-medium) + env(safe-area-inset-right, 0px));
+    gap: var(--app-spacing-small);
+  }
+  /* Trim noisy header items on a narrow screen. */
+  .app-header .header-session,
+  .app-header .wake-word-label {
+    display: none;
+  }
+  .app-header-right {
+    gap: var(--app-spacing-small);
+    min-width: 0;
+  }
+
+  /* ---- Tiny toggle to pull out the drawer (top-left over the chat) ---- */
+  .mobile-drawer-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    position: absolute;
+    top: 8px;
+    left: 8px;
+    z-index: 35;
+    width: 34px;
+    height: 34px;
+    padding: 0;
+    border: 1px solid var(--app-primary-border-color);
+    border-radius: 8px;
+    background: var(--app-secondary-background);
+    color: var(--app-primary-foreground);
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+    cursor: pointer;
+  }
+
+  /* ---- Chat fills the screen; activity bar + sidebar become a drawer ---- */
+  .workspace > .activity-bar,
+  .workspace > .chat-sidebar,
+  .workspace > .preview-chat-sidebar,
+  .workspace > .sc-sidebar,
+  .workspace > .pr-sidebar {
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    z-index: 40;
+    transition: transform 0.25s ease;
+    will-change: transform;
+  }
+
+  /* Activity bar: leftmost 44px, slid off-screen when closed. */
+  .workspace > .activity-bar {
+    left: 0;
+    transform: translateX(-100%);
+  }
+
+  /* The visible sidebar sits just right of the 44px activity bar and slides
+     fully off (clearing that 44px offset) when the drawer is closed. */
+  .workspace > .chat-sidebar,
+  .workspace > .preview-chat-sidebar,
+  .workspace > .sc-sidebar,
+  .workspace > .pr-sidebar {
+    left: 44px;
+    width: min(var(--sidebar-width, 280px), 80vw);
+    transform: translateX(calc(-44px - 100%));
+    box-shadow: 2px 0 16px rgba(0, 0, 0, 0.4);
+  }
+
+  /* Open state — slide everything into view. */
+  .workspace--drawer-open > .activity-bar,
+  .workspace--drawer-open > .chat-sidebar,
+  .workspace--drawer-open > .preview-chat-sidebar,
+  .workspace--drawer-open > .sc-sidebar,
+  .workspace--drawer-open > .pr-sidebar {
+    transform: translateX(0);
+  }
+
+  /* Main chat area spans the full width (sidebars are out of flow now). */
+  .workspace-panels {
+    width: 100%;
+  }
+
+  /* The desktop drag-to-resize handle is meaningless on touch. */
+  .sidebar-resize-handle {
+    display: none;
+  }
+
+  /* Darken the chat behind the open drawer; tap to close. */
+  .mobile-drawer-overlay {
+    display: block;
+    position: absolute;
+    inset: 0;
+    z-index: 39;
+    background: rgba(0, 0, 0, 0.55);
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.25s ease;
+  }
+  .workspace--drawer-open .mobile-drawer-overlay {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* ---- Lock the page: no document scroll / rubber-band overscroll. The app
+       is a fixed shell; only inner panes (message list, chat list) scroll.
+       Pinning the body stops the whole UI sliding when a chat is scrolled. ---- */
+  html,
+  body {
+    overflow: hidden;
+    overscroll-behavior: none;
+  }
+  body {
+    position: fixed;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .chat-pane-body,
+  .chat-sidebar-list,
+  .message-list,
+  .chat-column {
+    overscroll-behavior: contain;
+  }
+
+  /* ---- Stop iOS auto-zooming when focusing inputs. Safari zooms whenever a
+       focused field is < 16px; bumping to 16px keeps the zoom level fixed and
+       just opens the keyboard. ---- */
+  input,
+  textarea,
+  select,
+  .composer-input {
+    font-size: 16px;
+  }
+
+  /* ---- Trim desktop-only header controls on the phone. ---- */
+  .app-header .caffeine-btn,
+  .app-header .connection-pill {
+    display: none;
+  }
+
+  /* ---- No terminal on mobile. ---- */
+  .terminal-panel {
+    display: none;
+  }
+
+  /* ---- Hide the Home / Market nav tabs on mobile. ---- */
+  .repo-tab--home,
+  .repo-tab--market {
+    display: none;
+  }
+
+  /* ---- Composer permission pill: icon only (hide the text label). ---- */
+  .mode-pill .mode-pill-label {
+    display: none;
+  }
+  .mode-pill {
+    gap: 0;
+  }
+
+  /* ---- Chat header: drop the folder path so the title spans the row, and
+       move the drawer toggle inline to the left of the title. ---- */
+  .chat-pane-meta {
+    display: none;
+  }
+  .chat-pane-header {
+    justify-content: flex-start;
+    gap: var(--app-spacing-medium);
+  }
+  .chat-pane-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .chat-pane-drawer-toggle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    border: 1px solid var(--app-primary-border-color);
+    border-radius: 7px;
+    background: var(--app-secondary-background);
+    color: var(--app-primary-foreground);
+    cursor: pointer;
+  }
+}

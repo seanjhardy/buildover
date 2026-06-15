@@ -3,7 +3,7 @@ import { useTheme } from "./hooks/useTheme.js";
 import { useRunConfig } from "./hooks/useRunConfig.js";
 import { PreviewPane } from "./components/PreviewPane.js";
 import type { TerminalPanelHandle } from "./components/TerminalPanel.js";
-import { Mic, MicOff } from "lucide-react";
+import { Mic, MicOff, PanelLeft } from "lucide-react";
 import { Composer } from "./components/Composer.js";
 import { EmptyChat, EmptyWorkspace } from "./components/EmptyStates.js";
 import { DashboardPanel } from "./components/Dashboard.js";
@@ -28,9 +28,13 @@ import { SchedulePanel } from "./components/SchedulePanel.js";
 import { TodoPanel } from "./components/TodoPanel.js";
 import { FilesPanel } from "./components/FilesPanel.js";
 import { PlansPanel } from "./components/PlansPanel.js";
+import { SubagentsPanel } from "./components/SubagentsPanel.js";
 import { FileViewer } from "./components/FileViewer.js";
 import { PlanViewer } from "./components/PlanViewer.js";
 import { UsageBar } from "./components/UsageBar.js";
+import { CaffeineButton } from "./components/CaffeineButton.js";
+import { NotificationButton } from "./components/NotificationButton.js";
+import { LocalQueueBanner, QueuedTurnsBanner } from "./components/QueuedTurnsBanner.js";
 import { useAgent } from "./hooks/useAgent.js";
 import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
 import { useAudioRingBuffer } from "./hooks/useAudioRingBuffer.js";
@@ -39,6 +43,7 @@ import { useNotifications } from "./hooks/useNotifications.js";
 import { useRepoTabBadges } from "./hooks/useRepoTabBadges.js";
 import { useTodos } from "./hooks/useTodos.js";
 import { usePlans } from "./hooks/usePlans.js";
+import { useSubagents, type SubagentEntry } from "./hooks/useSubagents.js";
 import { useFilesChanged } from "./hooks/useFilesChanged.js";
 import { useWakeWord } from "./hooks/useWakeWord.js";
 import { useWorkspace } from "./hooks/useWorkspace.js";
@@ -85,6 +90,22 @@ export default function App() {
   const isCoordinatorActive =
     activeChatId != null && coordinatorChat?.id === activeChatId;
   const plans = usePlans(activeRepo?.path ?? null, coordinatorChat?.id ?? null);
+  // Subagents for the active chat, from two sources:
+  //  1. In-transcript Agent/Task tool calls (ephemeral SDK subagents).
+  //  2. Real subagent chats spawned by this chat (coordinator's spawn_subagent)
+  //     — these are clickable and navigate to the child chat.
+  const transcriptSubagents = useSubagents(agent.turns, agent.isStreaming);
+  const chatSubagents: SubagentEntry[] = activeChatId != null
+    ? chats.chats
+        .filter((c) => c.parentChatId === activeChatId)
+        .map((c) => ({
+          id: c.id,
+          label: c.task ?? c.title,
+          status: c.status,
+          chatId: c.id,
+        }))
+    : [];
+  const activeSubagents = [...chatSubagents, ...transcriptSubagents];
   const filesChanged = useFilesChanged(
     agent.turns,
     agent.cwd ?? activeRepo?.path ?? "",
@@ -141,6 +162,17 @@ export default function App() {
       : null;
     if (chat?.model) setModel(chat.model);
   }, [activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Once the coordinator chat is confirmed loaded, validate the active chat ID.
+  // If activeChatId is stale (e.g. chats were wiped since last session, or the
+  // repo path was reused for a new project) or null (first visit to this repo),
+  // reset to the coordinator so the user never sends messages into the void.
+  useEffect(() => {
+    if (!coordinatorChat) return; // list not loaded yet
+    const exists = activeChatId != null && chats.chats.some((c) => c.id === activeChatId);
+    if (!exists) {
+      workspace.setActiveChat(coordinatorChat.id);
+    }
+  }, [coordinatorChat?.id]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clear source-control file preview when the active repo changes
   useEffect(() => { setScPreviewFile(null); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   // Clear file explorer editor tabs when the active repo changes
@@ -198,6 +230,9 @@ export default function App() {
   }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [marketOpen, setMarketOpen] = useState(false);
   const [homeOpen, setHomeOpen] = useState(false);
+  // Mobile only: the chat-list/activity-bar slide-out drawer. On desktop the
+  // sidebar is always docked and this state is simply ignored by the CSS.
+  const [drawerOpen, setDrawerOpen] = useState(false);
   const [previewActive, setPreviewActive] = useState(false);
   // Pin the URL at the moment the user opens preview so the iframe survives
   // repo-tab switches (runConfig changes per-repo, but the live app doesn't).
@@ -436,12 +471,17 @@ export default function App() {
     }
   }, [activeChatId, activeRepo]);
 
-  const handleCreateChat = useCallback(async () => {
+  const handleCreateChat = useCallback(() => {
     if (!activeRepo) return;
     setOpenFile(null);
     setOpenPlan(null);
-    const record = await chats.createChat(model, permissionMode);
-    workspace.setActiveChat(record.id);
+    // Generate the ID client-side so we can navigate instantly without
+    // waiting for the server round-trip. The POST confirms/persists it.
+    const ts = Date.now().toString(36);
+    const rand = Math.random().toString(36).slice(2, 8);
+    const id = `ch_${ts}${rand}`;
+    workspace.setActiveChat(id);
+    void chats.createChat(model, permissionMode, id);
   }, [activeRepo, chats, model, permissionMode, workspace]);
 
   const handleRunCommand = useCallback((command: string) => {
@@ -501,9 +541,9 @@ Important rules for commands:
     await chats.deleteChat(chatId);
     if (activeChatId === chatId) {
       // Pick the top remaining chat using the same priority order as the sidebar:
-      // status group order first (awaiting_input > running > error > agent_done > idle > finished),
+      // status group order first (awaiting_input > running > queued > error > agent_done > idle > finished),
       // then most recently updated within each group.
-      const GROUP_ORDER = ["awaiting_input", "running", "error", "agent_done", "idle", "finished"];
+      const GROUP_ORDER = ["awaiting_input", "running", "queued", "error", "agent_done", "idle", "finished"];
       const remaining = chats.chats.filter((c) => c.id !== chatId);
       const nextChat =
         remaining
@@ -523,6 +563,7 @@ Important rules for commands:
     setOpenPlan(null);
     setGitGraphOpen(false); // clicking a chat always exits the git graph
     workspace.setActiveChat(id);
+    setDrawerOpen(false); // mobile: reveal the chat after picking it
   }, [workspace, setGitGraphOpen]);
 
   const handleToggleFinished = useCallback((id: string, finished: boolean) => {
@@ -649,6 +690,7 @@ Important rules for commands:
       : null;
 
   const hasSidePanels =
+    activeSubagents.length > 0 ||
     filesChanged.length > 0 ||
     todos.length > 0 ||
     (isCoordinatorActive && plans.tickets.length > 0);
@@ -682,7 +724,11 @@ Important rules for commands:
             buildover
           </h1>
           <div className="app-header-right">
+            <NotificationButton />
+
             <UsageBar />
+
+            <CaffeineButton />
 
             {/* Wake word toggle */}
             {wakeWord.isSupported && (
@@ -799,12 +845,32 @@ Important rules for commands:
             display:none instead of unmounting it when home/market is active. */}
         {activeRepo && (
           <div
-            className={`workspace${openFile ? " workspace--file-open" : ""}${openPlanTicket ? " workspace--plan-open" : ""}`}
+            className={`workspace${openFile ? " workspace--file-open" : ""}${openPlanTicket ? " workspace--plan-open" : ""}${drawerOpen ? " workspace--drawer-open" : ""}`}
             style={{
               display: (marketOpen || homeOpen) ? "none" : undefined,
               '--sidebar-width': `${sidebarWidth}px`,
             } as React.CSSProperties}
           >
+            {/* Mobile: tap-to-close darkening overlay behind the open drawer.
+                display:none on desktop via mobile.css. */}
+            <div
+              className="mobile-drawer-overlay"
+              onClick={() => setDrawerOpen(false)}
+              aria-hidden="true"
+            />
+            {/* Floating drawer toggle for views without their own header bar
+                (files, source control, PRs, git graph, empty chat). In the
+                normal chat view the toggle lives inside .chat-pane-header. */}
+            {!(activeView === "chat" && !previewActive && !gitGraphOpen && activeChat) && (
+              <button
+                className="mobile-drawer-toggle"
+                onClick={() => setDrawerOpen(true)}
+                aria-label="Open chat list"
+              >
+                <PanelLeft size={18} />
+              </button>
+            )}
+
             {/* File viewer slides in from the right, absolutely positioned */}
             {openFile && (
               <FileViewer
@@ -1128,6 +1194,13 @@ Important rules for commands:
                   ) : (
                     <>
                       <div className="chat-pane-header">
+                        <button
+                          className="chat-pane-drawer-toggle"
+                          onClick={() => setDrawerOpen(true)}
+                          aria-label="Open chat list"
+                        >
+                          <PanelLeft size={18} />
+                        </button>
                         <div className="chat-pane-title">{activeChat.title}</div>
                         <div className="chat-pane-meta">
                           {activeRepo.path}
@@ -1152,6 +1225,8 @@ Important rules for commands:
                               onRevert={agent.revertToCheckpoint}
                               chatId={activeChatId ?? undefined}
                             />
+                            <QueuedTurnsBanner queuedTurns={agent.queuedTurns} />
+                            <LocalQueueBanner localQueue={agent.localQueue} />
                             {agent.pendingAttention && (
                               <AttentionPrompt
                                 pending={agent.pendingAttention}
@@ -1203,13 +1278,19 @@ Important rules for commands:
                             <MessageJumpBar
                               jumpBarRef={jumpBarRef}
                             />
-                            {!todoNarrow && (filesChanged.length > 0 || todos.length > 0 || (isCoordinatorActive && plans.tickets.length > 0)) && (
+                            {!todoNarrow && (activeSubagents.length > 0 || filesChanged.length > 0 || todos.length > 0 || (isCoordinatorActive && plans.tickets.length > 0)) && (
                               <div className="right-rail-panels">
                                 {isCoordinatorActive && (
                                   <PlansPanel
                                     tickets={plans.tickets}
                                     onOpen={(t) => { setOpenFile(null); setOpenPlan(t.id); }}
                                     activePlanId={openPlan}
+                                  />
+                                )}
+                                {activeSubagents.length > 0 && (
+                                  <SubagentsPanel
+                                    subagents={activeSubagents}
+                                    onSelectChat={(chatId) => workspace.setActiveChat(chatId)}
                                   />
                                 )}
                                 {filesChanged.length > 0 && (
@@ -1224,13 +1305,29 @@ Important rules for commands:
                                 )}
                               </div>
                             )}
-                            {todoNarrow && (todos.length > 0 || (isCoordinatorActive && plans.tickets.length > 0)) && (
+                            {todoNarrow && (activeSubagents.length > 0 || filesChanged.length > 0 || todos.length > 0 || (isCoordinatorActive && plans.tickets.length > 0)) && (
                               <div className="right-rail-panels">
                                 {isCoordinatorActive && plans.tickets.length > 0 && (
                                   <PlansPanel
                                     tickets={plans.tickets}
                                     onOpen={(t) => { setOpenFile(null); setOpenPlan(t.id); }}
                                     activePlanId={openPlan}
+                                    compact={true}
+                                  />
+                                )}
+                                {activeSubagents.length > 0 && (
+                                  <SubagentsPanel
+                                    subagents={activeSubagents}
+                                    onSelectChat={(chatId) => workspace.setActiveChat(chatId)}
+                                    compact={true}
+                                  />
+                                )}
+                                {filesChanged.length > 0 && (
+                                  <FilesPanel
+                                    files={filesChanged}
+                                    onFileOpen={(entry) => { setOpenPlan(null); setOpenFile(entry); }}
+                                    activeFilePath={openFile?.path ?? null}
+                                    compact={true}
                                   />
                                 )}
                                 {todos.length > 0 && (

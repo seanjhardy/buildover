@@ -1,21 +1,28 @@
 import { runAgentTurn, type RawAgentEvent } from "./agent.js";
+import { runOpenAIAgentTurn, isOpenAIModel } from "./openaiAgent.js";
+import { isCodexAvailable } from "./codexUsage.js";
 import { makeCoordinationMcp } from "./coordinationTools.js";
 import { coordinatorPrompt, subagentPrompt } from "./prompts.js";
 import {
   appendEvent,
   computeStatus,
+  enqueueChatTurn,
   forkAtMessage,
   readChat,
   rebuildIndex,
   recoverStaleChat,
   revertToCheckpoint,
   setTitle,
+  shiftQueuedChatTurn,
   switchBranch,
   withChatLock,
   writeChat,
 } from "./chats.js";
+import { basename } from "node:path";
+import { notifyAgentFinished } from "./push.js";
 import { generateTitle } from "./title.js";
 import { makeCheckpointId, saveSnapshot } from "./snapshots.js";
+import { getUsageLimitBlock, type UsageLimitBlock } from "./usage.js";
 import type {
   AgentEvent,
   Attachment,
@@ -24,6 +31,7 @@ import type {
   MessageOrigin,
   Model,
   PermissionMode,
+  QueuedChatTurn,
 } from "../src/types.js";
 
 export type Subscriber = (event: AgentEvent) => void;
@@ -53,6 +61,111 @@ interface PendingAttention {
 
 // Percentage of context window used that triggers automatic compaction.
 const AUTO_COMPACT_THRESHOLD = 80;
+const USAGE_QUEUE_POLL_MS = 60_000;
+const MAX_TIMER_MS = 2_147_483_647;
+
+const queueTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function queueTimerKey(repoPath: string, chatId: string): string {
+  return `${repoPath}\u0000${chatId}`;
+}
+
+function makeQueuedTurnId(): string {
+  return `qt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function delayUntil(runAfter: string | null): number {
+  if (!runAfter) return USAGE_QUEUE_POLL_MS;
+  const target = new Date(runAfter).getTime();
+  if (!Number.isFinite(target)) return USAGE_QUEUE_POLL_MS;
+  return Math.min(Math.max(0, target - Date.now()) + 2_000, MAX_TIMER_MS);
+}
+
+export function scheduleQueuedTurnDrain(
+  repoPath: string,
+  chatId: string,
+  runAfter: string | null,
+): void {
+  const key = queueTimerKey(repoPath, chatId);
+  const existing = queueTimers.get(key);
+  if (existing) clearTimeout(existing);
+  const timer = setTimeout(() => {
+    queueTimers.delete(key);
+    void drainQueuedTurns(repoPath, chatId);
+  }, delayUntil(runAfter));
+  queueTimers.set(key, timer);
+}
+
+export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void> {
+  const { listChats, readChat } = await import("./chats.js");
+  const chats = await listChats(repoPath);
+  for (const chat of chats) {
+    if (chat.status !== "queued") continue;
+    const record = await readChat(repoPath, chat.id).catch(() => null);
+    const next = record?.queuedTurns?.[0];
+    if (next) scheduleQueuedTurnDrain(repoPath, chat.id, next.runAfter);
+  }
+}
+
+const CODEX_FALLBACK_MODEL = "codex-mini-latest";
+
+async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void> {
+  const session = getSession(repoPath, chatId);
+  if (session.isRunning()) {
+    scheduleQueuedTurnDrain(repoPath, chatId, new Date(Date.now() + 5_000).toISOString());
+    return;
+  }
+
+  const usageBlock = await getUsageLimitBlock();
+  if (usageBlock) {
+    // Claude is exhausted — try running the queued turn via Codex instead.
+    const shifted = await shiftQueuedChatTurn(repoPath, chatId);
+    if (shifted && !isOpenAIModel(shifted.turn.model) && await isCodexAvailable()) {
+      console.log(`[usage-queue] Claude blocked, falling back to ${CODEX_FALLBACK_MODEL} for ${chatId}`);
+      await session.pushStatusForRecord(shifted.record);
+      void session
+        .runTurn({
+          text: shifted.turn.text,
+          model: CODEX_FALLBACK_MODEL,
+          permissionMode: shifted.turn.permissionMode,
+          attachments: shifted.turn.attachments,
+          isRetry: true,
+          origin: shifted.turn.origin,
+          originLabel: shifted.turn.originLabel,
+        })
+        .catch((err) => {
+          console.warn(`[usage-queue] Codex fallback failed for ${chatId}:`, err instanceof Error ? err.message : err);
+        });
+      return;
+    }
+    // Neither Claude nor Codex is available — wait and retry.
+    const record = await readChat(repoPath, chatId);
+    await session.pushStatusForRecord(record);
+    scheduleQueuedTurnDrain(repoPath, chatId, usageBlock.resetsAt);
+    return;
+  }
+
+  const shifted = await shiftQueuedChatTurn(repoPath, chatId);
+  if (!shifted) return;
+
+  await session.pushStatusForRecord(shifted.record);
+  void session
+    .runTurn({
+      text: shifted.turn.text,
+      model: shifted.turn.model,
+      permissionMode: shifted.turn.permissionMode,
+      attachments: shifted.turn.attachments,
+      isRetry: true,
+      origin: shifted.turn.origin,
+      originLabel: shifted.turn.originLabel,
+    })
+    .catch((err) => {
+      console.warn(
+        `[usage-queue] queued turn failed for ${chatId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
+}
 
 // One AgentSession per chat. Lives independently of the WS connections that
 // happen to be subscribed at any given moment — closing the browser does not
@@ -164,7 +277,14 @@ class AgentSession {
       });
       this.broadcastUserEcho(userId, args.text, undefined, args.origin, args.originLabel);
       // isRetry: the parked turn must not double-persist/echo the message.
-      this.pendingUserTurns.push({ text: args.text, model, permissionMode, isRetry: true });
+      this.pendingUserTurns.push({
+        text: args.text,
+        model,
+        permissionMode,
+        isRetry: true,
+        origin: args.origin,
+        originLabel: args.originLabel,
+      });
       return;
     }
     // Guarded fire-and-forget: a rejection here (e.g. a race on the running
@@ -223,13 +343,138 @@ class AgentSession {
 
   private async pushStatusFor(record: ChatRecord | null): Promise<void> {
     if (!record) return;
+    const status = computeStatus(record);
     this.broadcast({
       type: "chat_status",
       chatId: this.chatId,
-      status: record.status,
+      status,
       sessionId: record.sessionId,
     });
     await rebuildIndex(this.repoPath);
+  }
+
+  async pushStatusForRecord(record: ChatRecord | null): Promise<void> {
+    await this.pushStatusFor(record);
+  }
+
+  private async queueForUsageLimit(
+    args: {
+      text: string;
+      model: Model;
+      permissionMode: PermissionMode;
+      attachments?: Attachment[];
+      isRetry?: boolean;
+      origin?: MessageOrigin;
+      originLabel?: string;
+    },
+    usageBlock: UsageLimitBlock,
+  ): Promise<void> {
+    const userId = `u-${Date.now()}`;
+    const ts = new Date().toISOString();
+    const userEvent: ChatEvent | undefined = args.isRetry
+      ? undefined
+      : {
+          type: "user_message",
+          id: userId,
+          text: args.text,
+          attachments: args.attachments,
+          ts,
+          origin: args.origin,
+          originLabel: args.originLabel,
+        };
+    const queuedTurn: QueuedChatTurn = {
+      id: makeQueuedTurnId(),
+      text: args.text,
+      model: args.model,
+      permissionMode: args.permissionMode,
+      attachments: args.attachments,
+      origin: args.origin,
+      originLabel: args.originLabel,
+      createdAt: ts,
+      runAfter: usageBlock.resetsAt,
+      reason: usageBlock.message,
+    };
+
+    const wasFirstUserTurn = await readChat(this.repoPath, this.chatId).then(
+      (record) => !record?.events.some((e) => e.type === "user_message"),
+    );
+    const updated = await enqueueChatTurn(
+      this.repoPath,
+      this.chatId,
+      queuedTurn,
+      userEvent,
+    );
+
+    if (userEvent) {
+      this.broadcastUserEcho(
+        userId,
+        args.text,
+        args.attachments,
+        args.origin,
+        args.originLabel,
+      );
+      if (wasFirstUserTurn && (updated?.kind ?? "user") === "user") {
+        void this.generateAndApplyTitle(args.text);
+      }
+    }
+    await this.pushStatusFor(updated);
+    scheduleQueuedTurnDrain(this.repoPath, this.chatId, usageBlock.resetsAt);
+  }
+
+  // Decides whether a mid-turn failure was caused by the usage/session limit
+  // being exhausted while the agent was working. Returns the block to re-queue
+  // against, or null for a genuine error that should surface normally.
+  //
+  // Two complementary signals are used:
+  //   1. getUsageLimitBlock() — authoritative; reports the real reset time once
+  //      the usage endpoint reflects the maxed-out bucket.
+  //   2. the SDK error text — a fast path for the brief window where the limit
+  //      has been hit but the usage endpoint hasn't caught up yet. In that case
+  //      we synthesize a block with no reset time; the drain falls back to
+  //      60s polling and re-checks getUsageLimitBlock until the real reset is
+  //      known or capacity returns.
+  private async usageBlockForFailure(
+    errorMessage: string,
+  ): Promise<UsageLimitBlock | null> {
+    const block = await getUsageLimitBlock().catch(() => null);
+    if (block) return block;
+    if (/rate.?limit|429|usage limit|quota|exceeded your/i.test(errorMessage)) {
+      return {
+        message:
+          "Usage limit reached while the agent was working. Execution is deferred until the limit resets.",
+        resetsAt: null,
+      };
+    }
+    return null;
+  }
+
+  // Handles a turn that failed (either a mid-turn `error` event from the SDK or
+  // an unexpected throw). If the failure was caused by the usage/session limit,
+  // the in-flight turn is re-queued so it revives automatically after the reset
+  // and `true` is returned. Otherwise the error is surfaced normally and `false`
+  // is returned. The caller uses the return value to skip auto-compaction.
+  private async finalizeFailure(
+    args: Parameters<AgentSession["runTurn"]>[0],
+    message: string,
+  ): Promise<boolean> {
+    // Silent (auto-compact) turns never block on usage and carry no
+    // user-visible message to resume, so they always surface the error.
+    const usageBlock = args.silent
+      ? null
+      : await this.usageBlockForFailure(message);
+    if (usageBlock) {
+      // isRetry: the user message is already persisted (echoed at turn start),
+      // so the queued turn must not double-persist or re-echo it.
+      await this.queueForUsageLimit({ ...args, isRetry: true }, usageBlock);
+      return true;
+    }
+    this.broadcast({ type: "error", chatId: this.chatId, message });
+    await this.record({
+      type: "error",
+      message,
+      ts: new Date().toISOString(),
+    });
+    return false;
   }
 
   // Resolves an outstanding permission request. Called when a client sends a
@@ -427,6 +672,24 @@ class AgentSession {
       }
       throw new Error("Chat already running");
     }
+
+    // Check usage limit before starting a new turn. When Claude is exhausted
+    // we first try to fall back to Codex (if the selected model is a Claude
+    // model and Codex is available). Only queue when both are unavailable.
+    if (!args.silent) {
+      const usageBlock = await getUsageLimitBlock();
+      if (usageBlock && !isOpenAIModel(args.model)) {
+        const codexReady = await isCodexAvailable();
+        if (codexReady) {
+          console.log(`[session] Claude blocked — falling back to ${CODEX_FALLBACK_MODEL}`);
+          args = { ...args, model: CODEX_FALLBACK_MODEL };
+        } else {
+          await this.queueForUsageLimit(args, usageBlock);
+          return;
+        }
+      }
+    }
+
     this.running = true;
     this.currentTurnSilent = args.silent ?? false;
     this.abort = new AbortController();
@@ -494,30 +757,31 @@ class AgentSession {
     // Track the latest model so we can use it for the auto-compact turn.
     this.lastModel = args.model;
 
-    // Coordinator / subagent chats get role instructions and the coordination
-    // toolset on every turn.
+    // All chats get the buildover-agents toolset so any chat can spawn and
+    // manage subagents. Coordinator / subagent chats additionally receive role
+    // instructions via systemPromptAppend.
     const chatKind = record.kind ?? "user";
-    const coordination =
-      chatKind === "coordinator" || chatKind === "subagent"
-        ? {
-            systemPromptAppend:
-              chatKind === "coordinator"
-                ? coordinatorPrompt()
-                : subagentPrompt({
-                    parentChatId: record.parentChatId ?? "unknown",
-                    task: record.task,
-                  }),
-            extraMcpServers: {
-              "buildover-agents": makeCoordinationMcp({
-                repoPath: this.repoPath,
-                chatId: this.chatId,
-                kind: chatKind,
-                parentChatId: record.parentChatId,
-                task: record.task,
-              }),
-            },
-          }
-        : {};
+    const systemPromptAppend =
+      chatKind === "coordinator"
+        ? coordinatorPrompt()
+        : chatKind === "subagent"
+          ? subagentPrompt({
+              parentChatId: record.parentChatId ?? "unknown",
+              task: record.task,
+            })
+          : undefined;
+    const coordination = {
+      ...(systemPromptAppend ? { systemPromptAppend } : {}),
+      extraMcpServers: {
+        "buildover-agents": makeCoordinationMcp({
+          repoPath: this.repoPath,
+          chatId: this.chatId,
+          kind: chatKind,
+          parentChatId: record.parentChatId,
+          task: record.task,
+        }),
+      },
+    };
 
     // Events that should be hidden from subscribers during a silent (auto-compact) turn.
     // We still persist assistant/result events so the session history is correct,
@@ -536,12 +800,24 @@ class AgentSession {
       "context_usage",
     ]);
 
+    // Captures a mid-turn `error` event emitted by the SDK runner so the
+    // failure can be handled after the stream ends. The runner catches API
+    // failures internally and emits them as `error` events (it does not throw),
+    // so this is where a usage-limit-mid-turn surfaces. We defer rather than
+    // broadcast/persist immediately: if it turns out to be a usage-limit hit we
+    // re-queue the turn instead of leaving a dead-end error in the transcript.
+    let deferredErrorMessage: string | null = null;
+
     const emit = (event: RawAgentEvent) => {
       // Tag with this session's chatId before broadcasting / persisting.
       const tagged = { ...event, chatId: this.chatId } as AgentEvent;
       // Track context usage so we can auto-compact after the turn ends.
       if (tagged.type === "context_usage") {
         this.lastContextPct = tagged.pct;
+      }
+      if (tagged.type === "error") {
+        deferredErrorMessage = tagged.message;
+        return;
       }
       // During a silent turn (auto-compact), suppress turn-content events from
       // reaching subscribers so nothing appears in the chat UI.
@@ -557,11 +833,55 @@ class AgentSession {
     // the main repoPath; only the SDK's execution cwd changes.
     const execCwd = record.worktreePath ?? this.repoPath;
 
+    // Set when a turn failure is re-queued because the usage limit was hit
+    // mid-flight. The finally block reads it to skip auto-compaction (a silent
+    // compact turn bypasses the usage check and would fail immediately).
+    let queuedForUsage = false;
+
     try {
+      // Route to the correct runner based on the model provider.
+      if (isOpenAIModel(args.model)) {
+        await runOpenAIAgentTurn({
+          prompt: args.text,
+          model: args.model,
+          cwd: execCwd,
+          permissionMode: args.permissionMode,
+          getPermissionMode: () => this.currentPermissionMode,
+          attachments: args.attachments,
+          conversationHistory: record.events,
+          emit,
+          requestPermission: (req) =>
+            new Promise((resolve) => {
+              const requestId = `pr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+              this.pendingPermissions.set(requestId, {
+                requestId,
+                toolName: req.toolName,
+                input: req.input,
+                suggestions: req.suggestions ?? [],
+                resolve,
+              });
+              const ev: AgentEvent = {
+                type: "permission_request",
+                chatId: this.chatId,
+                requestId,
+                toolName: req.toolName,
+                input: req.input,
+                suggestions: req.suggestions,
+              };
+              this.broadcast(ev);
+              void this.persistAgentEvent(ev);
+            }),
+          abortController: this.abort,
+        });
+      } else {
       await runAgentTurn({
         prompt: args.text,
         model: args.model,
         sessionId: record.sessionId,
+        // One-shot marker set by fork / branch-switch / revert: resume the
+        // session only up to this SDK message uuid so the model never sees
+        // the edited-away / reverted history.
+        resumeSessionAt: record.resumeSessionAt,
         cwd: execCwd,
         permissionMode: args.permissionMode,
         getPermissionMode: () => this.currentPermissionMode,
@@ -636,16 +956,25 @@ class AgentSession {
             }
           : undefined,
       });
+      }
+
+      // The SDK runner reports mid-turn API failures as `error` events (it does
+      // not throw), so handle a deferred error here. If it was caused by the
+      // usage/session limit being exhausted while the agent was working, the
+      // turn is re-queued to revive automatically after the reset instead of
+      // surfacing a dead-end error.
+      if (deferredErrorMessage) {
+        queuedForUsage = await this.finalizeFailure(args, deferredErrorMessage);
+      }
     } catch (err) {
+      // An unexpected throw from the runner itself (not the in-stream error
+      // path above). Route it through the same handler so a usage limit here is
+      // also re-queued rather than surfaced as a dead end.
       const message = err instanceof Error ? err.message : String(err);
-      this.broadcast({ type: "error", chatId: this.chatId, message });
-      await this.record({
-        type: "error",
-        message,
-        ts: new Date().toISOString(),
-      });
+      queuedForUsage = await this.finalizeFailure(args, message);
     } finally {
       this.running = false;
+      const wasSilent = this.currentTurnSilent;
       this.currentTurnSilent = false;
       this.pendingPermissions.clear();
       const final = await withChatLock(this.repoPath, this.chatId, async () => {
@@ -659,8 +988,11 @@ class AgentSession {
 
       // Auto-compact if the context window is getting full, or if the agent
       // explicitly requested a compact via the ClearContext tool.
-      // Guard: don't re-trigger on the compact turn itself to avoid a loop.
+      // Guard: don't re-trigger on the compact turn itself to avoid a loop, and
+      // never start a compact turn when we just queued for a usage limit — it
+      // would skip the usage check and immediately fail again.
       const shouldCompact =
+        !queuedForUsage &&
         (this.lastContextPct >= AUTO_COMPACT_THRESHOLD || this.pendingCompact) &&
         !args.text.startsWith("/compact");
       this.pendingCompact = false;
@@ -679,6 +1011,19 @@ class AgentSession {
         // will drain the next entry, and so on until the queue is empty.
         const queued = this.pendingUserTurns.shift()!;
         void this.runTurn(queued);
+      } else {
+        const record = await readChat(this.repoPath, this.chatId);
+        const next = record?.queuedTurns?.[0];
+        if (next) {
+          scheduleQueuedTurnDrain(this.repoPath, this.chatId, next.runAfter);
+        } else if (!wasSilent) {
+          // Agent fully finished this chat (no compact, no queued follow-up).
+          // Push to the phone if the Mac has been idle a while (handled inside).
+          void notifyAgentFinished(
+            record?.title ?? this.chatId,
+            basename(this.repoPath),
+          );
+        }
       }
     }
   }

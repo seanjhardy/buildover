@@ -197,6 +197,26 @@
 .sc-status-letter--deleted  { color: #e03131; }
 .sc-status-letter--modified { color: #4e9de0; }
 
+.sc-detached-banner {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-medium);
+  background: rgba(245, 159, 0, 0.1);
+  border-bottom: 1px solid rgba(245, 159, 0, 0.25);
+  color: #f59f00;
+  font-size: 11px;
+  font-weight: 500;
+}
+.sc-detached-banner code {
+  font-family: var(--font-mono, monospace);
+  font-size: 10px;
+  background: rgba(245, 159, 0, 0.15);
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
 .sc-sidebar-controls {
   flex-shrink: 0;
   border-bottom: 1px solid var(--app-primary-border-color);

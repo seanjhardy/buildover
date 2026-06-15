@@ -8,6 +8,8 @@ interface Props {
   onOpen: (ticket: PlanTicket) => void;
   /** Id of the ticket currently open in the detail pane (highlighted). */
   activePlanId?: string | null;
+  /** When true, renders as a narrow icon strip (same style as the jump bar) */
+  compact?: boolean;
 }
 
 const STATUS_LABEL: Record<PlanTicketStatus, string> = {
@@ -19,15 +21,25 @@ const STATUS_LABEL: Record<PlanTicketStatus, string> = {
   rejected: "Rejected",
 };
 
+function statusIcon(status: PlanTicketStatus): string {
+  if (status === "draft") return "○";
+  if (status === "approved") return "◎";
+  if (status === "in_progress") return "★";
+  if (status === "agent_done") return "✓";
+  if (status === "done") return "☑";
+  if (status === "rejected") return "✗";
+  return "○";
+}
+
 // The plan board shown beside the coordinator chat. Tickets are ordered by
 // priority; clicking a card opens it in the right-side PlanViewer where the
 // user approves drafts, signs off agent-finished work, reorders, or messages
 // the agent working on the plan. Closed tickets (done/rejected) are tucked
 // behind a collapsed toggle so the board only shows live work by default.
-export function PlansPanel({ tickets, onOpen, activePlanId }: Props) {
-  const [showClosed, setShowClosed] = useState(false);
 
-  if (tickets.length === 0) return null;
+/** Full panel — shown when there is enough horizontal space */
+function FullPanel({ tickets, onOpen, activePlanId }: { tickets: PlanTicket[]; onOpen: (ticket: PlanTicket) => void; activePlanId?: string | null }) {
+  const [showClosed, setShowClosed] = useState(false);
 
   const isClosed = (t: PlanTicket) =>
     t.status === "done" || t.status === "rejected";
@@ -89,4 +101,38 @@ export function PlansPanel({ tickets, onOpen, activePlanId }: Props) {
       </div>
     </div>
   );
+}
+
+/** Icon strip — shown when the window is narrow; sits in the right-rail beside the jump bar */
+function IconStrip({ tickets, onOpen }: { tickets: PlanTicket[]; onOpen: (ticket: PlanTicket) => void }) {
+  const isClosed = (t: PlanTicket) =>
+    t.status === "done" || t.status === "rejected";
+  // Only show open tickets in compact mode
+  const openTickets = tickets.filter((t) => !isClosed(t));
+
+  if (openTickets.length === 0) return null;
+
+  return (
+    <div className="plans-icon-strip">
+      {openTickets.map((ticket) => (
+        <button
+          key={ticket.id}
+          type="button"
+          className={`plans-strip-item plans-strip-item--${ticket.status}`}
+          onClick={() => onOpen(ticket)}
+        >
+          <span className="plans-strip-icon">{statusIcon(ticket.status)}</span>
+          <div className="plans-strip-tooltip">
+            <span className="plans-strip-tooltip-status">{STATUS_LABEL[ticket.status]}</span>
+            {ticket.title}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function PlansPanel({ tickets, onOpen, activePlanId, compact }: Props) {
+  if (tickets.length === 0) return null;
+  return compact ? <IconStrip tickets={tickets} onOpen={onOpen} /> : <FullPanel tickets={tickets} onOpen={onOpen} activePlanId={activePlanId} />;
 }

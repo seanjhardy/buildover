@@ -378,12 +378,19 @@ interface Props {
   files: FileEntry[];
   onFileOpen: (entry: FileEntry) => void;
   activeFilePath: string | null;
+  /** When true, renders as a narrow icon strip (same style as the jump bar) */
+  compact?: boolean;
 }
 
-export function FilesPanel({ files, onFileOpen, activeFilePath }: Props) {
-  const [collapsed, setCollapsed] = useState(false);
+function opIcon(op: FileEntry["op"]): string {
+  if (op === "write") return "+";
+  if (op === "delete") return "−";
+  return "~";
+}
 
-  if (files.length === 0) return null;
+/** Full panel — shown when there is enough horizontal space */
+function FullPanel({ files, onFileOpen, activeFilePath }: { files: FileEntry[]; onFileOpen: (entry: FileEntry) => void; activeFilePath: string | null }) {
+  const [collapsed, setCollapsed] = useState(false);
 
   const tree = buildTree(files);
   const totalAdded   = files.reduce((s, f) => s + (f.added   ?? 0), 0);
@@ -433,4 +440,30 @@ export function FilesPanel({ files, onFileOpen, activeFilePath }: Props) {
       )}
     </div>
   );
+}
+
+/** Icon strip — shown when the window is narrow; sits in the right-rail beside the jump bar */
+function IconStrip({ files, onFileOpen }: { files: FileEntry[]; onFileOpen: (entry: FileEntry) => void }) {
+  return (
+    <div className="files-icon-strip">
+      {files.map((file, i) => (
+        <button
+          key={i}
+          type="button"
+          className={`files-strip-item files-strip-item--${file.op}`}
+          onClick={() => onFileOpen(file)}
+        >
+          <span className="files-strip-icon">{opIcon(file.op)}</span>
+          <div className="files-strip-tooltip">
+            {file.relPath}
+          </div>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+export function FilesPanel({ files, onFileOpen, activeFilePath, compact }: Props) {
+  if (files.length === 0) return null;
+  return compact ? <IconStrip files={files} onFileOpen={onFileOpen} /> : <FullPanel files={files} onFileOpen={onFileOpen} activeFilePath={activeFilePath} />;
 }

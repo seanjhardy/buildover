@@ -20,3 +20,40 @@ self.addEventListener("activate", (event) => {
 self.addEventListener("fetch", () => {
   // No-op: let the request proceed to the network untouched.
 });
+
+// ── Web Push ────────────────────────────────────────────────────────────────
+// Server pushes a JSON payload {title, body, tag, url}; show it as a system
+// notification. On iOS this only fires when the app is installed to the Home
+// Screen and notification permission has been granted.
+self.addEventListener("push", (event) => {
+  let data = {};
+  try {
+    data = event.data ? event.data.json() : {};
+  } catch (e) {
+    data = { title: "buildover", body: event.data ? event.data.text() : "" };
+  }
+  const title = data.title || "buildover";
+  event.waitUntil(
+    self.registration.showNotification(title, {
+      body: data.body || "",
+      tag: data.tag || "buildover",
+      icon: "/icons/icon-192.png",
+      badge: "/icons/icon-192.png",
+      data: { url: data.url || "/" },
+    }),
+  );
+});
+
+// Tapping a notification focuses an existing app window or opens a new one.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const url = (event.notification.data && event.notification.data.url) || "/";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((clients) => {
+      for (const client of clients) {
+        if ("focus" in client) return client.focus();
+      }
+      if (self.clients.openWindow) return self.clients.openWindow(url);
+    }),
+  );
+});

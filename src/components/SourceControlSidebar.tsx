@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { ChevronsUp, ChevronRight, ChevronDown, RefreshCw, Check, Wand2 } from "lucide-react";
+import { ChevronsUp, ChevronRight, ChevronDown, RefreshCw, Check, Wand2, AlertTriangle } from "lucide-react";
 import { gitApi, type GitStatus } from "../lib/api.js";
 import type { ChangedFile } from "../lib/api.js";
 
@@ -419,17 +419,36 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
   const hasLoadedRef = useRef(false);
 
   const refresh = useCallback(async () => {
-    try {
-      const [status, filesResult] = await Promise.all([
-        gitApi.getStatus(repoPath),
-        gitApi.getStatusFiles(repoPath).catch(() => null),
-      ]);
-      setGitStatus(status);
-      if (filesResult) setStatusFiles(filesResult);
+    // Use allSettled so a failure in one request doesn't block the other.
+    // This keeps the sidebar functional even in unusual git states (detached
+    // HEAD, mid-rebase, fresh repo, etc.)
+    const [statusSettled, filesSettled] = await Promise.allSettled([
+      gitApi.getStatus(repoPath),
+      gitApi.getStatusFiles(repoPath),
+    ]);
+
+    if (statusSettled.status === "fulfilled") {
+      setGitStatus(statusSettled.value);
       setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+    } else {
+      // Status failed — provide a minimal fallback so the UI still renders
+      // (file tree, commit form) instead of showing nothing at all.
+      setGitStatus((prev) => prev ?? {
+        currentBranch: "unknown",
+        branches: [],
+        ahead: 0,
+        behind: 0,
+        isDirty: false,
+        hasUpstream: false,
+        isDetached: false,
+      });
+      setError(statusSettled.reason instanceof Error ? statusSettled.reason.message : String(statusSettled.reason));
     }
+
+    if (filesSettled.status === "fulfilled") {
+      setStatusFiles(filesSettled.value);
+    }
+    // If files failed, keep previous files rather than clearing
   }, [repoPath]);
 
   // Reset when repo changes
@@ -553,6 +572,14 @@ export function SourceControlSidebar({ repoPath, hidden, onFilePreview, previewF
           <RefreshCw size={14} className={loading ? "spin" : ""} />
         </button>
       </div>
+
+      {/* Detached HEAD warning */}
+      {gitStatus?.isDetached && (
+        <div className="sc-detached-banner">
+          <AlertTriangle size={12} />
+          <span>Detached HEAD at <code>{gitStatus.currentBranch}</code></span>
+        </div>
+      )}
 
       {/* Commit / Push / Pull — fixed, above the scrollable list */}
       {gitStatus && (

@@ -64,6 +64,14 @@ export function UsageBar() {
   const sessionResetsIn = formatTimeUntil(session?.resetsAt ?? null);
   const compactColor = session ? colorFor(session.utilization) : undefined;
 
+  // Check if any bucket is at 100%
+  const isBlocked = usage && [
+    usage.fiveHour,
+    usage.sevenDay,
+    usage.sevenDaySonnet,
+    usage.sevenDayOpus,
+  ].some(bucket => bucket && bucket.utilization >= 100);
+
   return (
     <div
       className="usage-bar"
@@ -74,11 +82,21 @@ export function UsageBar() {
         className="usage-trigger"
         onClick={refresh}
         title="Click to refresh"
+        style={isBlocked ? { color: "var(--app-error)", fontWeight: 600 } : undefined}
       >
         {error ? (
           <span style={{ color: "var(--app-error)" }}>usage error</span>
         ) : !usage ? (
           <span>{loading ? "loading usage…" : "usage"}</span>
+        ) : isBlocked ? (
+          <>
+            <span style={{ color: "var(--app-error)" }}>
+              ⚠ Usage limit reached
+            </span>
+            <span className="usage-trigger-sep">·</span>
+            <span>{sessionResetsIn}</span>
+            {loading && <span className="usage-trigger-sep">refreshing…</span>}
+          </>
         ) : (
           <>
             <span style={{ color: compactColor }}>
@@ -93,6 +111,12 @@ export function UsageBar() {
       {hover && usage && (
         <div className="usage-popover" role="dialog">
           <div className="usage-popover-title">Claude Code Usage</div>
+          {isBlocked && (
+            <div className="usage-limit-warning">
+              ⚠ Agent execution is disabled until usage resets.
+              Any messages you send will be queued and automatically run when capacity is available.
+            </div>
+          )}
           {usage.fiveHour && <Bar bucket={usage.fiveHour} label="Session" />}
           {usage.sevenDay && <Bar bucket={usage.sevenDay} label="Weekly" />}
           {usage.sevenDayOpus && (

@@ -20,7 +20,14 @@ export function useTodos(turns: ChatTurn[]): AgentTodo[] {
       if (turn.kind !== "assistant") continue;
       for (let j = turn.content.length - 1; j >= 0; j--) {
         const block = turn.content[j];
-        if (block.type === "tool_use" && block.name === "TodoWrite") {
+        // The tool is registered through the `buildover-custom-tools` SDK MCP
+        // server, so its name in the turn history is fully qualified
+        // (`mcp__buildover-custom-tools__TodoWrite`). Match both the bare and
+        // prefixed forms, mirroring how RenderSVG/RenderTable/etc. are matched.
+        if (
+          block.type === "tool_use" &&
+          (block.name === "TodoWrite" || block.name.endsWith("__TodoWrite"))
+        ) {
           const input = block.input as { todos?: AgentTodo[] };
           if (Array.isArray(input?.todos)) return input.todos;
         }

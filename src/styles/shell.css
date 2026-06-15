@@ -40,6 +40,21 @@
   background: var(--app-claude-orange);
 }
 
+/* ---- Enable-notifications button (web/phone only) ---- */
+.notif-enable-btn {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  font-size: 11px;
+  border: 1px solid var(--app-claude-orange);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--app-claude-orange);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* ---- Wake word toggle button ---- */
 .wake-word-btn {
   display: flex;
@@ -82,6 +97,55 @@
 @keyframes wake-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%       { opacity: 0.4; transform: scale(0.7); }
+}
+
+/* Caffeinate (keep Mac awake) button */
+.caffeine-btn {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 999px;
+  padding: 1px;
+}
+.caffeine-btn.active {
+  border-color: var(--app-claude-orange);
+}
+.caffeine-main,
+.caffeine-toggle,
+.caffeine-stop {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: transparent;
+  border: none;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  cursor: pointer;
+  border-radius: 999px;
+  transition: background 120ms, color 120ms;
+}
+.caffeine-main {
+  padding: 3px 8px 3px 7px;
+}
+.caffeine-toggle,
+.caffeine-stop {
+  padding: 4px;
+}
+.caffeine-main:hover,
+.caffeine-toggle:hover,
+.caffeine-stop:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.caffeine-btn.active .caffeine-main {
+  color: var(--app-claude-orange);
+}
+.caffeine-toggle.on {
+  color: var(--app-claude-orange);
+}
+.caffeine-label {
+  font-size: 11px;
 }
 
 .connection-pill {

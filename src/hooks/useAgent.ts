@@ -13,6 +13,7 @@ import type {
   MessageOrigin,
   Model,
   PermissionMode,
+  QueuedChatTurn,
 } from "../types.js";
 
 // The sentinel error message written by recoverStaleChat on server restart.
@@ -128,6 +129,13 @@ interface SendOptions {
   attachments?: Attachment[];
 }
 
+/** A user message held client-side while the agent is mid-turn.
+ *  Drained one at a time after each turn ends. */
+export interface LocalQueuedMessage {
+  text: string;
+  opts: SendOptions;
+}
+
 interface UseAgentReturn {
   turns: ChatTurn[];
   connection: Connection;
@@ -143,6 +151,8 @@ interface UseAgentReturn {
   contextUsage: ContextUsage | null;
   branchInfo: Map<string, BranchInfo>;
   slashCommands: string[];
+  queuedTurns: QueuedChatTurn[];
+  localQueue: LocalQueuedMessage[];
   send: (text: string, opts: SendOptions) => void;
   revertToCheckpoint: (checkpointId: string) => void;
   respondPermission: (
@@ -183,6 +193,11 @@ export function useAgent(
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
+  const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>([]);
+  // Messages the user sent while the agent was mid-turn.  Held locally and
+  // drained one-at-a-time after each turn completes so they never appear in
+  // the chat until the agent is actually ready to handle them.
+  const [localQueue, setLocalQueue] = useState<LocalQueuedMessage[]>([]);
 
   // Tracks the number of turn_start events that haven't been matched by a
   // turn_end yet. This lets us guard against stale chat_status events (e.g.
@@ -190,10 +205,47 @@ export function useAgent(
   // turn_start for the immediately-queued turn N+1.
   const turnCountRef = useRef(0);
 
+  // Ref mirrors so callbacks and effects always read the latest values
+  // without needing to be re-registered on every state change.
+  const isStreamingRef = useRef(false);
+  isStreamingRef.current = isStreaming;
+  const localQueueRef = useRef<LocalQueuedMessage[]>([]);
+  localQueueRef.current = localQueue;
+
   // Mirror chatId in a ref so the event handler always reads the current value
   // without needing to be re-registered on every chatId change.
   const chatIdRef = useRef(chatId);
   chatIdRef.current = chatId;
+
+  // Clear the local queue whenever the active chat changes.
+  useEffect(() => {
+    setLocalQueue([]);
+  }, [chatId]);
+
+  // Drain one locally-queued message as soon as the agent is genuinely idle:
+  //   • isStreaming=false  — the turn counter dropped to zero (turn_end)
+  //   • pendingAttention=undefined — this isn't just an attention pause
+  // Each drained message starts a new turn; when that turn ends this effect
+  // fires again to drain the next one, producing a FIFO cascade.
+  useEffect(() => {
+    if (!isStreaming && !pendingAttention && localQueueRef.current.length > 0) {
+      const [next, ...rest] = localQueueRef.current;
+      setLocalQueue(rest);
+      const id = chatIdRef.current;
+      if (repoPath && id) {
+        agentSocket.send({
+          type: "user_message",
+          chatId: id,
+          repoPath,
+          text: next.text,
+          model: next.opts.model,
+          permissionMode: next.opts.permissionMode,
+          attachments: next.opts.attachments,
+        });
+      }
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStreaming, pendingAttention, repoPath]);
 
   // Track permission requestId -> tool_use block ID mapping for live updates
   const requestToToolUseIdRef = useRef(new Map<string, string>());
@@ -479,6 +531,7 @@ export function useAgent(
         setContextUsage: cachedSetContextUsage,
         setBranchInfo: cachedSetBranchInfo,
         setSlashCommands: cachedSetSlashCommands,
+        setQueuedTurns,
         requestToToolUseId: requestToToolUseIdRef.current,
       });
     };
@@ -502,6 +555,13 @@ export function useAgent(
   const send = useCallback(
     (text: string, opts: SendOptions) => {
       if (!repoPath || !chatId) return;
+      // When the agent is mid-turn, hold the message locally.  The drain
+      // effect above fires as soon as the turn ends and sends queued messages
+      // one at a time — each starts a new turn whose completion drains the next.
+      if (isStreamingRef.current) {
+        setLocalQueue((q) => [...q, { text, opts }]);
+        return;
+      }
       agentSocket.send({
         type: "user_message",
         chatId,
@@ -633,6 +693,8 @@ export function useAgent(
     contextUsage,
     branchInfo,
     slashCommands,
+    queuedTurns,
+    localQueue,
     send,
     revertToCheckpoint,
     respondPermission,
@@ -664,6 +726,7 @@ interface Setters {
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
   setBranchInfo: (info: Map<string, BranchInfo>) => void;
   setSlashCommands: React.Dispatch<React.SetStateAction<string[]>>;
+  setQueuedTurns: React.Dispatch<React.SetStateAction<QueuedChatTurn[]>>;
   // Map of permission requestId -> tool_use block ID, used to apply
   // permission_response updatedInput back to the originating tool_use block.
   requestToToolUseId: Map<string, string>;
@@ -1055,6 +1118,7 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   }
 
   s.setTurns(turns);
+  s.setQueuedTurns(record.queuedTurns ?? []);
   if (record.sessionId) s.setSessionId(record.sessionId);
   // Restore the last known context usage from the persisted record, but only
   // if we don't already have a live value that is higher. A chat_replay can

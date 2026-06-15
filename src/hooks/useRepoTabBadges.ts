@@ -10,6 +10,7 @@ const SEEN_KEY = "buildover.repoTabSeen";
 const ICON_PRIORITY: ChatStatus[] = [
   "awaiting_input", // Highest — agent is blocked, user must respond
   "running",        // Agent is actively working
+  "queued",         // Waiting for usage reset
   "error",          // Something went wrong
   "agent_done",     // Agent finished, awaiting user follow-up
 ];

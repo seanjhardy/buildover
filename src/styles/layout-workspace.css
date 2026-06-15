@@ -642,6 +642,9 @@
 .chat-status-icon.running {
   color: var(--app-claude-orange);
 }
+.chat-status-icon.queued {
+  color: var(--app-accent, var(--app-claude-orange));
+}
 .chat-status-icon.done {
   color: var(--app-success);
 }

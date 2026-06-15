@@ -1082,12 +1082,25 @@ export const GitGraphView = forwardRef<GitGraphViewHandle, Props>(function GitGr
   const fetchLog = useCallback(async (lim: number) => {
     setLoading(true); setError(null);
     try {
-      const [result, status] = await Promise.all([
+      // Fetch log and status independently — a status failure (e.g. detached
+      // HEAD, unusual git state) must NOT prevent the graph from rendering.
+      const [logSettled, statusSettled] = await Promise.allSettled([
         gitApi.getLog(repoPath, lim),
         gitApi.getStatus(repoPath),
       ]);
-      setLogResult(result);
-      setIsDirty(status.isDirty);
+
+      if (logSettled.status === "fulfilled") {
+        setLogResult(logSettled.value);
+      } else {
+        setError(logSettled.reason instanceof Error ? logSettled.reason.message : String(logSettled.reason));
+      }
+
+      if (statusSettled.status === "fulfilled") {
+        setIsDirty(statusSettled.value.isDirty);
+      } else {
+        // Status failed but graph is fine — just skip dirty indicator
+        setIsDirty(false);
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e));
     } finally {

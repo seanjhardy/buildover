@@ -106,6 +106,10 @@ export function attachTerminalWss(wss: WebSocketServer): void {
           });
 
           sessions.set(msg.tabId, { process: ptyProcess, tabId: msg.tabId });
+
+          // Notify the client immediately so it can clear the loading overlay
+          // without waiting for the shell to finish sourcing ~/.zshrc etc.
+          send({ type: "ready", tabId: msg.tabId });
           break;
         }
 

@@ -62,8 +62,14 @@ function makeTab(cwd: string, count: number): TerminalTab {
 
 function stripAnsi(str: string): string {
   return str
-    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, "")
+    // CSI sequences: ESC [ + parameter bytes (0x20–0x3F includes 0-9 ; ? < = > etc.) + final letter
+    // The old pattern [0-9;]* missed ?-prefixed sequences like \x1b[?2004h (bracketed paste) and
+    // \x1b[?25h (show cursor) that zsh emits immediately after drawing the prompt, leaving stray
+    // characters at the end of the stripped string and breaking looksLikePrompt.
+    .replace(/\x1b\[[\x20-\x3f]*[a-zA-Z]/g, "")
+    // OSC sequences: ESC ] ... BEL
     .replace(/\x1b\][^\x07]*\x07/g, "")
+    // Other two-char escape sequences
     .replace(/\x1b[^[\]]/g, "");
 }
 
@@ -240,7 +246,12 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
           const msg = JSON.parse(ev.data as string) as {
             type: string; tabId: string; data?: string; code?: number; message?: string;
           };
-          if (msg.type === "output") {
+          if (msg.type === "ready") {
+            // PTY has been spawned — clear the loading overlay immediately so
+            // the user sees shell output streaming in instead of a spinner.
+            setTabSettingUp(msg.tabId, false);
+          } else if (msg.type === "output") {
+            // Fallback: also clear on first output in case "ready" was missed
             setTabSettingUp(msg.tabId, false);
             if (msg.data) terminalsRef.current.get(msg.tabId)?.terminal.write(msg.data);
             // Execute any command that was queued for this tab once the shell is ready

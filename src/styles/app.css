@@ -26,3 +26,6 @@
 @import "./pull-requests.css";
 @import "./themes-panel.css";
 @import "./file-explorer.css";
+
+/* Mobile / phone overrides — imported last so its breakpoint rules win. */
+@import "./mobile.css";

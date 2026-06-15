@@ -11,3 +11,10 @@ release
 chats
 .buildover
 ./claude
+
+# Tailscale-issued TLS certs/keys (never commit private keys)
+*.ts.net.crt
+*.ts.net.key
+
+# Local git worktrees created for isolated work
+.claude/worktrees/

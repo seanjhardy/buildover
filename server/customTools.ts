@@ -21,12 +21,21 @@ export type RequestAttentionAck = (args: {
 // turn ends (same mechanism as auto-compact, but triggered by the agent itself).
 export type RequestCompact = (reason?: string) => void;
 
+// Callback type: returns the current todos from the conversation history by
+// scanning for the latest TodoWrite call (same logic as the useTodos hook).
+export type GetCurrentTodos = () => Array<{
+  content: string;
+  status: "pending" | "in_progress" | "completed";
+  activeForm: string;
+}>;
+
 // Creates the custom MCP tool server, closing over the requestAttentionAck
 // callback so the RequestUserAttention handler can block on real user input.
 export function createCustomToolsServer(
   requestAttentionAck: RequestAttentionAck,
   requestCompact: RequestCompact,
   repoPath?: string,
+  getCurrentTodos?: GetCurrentTodos,
 ) {
   // RequestUserAttention: pauses the agent turn and surfaces a UI prompt.
   // Unlike the old implementation that returned immediately (making it
@@ -379,6 +388,129 @@ export function createCustomToolsServer(
     },
   );
 
+  // TodoRead: lets the agent query the current task list from the conversation
+  // history. Scans for the latest TodoWrite call and returns its contents.
+  const todoReadTool = tool(
+    "TodoRead",
+    "Read the current task list from the sidebar. Returns the todos from your " +
+      "most recent TodoWrite call. Use this when you need to check the current " +
+      "state before updating the list, or when resuming work after a long conversation. " +
+      "If no todos exist yet, returns an empty list.",
+    {},
+    async () => {
+      if (!getCurrentTodos) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No current todos. Use TodoWrite to create a task list.",
+            },
+          ],
+        };
+      }
+
+      const todos = getCurrentTodos();
+
+      if (todos.length === 0) {
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: "No current todos. Use TodoWrite to create a task list.",
+            },
+          ],
+        };
+      }
+
+      const lines = todos.map((t, i) => {
+        const status =
+          t.status === "pending" ? "☐ Pending" :
+          t.status === "in_progress" ? "★ In Progress" :
+          "☑ Completed";
+        return `${i + 1}. [${status}] ${t.content}`;
+      });
+
+      const summary = [
+        todos.filter(t => t.status === "in_progress").length + " in progress",
+        todos.filter(t => t.status === "pending").length + " pending",
+        todos.filter(t => t.status === "completed").length + " completed",
+      ]
+        .filter(s => !s.startsWith("0"))
+        .join(", ");
+
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Current task list (${summary}):\n\n${lines.join("\n")}`,
+          },
+        ],
+      };
+    },
+  );
+
+  // TodoWrite: lets the agent update the task list shown in the right sidebar.
+  // Each call replaces the full list. The client picks up the tool_use input
+  // (the todos array) from the chat history and renders it via TodoPanel.
+  const todoWriteTool = tool(
+    "TodoWrite",
+    "Update the task list shown in the right sidebar. Use this to communicate " +
+      "your plan and progress when working on multi-step requests. Each call " +
+      "replaces the full list, so include all current tasks. Update it as you " +
+      "work: mark tasks in_progress when starting them, completed when done. " +
+      "Keep task descriptions short (under ~60 chars) so they fit in the sidebar. " +
+      "The list disappears once all tasks are completed, so only call this when " +
+      "you have pending or in-progress work to show.",
+    {
+      todos: z
+        .array(
+          z.object({
+            content: z
+              .string()
+              .describe(
+                "Short task description shown in the sidebar. Keep under ~60 chars.",
+              ),
+            status: z
+              .enum(["pending", "in_progress", "completed"])
+              .describe(
+                "Task status: 'pending' (not started), 'in_progress' (currently working on), 'completed' (done).",
+              ),
+            activeForm: z
+              .string()
+              .describe(
+                "Present progressive form of the task (e.g. 'Reading schema', 'Writing tests'). " +
+                  "Shown in the sidebar when status is 'in_progress'. Should match the content but be phrased as an ongoing action.",
+              ),
+          }),
+        )
+        .describe(
+          "Complete list of tasks for the current request. Replaces any previous list.",
+        ),
+    },
+    async (args) => {
+      // The handler is a no-op confirmation. The todos array lives in the
+      // tool_use input, which is what the client renders.
+      const pending = args.todos.filter((t) => t.status === "pending").length;
+      const inProgress = args.todos.filter((t) => t.status === "in_progress").length;
+      const completed = args.todos.filter((t) => t.status === "completed").length;
+      const summary = [
+        inProgress > 0 && `${inProgress} in progress`,
+        pending > 0 && `${pending} pending`,
+        completed > 0 && `${completed} completed`,
+      ]
+        .filter(Boolean)
+        .join(", ");
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Updated task list: ${summary}.`,
+          },
+        ],
+      };
+    },
+  );
+
   return createSdkMcpServer({
     name: "buildover-custom-tools",
     version: "1.0.0",
@@ -389,6 +521,8 @@ export function createCustomToolsServer(
       renderChartTool,
       clearContextTool,
       writeRunConfigTool,
+      todoReadTool,
+      todoWriteTool,
     ],
   });
 }

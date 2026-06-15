@@ -12,56 +12,86 @@ export interface GitStatus {
   behind: number;
   isDirty: boolean;
   hasUpstream: boolean;
+  isDetached: boolean;
 }
 
 export async function getGitStatus(repoPath: string): Promise<GitStatus> {
-  // Current branch name
-  const { stdout: branchOut } = await execFileAsync(
-    "git",
-    ["symbolic-ref", "--short", "HEAD"],
-    { cwd: repoPath },
-  );
-  const currentBranch = branchOut.trim();
+  // Current branch name — may fail in detached HEAD state
+  let currentBranch = "HEAD";
+  let isDetached = false;
+  try {
+    const { stdout: branchOut } = await execFileAsync(
+      "git",
+      ["symbolic-ref", "--short", "HEAD"],
+      { cwd: repoPath },
+    );
+    currentBranch = branchOut.trim();
+  } catch {
+    // Detached HEAD — try to get the short commit hash instead
+    isDetached = true;
+    try {
+      const { stdout: hashOut } = await execFileAsync(
+        "git",
+        ["rev-parse", "--short", "HEAD"],
+        { cwd: repoPath },
+      );
+      currentBranch = hashOut.trim();
+    } catch {
+      // No commits at all (fresh repo) — leave as "HEAD"
+    }
+  }
 
   // All local branch names
-  const { stdout: branchListOut } = await execFileAsync(
-    "git",
-    ["branch", "--format=%(refname:short)"],
-    { cwd: repoPath },
-  );
-  const branches = branchListOut
-    .trim()
-    .split("\n")
-    .map((b) => b.trim())
-    .filter(Boolean);
+  let branches: string[] = [];
+  try {
+    const { stdout: branchListOut } = await execFileAsync(
+      "git",
+      ["branch", "--format=%(refname:short)"],
+      { cwd: repoPath },
+    );
+    branches = branchListOut
+      .trim()
+      .split("\n")
+      .map((b) => b.trim())
+      .filter(Boolean);
+  } catch {
+    // Fresh repo with no branches — leave empty
+  }
 
-  // Ahead / behind relative to upstream (may fail if no upstream is set)
+  // Ahead / behind relative to upstream (may fail if no upstream is set or detached)
   let ahead = 0;
   let behind = 0;
   let hasUpstream = false;
-  try {
-    const { stdout: countsOut } = await execFileAsync(
-      "git",
-      ["rev-list", "--left-right", "--count", "@{u}...HEAD"],
-      { cwd: repoPath },
-    );
-    const parts = countsOut.trim().split(/\s+/);
-    behind = parseInt(parts[0] ?? "0", 10) || 0;
-    ahead = parseInt(parts[1] ?? "0", 10) || 0;
-    hasUpstream = true;
-  } catch {
-    // No upstream configured — leave ahead/behind as 0, hasUpstream as false
+  if (!isDetached) {
+    try {
+      const { stdout: countsOut } = await execFileAsync(
+        "git",
+        ["rev-list", "--left-right", "--count", "@{u}...HEAD"],
+        { cwd: repoPath },
+      );
+      const parts = countsOut.trim().split(/\s+/);
+      behind = parseInt(parts[0] ?? "0", 10) || 0;
+      ahead = parseInt(parts[1] ?? "0", 10) || 0;
+      hasUpstream = true;
+    } catch {
+      // No upstream configured — leave ahead/behind as 0, hasUpstream as false
+    }
   }
 
   // Working-tree dirtiness
-  const { stdout: statusOut } = await execFileAsync(
-    "git",
-    ["status", "--porcelain"],
-    { cwd: repoPath },
-  );
-  const isDirty = statusOut.trim().length > 0;
+  let isDirty = false;
+  try {
+    const { stdout: statusOut } = await execFileAsync(
+      "git",
+      ["status", "--porcelain"],
+      { cwd: repoPath },
+    );
+    isDirty = statusOut.trim().length > 0;
+  } catch {
+    // Unable to determine dirtiness — leave as false
+  }
 
-  return { currentBranch, branches, ahead, behind, isDirty, hasUpstream };
+  return { currentBranch, branches, ahead, behind, isDirty, hasUpstream, isDetached };
 }
 
 export async function gitCheckout(

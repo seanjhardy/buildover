@@ -29,8 +29,9 @@ interface Props {
 
 export const GROUP_ORDER: ChatStatus[] = [
   "awaiting_input",
-  "idle",
   "running",
+  "queued",
+  "idle",
   "agent_done",
   "error",
 ];
@@ -38,6 +39,7 @@ export const GROUP_ORDER: ChatStatus[] = [
 export const GROUP_LABEL: Record<ChatStatus, string> = {
   awaiting_input: "Awaiting input",
   running: "Running",
+  queued: "Queued",
   error: "Interrupted",
   agent_done: "Agent finished",
   idle: "Idle",
@@ -235,6 +237,7 @@ export function ChatSidebar({
     for (const status of GROUP_ORDER) groups.set(status, []);
     for (const c of chats) {
       if (c.kind === "coordinator") continue; // pinned separately
+      if (c.kind === "subagent") continue;    // shown in parent chat's Agents panel
       if (c.status === "finished") {
         archive.push(c);
       } else {

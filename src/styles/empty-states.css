@@ -703,3 +703,69 @@
   align-items: center;
   gap: var(--app-spacing-large);
 }
+
+/* ---- Right column: setup panel + remote-access tutorial ---- */
+.ew-right-col {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-spacing-large);
+  min-width: 0;
+}
+
+.ew-remote {
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 12px;
+  background: var(--app-secondary-background);
+  padding: var(--app-spacing-large);
+}
+.ew-remote-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  margin-bottom: 6px;
+}
+.ew-remote-head svg { color: var(--app-claude-orange); }
+.ew-remote-desc {
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--app-secondary-foreground);
+  margin: 0 0 10px;
+}
+.ew-remote-url,
+.ew-remote-cmd {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 12px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 8px;
+  background: var(--app-primary-background);
+  color: var(--app-primary-foreground);
+  font-family: var(--app-monospace-font-family);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+.ew-remote-url span,
+.ew-remote-cmd code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ew-remote-url:hover,
+.ew-remote-cmd:hover { border-color: var(--app-claude-orange); }
+.ew-remote-url svg,
+.ew-remote-cmd svg { flex-shrink: 0; color: var(--app-claude-orange); }
+.ew-remote-steps {
+  margin: 12px 0 0;
+  padding-left: 18px;
+  font-size: 12px;
+  line-height: 1.7;
+  color: var(--app-secondary-foreground);
+}
+.ew-remote-steps b { color: var(--app-primary-foreground); font-weight: 600; }

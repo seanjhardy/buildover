@@ -14,5 +14,13 @@
     "type": "http",
     "url": "https://server.smithery.ai/Supabase",
     "headers": {}
+  },
+  {
+    "id": "exa",
+    "name": "Exa Search",
+    "description": "Fast, intelligent web search and web crawling. Get fresh information about libraries, APIs, and SDKs.",
+    "type": "http",
+    "url": "https://server.smithery.ai/exa",
+    "headers": {}
   }
 ]

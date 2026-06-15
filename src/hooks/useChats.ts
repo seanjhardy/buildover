@@ -17,6 +17,7 @@ export interface UseChatsReturn {
   createChat: (
     model: Model,
     permissionMode: PermissionMode,
+    id?: string,
   ) => Promise<ChatRecord>;
   setUserFinished: (chatId: string, finished: boolean) => Promise<void>;
   rename: (chatId: string, title: string) => Promise<void>;
@@ -44,9 +45,11 @@ export function useChats(
   useEffect(() => {
     if (repoPath !== prevRepoRef.current) {
       prevRepoRef.current = repoPath;
-      if (prefetchedList && prefetchedList.length > 0) {
-        setChats(prefetchedList);
-      }
+      // Replace the list immediately on every repo switch so the sidebar never
+      // shows the *previous* repo's chats. If we have prefetched data for the
+      // new repo, seed with it (no loading flash); otherwise clear to empty and
+      // let the background reload() populate it.
+      setChats(prefetchedList && prefetchedList.length > 0 ? prefetchedList : []);
     }
   // We intentionally only re-run on repoPath change, not on every prefetchedList update
   // (live WS updates own that from here on).
@@ -70,11 +73,18 @@ export function useChats(
     setError(null);
     try {
       const list = await api.listChats(repoPath);
+      // Guard against out-of-order responses: the active repo may have changed
+      // while this request was in flight (or an earlier repo's request may
+      // resolve after a later one). Applying a stale list here would leave the
+      // sidebar showing the wrong repo's chats until the next reload trigger.
+      if (repoPathRef.current !== repoPath) return;
       setChats(list);
     } catch (err) {
+      if (repoPathRef.current !== repoPath) return;
       setError(err instanceof Error ? err.message : String(err));
     } finally {
-      setLoading(false);
+      // Only clear the loading flag if this is still the active repo's request.
+      if (repoPathRef.current === repoPath) setLoading(false);
     }
   }, [repoPath]);
 
@@ -155,11 +165,36 @@ export function useChats(
   }, [repoPath]);
 
   const createChat = useCallback(
-    async (model: Model, permissionMode: PermissionMode) => {
+    async (model: Model, permissionMode: PermissionMode, id?: string) => {
       if (!repoPath) throw new Error("No active repo");
-      const record = await api.createChat(repoPath, model, permissionMode);
-      setChats((prev) => [recordToSummary(record), ...prev]);
-      return record;
+      // Add an optimistic placeholder immediately so the sidebar updates
+      // before the server round-trip completes.
+      if (id) {
+        const now = new Date().toISOString();
+        const optimistic: ChatSummary = {
+          id,
+          title: "New chat",
+          status: "idle",
+          userMarkedFinished: false,
+          model: model as import("../types.js").Model,
+          createdAt: now,
+          updatedAt: now,
+          preview: "",
+        };
+        setChats((prev) => [optimistic, ...prev]);
+      }
+      try {
+        const record = await api.createChat(repoPath, model, permissionMode, id);
+        // Replace the optimistic entry with the confirmed record.
+        setChats((prev) =>
+          prev.map((c) => (c.id === record.id ? recordToSummary(record) : c)),
+        );
+        return record;
+      } catch (err) {
+        // Roll back the optimistic entry on failure.
+        if (id) setChats((prev) => prev.filter((c) => c.id !== id));
+        throw err;
+      }
     },
     [repoPath],
   );

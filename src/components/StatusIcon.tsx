@@ -30,6 +30,26 @@ export function StatusIcon({ status }: Props) {
           </svg>
         </span>
       );
+    case "queued":
+      return (
+        <span className="chat-status-icon queued" title="Queued until usage resets">
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 16 16"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="1.7"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          >
+            <path d="M4 2.5h8" />
+            <path d="M4 13.5h8" />
+            <path d="M5 2.5c0 3.5 6 3.5 6 6s-6 2.5-6 5" />
+            <path d="M11 2.5c0 3.5-6 3.5-6 6s6 2.5 6 5" />
+          </svg>
+        </span>
+      );
     case "agent_done":
       return (
         <span className="chat-status-icon done" title="Agent finished">

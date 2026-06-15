@@ -44,6 +44,8 @@
   border-top: 1px solid rgba(255, 255, 255, 0.06);
   padding-top: 6px;
   margin-top: 2px;
+  container-type: inline-size;
+  container-name: composer-bar;
 }
 .composer-bar-left,
 .composer-bar-right {
@@ -358,20 +360,22 @@
   background: var(--app-list-hover-background);
 }
 
-/* Model selector — icon-only trigger button */
+/* Model selector — text button (shows model name), collapses to icon when narrow */
 .model-pill-btn {
   background: transparent;
   border: 0;
   color: var(--app-secondary-foreground);
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: 30px;
+  gap: 5px;
   height: 30px;
+  padding: 0 8px;
   border-radius: 6px;
+  font-size: 12px;
   cursor: pointer;
-  padding: 0;
   transition: color 0.1s, background 0.1s;
+  white-space: nowrap;
+  min-width: 0;
 }
 .model-pill-btn:hover {
   color: var(--app-primary-foreground);
@@ -381,9 +385,40 @@
   color: var(--app-primary-foreground);
   background: var(--app-list-hover-background);
 }
-.model-pill-btn:disabled {
+.model-pill-btn:disabled,
+.model-pill-btn.is-disabled {
   opacity: 0.5;
   cursor: default;
+}
+.model-pill-btn.is-disabled:hover {
+  /* keep hover events (for the tooltip) but no interactive hover styling */
+  color: var(--app-secondary-foreground);
+  background: transparent;
+}
+
+/* By default show text label, hide icon */
+.model-pill-label {
+  display: inline;
+  font-weight: 500;
+}
+.model-pill-bot-icon {
+  display: none;
+}
+
+/* When the composer bar is narrow, hide text and show icon only */
+@container composer-bar (max-width: 480px) {
+  .model-pill-btn {
+    width: 30px;
+    height: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+  .model-pill-label {
+    display: none;
+  }
+  .model-pill-bot-icon {
+    display: block;
+  }
 }
 
 /* Model tooltip — shows the chat's current model on hover.
@@ -758,6 +793,16 @@
   color: var(--app-claude-orange);
   margin-bottom: 2px;
 }
+.usage-limit-warning {
+  background: var(--app-error-background, rgba(239, 68, 68, 0.1));
+  border: 1px solid var(--app-error, #ef4444);
+  border-radius: var(--corner-radius-small);
+  padding: var(--app-spacing-medium);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--app-error, #ef4444);
+  margin-bottom: var(--app-spacing-small);
+}
 .usage-popover-foot {
   display: flex;
   flex-wrap: wrap;
@@ -793,6 +838,42 @@
 .usage-row-meta {
   color: var(--app-secondary-foreground);
   font-variant-numeric: tabular-nums;
+}
+
+/* ---- Queued turns banner ---- */
+.queued-turns-banner {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--app-spacing-medium);
+  padding: var(--app-spacing-medium);
+  margin: var(--app-spacing-medium) 0;
+  background: var(--app-warning-background, rgba(251, 191, 36, 0.1));
+  border: 1px solid var(--app-warning, #fbbf24);
+  border-radius: var(--corner-radius-medium);
+  font-size: 12px;
+}
+
+.queued-turns-icon {
+  font-size: 18px;
+  line-height: 1;
+  flex-shrink: 0;
+}
+
+.queued-turns-content {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.queued-turns-title {
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.queued-turns-subtitle {
+  color: var(--app-secondary-foreground);
+  line-height: 1.4;
 }
 
 /* ---- Header right cluster (model + session + connection) ---- */

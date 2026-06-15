@@ -24,6 +24,11 @@ export interface UsageReport {
   fetchedAt: string;
 }
 
+export interface UsageLimitBlock {
+  message: string;
+  resetsAt: string | null;
+}
+
 function parseBucket(raw: any): UsageBucket | null {
   if (!raw || typeof raw.utilization !== "number") return null;
   return {
@@ -67,4 +72,63 @@ export async function fetchUsage(): Promise<UsageReport> {
     rateLimitTier: creds.rateLimitTier,
     fetchedAt: new Date().toISOString(),
   };
+}
+
+function blockedBucket(
+  label: string,
+  bucket: UsageBucket | null,
+): UsageLimitBlock | null {
+  if (!bucket || bucket.utilization < 100) return null;
+  return {
+    message: `Usage limit reached (${label} at 100%). Agent execution is deferred until the limit resets.`,
+    resetsAt: bucket.resetsAt,
+  };
+}
+
+/**
+ * Checks if usage has reached 100% in any bucket.
+ * Returns reset metadata when execution should be deferred, null otherwise.
+ */
+export async function getUsageLimitBlock(): Promise<UsageLimitBlock | null> {
+  try {
+    const usage = await fetchUsage();
+
+    const blocks = [
+      blockedBucket("5-hour bucket", usage.fiveHour),
+      blockedBucket("7-day bucket", usage.sevenDay),
+      blockedBucket("7-day Sonnet bucket", usage.sevenDaySonnet),
+      blockedBucket("7-day Opus bucket", usage.sevenDayOpus),
+      usage.extraUsage &&
+      usage.extraUsage.utilization !== null &&
+      usage.extraUsage.utilization >= 100
+        ? {
+            message:
+              "Usage limit reached (extra usage at 100%). Agent execution is deferred until usage is available.",
+            resetsAt: null,
+          }
+        : null,
+    ].filter((b): b is UsageLimitBlock => b !== null);
+
+    if (blocks.length > 0) {
+      blocks.sort((a, b) => {
+        if (!a.resetsAt) return 1;
+        if (!b.resetsAt) return -1;
+        return new Date(a.resetsAt).getTime() - new Date(b.resetsAt).getTime();
+      });
+      return blocks[0];
+    }
+
+    return null;
+  } catch (err) {
+    // If we can't fetch usage, don't block execution but log the error
+    console.warn("[usage] Failed to check usage limit:", err);
+    return null;
+  }
+}
+
+/**
+ * Backward-compatible helper for callers that only need a display message.
+ */
+export async function checkUsageLimit(): Promise<string | null> {
+  return (await getUsageLimitBlock())?.message ?? null;
 }

@@ -1,6 +1,12 @@
 import express from "express";
 import { createServer } from "node:http";
 import { existsSync } from "node:fs";
+import {
+  getVapidPublicKey,
+  addSubscription,
+  removeSubscription,
+  sendToAll,
+} from "./push.js";
 import { readFile as fsReadFile, readdir, readFile, writeFile, stat as fsStat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -20,6 +26,8 @@ import {
   setUserFinished,
   ensureCoordinatorChat,
   CoordinatorDeleteError,
+  withComputedStatus,
+  toSummary,
 } from "./chats.js";
 import {
   listTickets,
@@ -36,10 +44,23 @@ import {
   removeRecent,
   touchRecent,
 } from "./repos.js";
-import { dropSession, getSession, tryGetSession } from "./sessions.js";
+import {
+  dropSession,
+  getSession,
+  scheduleQueuedTurnsForRepo,
+  tryGetSession,
+} from "./sessions.js";
 import { getOrchestrator } from "./orchestrator.js";
 import { classifySegment } from "./segmenter.js";
 import { fetchUsage } from "./usage.js";
+import {
+  getCaffeineStatus,
+  addCaffeineHour,
+  stopCaffeine,
+  setCaffeineDisplay,
+} from "./caffeinate.js";
+import { fetchCodexStatus } from "./codexUsage.js";
+import { readCodexCreds, clearCodexCredsCache } from "./codexAuth.js";
 import {
   getGitStatus,
   gitCheckout,
@@ -101,6 +122,12 @@ import {
   startSelfUpdateChecker,
 } from "./selfUpdate.js";
 import { readCreds } from "./anthropicAuth.js";
+import {
+  enableVpn,
+  disableVpn,
+  getVpnStatus,
+  getProxyDispatcher,
+} from "./vpn.js";
 import {
   listGitHubPRs,
   getGitHubPR,
@@ -175,7 +202,19 @@ app.get("/focus", (_req, res) => {
 });
 
 // ---- Env var management ----
-const MANAGED_ENV_VARS = ["WHISPER_API_KEY", "GROQ_API_KEY", "GROQ_WHISPER_MODEL"];
+const MANAGED_ENV_VARS = [
+  "WHISPER_API_KEY",
+  "GROQ_API_KEY",
+  "GROQ_WHISPER_MODEL",
+  // OpenAI / Codex API key — used for Codex model execution and usage display.
+  "OPENAI_API_KEY",
+  // US-VPN toggle config (remote proxy VM reached over SSH).
+  "VPN_SSH_HOST",
+  "VPN_SSH_USER",
+  "VPN_SSH_KEY",
+  "VPN_REMOTE_PROXY_PORT",
+  "VPN_LOCAL_PORT",
+];
 
 app.get("/api/env/status", (_req, res) => {
   const status: Record<string, boolean> = {};
@@ -207,6 +246,9 @@ app.post("/api/env/set", async (req, res) => {
   }
   await writeFile(envPath, lines.join("\n"), "utf-8");
   process.env[key] = value; // take effect immediately in this process
+  // If the OpenAI key changed, flush the credential cache so the next request
+  // picks up the new value instead of the 60-second cached one.
+  if (key === "OPENAI_API_KEY") clearCodexCredsCache();
   res.json({ ok: true });
 });
 
@@ -218,6 +260,23 @@ app.get("/api/usage", async (_req, res) => {
       error: err instanceof Error ? err.message : String(err),
     });
   }
+});
+
+// ---- Caffeinate (keep Mac awake) ----
+app.get("/api/caffeinate", (_req, res) => {
+  res.json(getCaffeineStatus());
+});
+
+app.post("/api/caffeinate/add", (_req, res) => {
+  res.json(addCaffeineHour());
+});
+
+app.post("/api/caffeinate/stop", (_req, res) => {
+  res.json(stopCaffeine());
+});
+
+app.post("/api/caffeinate/display", (req, res) => {
+  res.json(setCaffeineDisplay(Boolean(req.body?.on)));
 });
 
 // ---- Model list ----
@@ -255,6 +314,71 @@ app.get("/api/models", async (_req, res) => {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+});
+
+// ---- Codex (OpenAI) usage status ----
+app.get("/api/codex/usage", async (_req, res) => {
+  try {
+    res.json(await fetchCodexStatus());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Codex (OpenAI) model list ----
+// Codex models that are always available as a fallback even without a live key.
+const CODEX_FALLBACK_MODELS = [
+  { id: "codex-mini-latest",  label: "Codex Mini",    contextWindow: 200_000 },
+  { id: "o4-mini",            label: "o4-mini",        contextWindow: 200_000 },
+  { id: "o3",                 label: "o3",             contextWindow: 200_000 },
+  { id: "gpt-4o",             label: "GPT-4o",         contextWindow: 128_000 },
+  { id: "gpt-4o-mini",        label: "GPT-4o Mini",    contextWindow: 128_000 },
+];
+
+app.get("/api/codex/models", async (_req, res) => {
+  try {
+    const creds = await readCodexCreds();
+    const resp = await fetch("https://api.openai.com/v1/models", {
+      headers: { Authorization: `Bearer ${creds.apiKey}` },
+    });
+    if (!resp.ok) {
+      // Return the curated fallback list so the picker always has something.
+      return res.json({ models: CODEX_FALLBACK_MODELS, fallback: true });
+    }
+    const data = (await resp.json()) as { data: { id: string; created: number }[] };
+    // Keep only models that make sense for chat / coding tasks.
+    const KEEP = /^(o[1-9]|gpt-4|codex)/i;
+    const SKIP = /realtime|audio|embed|whisper|dall-e|tts|babbage|davinci/i;
+    const seen = new Set<string>();
+    const models = (data.data ?? [])
+      .filter((m) => KEEP.test(m.id) && !SKIP.test(m.id))
+      .sort((a, b) => b.created - a.created)
+      .reduce<{ id: string; label: string; contextWindow: number }[]>((acc, m) => {
+        if (seen.has(m.id)) return acc;
+        seen.add(m.id);
+        let contextWindow = 128_000;
+        if (m.id.startsWith("o3") || m.id.startsWith("o4")) contextWindow = 200_000;
+        // Make a readable label from the model id.
+        const label = m.id
+          .replace(/-latest$/, " (latest)")
+          .replace(/-(\d{4}-\d{2}-\d{2})$/, " ($1)")
+          .replace(/^codex-mini/, "Codex Mini")
+          .replace(/^gpt-4o-mini/, "GPT-4o Mini")
+          .replace(/^gpt-4o/, "GPT-4o")
+          .replace(/^gpt-4\.1-mini/, "GPT-4.1 Mini")
+          .replace(/^gpt-4\.1/, "GPT-4.1")
+          .replace(/^o4-mini/, "o4-mini")
+          .replace(/^o3-mini/, "o3-mini")
+          .replace(/^o3/, "o3")
+          .replace(/^o1-mini/, "o1-mini")
+          .replace(/^o1/, "o1");
+        acc.push({ id: m.id, label, contextWindow });
+        return acc;
+      }, []);
+    res.json({ models: models.length ? models : CODEX_FALLBACK_MODELS, fallback: false });
+  } catch {
+    res.json({ models: CODEX_FALLBACK_MODELS, fallback: true });
   }
 });
 
@@ -432,6 +556,7 @@ app.get("/api/chats", async (req, res) => {
     // create it lazily the first time the chat list is requested.
     await ensureCoordinatorChat(repoPath);
     const chats = await listChats(repoPath);
+    await scheduleQueuedTurnsForRepo(repoPath);
     // Overlay live "awaiting_input" for any chats whose session has a pending
     // attention. This state is never persisted to disk, so listChats() alone
     // would return "running" for those chats — causing the sidebar and tab
@@ -456,7 +581,8 @@ app.post("/api/chats", async (req, res) => {
     const model = (req.body?.model as Model) ?? "claude-opus-4-8";
     const permissionMode =
       (req.body?.permissionMode as PermissionMode) ?? "default";
-    const record = await createChat(repoPath, { model, permissionMode });
+    const id = req.body?.id as string | undefined;
+    const record = await createChat(repoPath, { id, model, permissionMode });
     res.json({ chat: record });
   } catch (err) {
     res.status(400).json({
@@ -470,7 +596,7 @@ app.get("/api/chats/:chatId", async (req, res) => {
     const repoPath = readRepoPath(req);
     const record = await readChat(repoPath, req.params.chatId);
     if (!record) return res.status(404).json({ error: "Not found" });
-    res.json({ chat: record });
+    res.json({ chat: withComputedStatus(record) });
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
@@ -1550,6 +1676,79 @@ app.post("/api/self/force-pull", async (_req, res) => {
   }
 });
 
+// ---- Web Push (phone notifications) ----
+// The phone PWA fetches the VAPID public key, subscribes via the Push API, and
+// POSTs its subscription here. The server stores it and pushes when an agent
+// finishes while the Mac is idle (see server/push.ts).
+app.get("/api/push/vapid-key", async (_req, res) => {
+  try {
+    res.json({ key: await getVapidPublicKey() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/push/subscribe", async (req, res) => {
+  try {
+    const sub = req.body?.subscription ?? req.body;
+    if (!sub?.endpoint) return res.status(400).json({ error: "missing subscription" });
+    await addSubscription(sub);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/push/unsubscribe", async (req, res) => {
+  try {
+    const endpoint = req.body?.endpoint;
+    if (!endpoint) return res.status(400).json({ error: "missing endpoint" });
+    await removeSubscription(endpoint);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Fire a test push to all subscribed devices (used by the UI "send test").
+app.post("/api/push/test", async (_req, res) => {
+  try {
+    const results = await sendToAll({ title: "buildover", body: "Test notification — it works! 🔨", tag: "test" });
+    res.json({ ok: true, sent: results.length, results });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Remote access status (for the home-page tutorial card) ----
+// Reports whether Tailscale is set up and, if so, the HTTPS URL to open on the
+// phone. Best-effort: any failure just reports unavailable.
+app.get("/api/remote/status", async (_req, res) => {
+  const result: { available: boolean; serving: boolean; url: string | null } = {
+    available: false,
+    serving: false,
+    url: null,
+  };
+  try {
+    const { stdout } = await execFileAsync("tailscale", ["status", "--json"], { timeout: 4000 });
+    const status = JSON.parse(stdout) as { Self?: { DNSName?: string } };
+    const dns = status.Self?.DNSName?.replace(/\.$/, "");
+    if (dns) {
+      result.available = true;
+      result.url = `https://${dns}`;
+    }
+  } catch {
+    return res.json(result); // tailscale not installed / not running
+  }
+  try {
+    const { stdout } = await execFileAsync("tailscale", ["serve", "status"], { timeout: 4000 });
+    result.serving = /proxy http/i.test(stdout);
+  } catch {
+    /* not serving */
+  }
+  res.json(result);
+});
+
 // ---- Static SPA (remote / phone access) ----
 // When a built frontend exists in dist/, serve it from this same Express server
 // so the whole app (UI + API + WS) is reachable on one origin. This is what lets
@@ -1634,6 +1833,9 @@ wss.on("connection", (ws: WebSocket) => {
         record = await readChat(repoPath, chatId);
       }
       if (record) {
+        record = withComputedStatus(record);
+        const queued = record.queuedTurns?.[0];
+        if (queued) scheduleQueuedTurnsForRepo(repoPath).catch(() => {});
         send({
           type: "chat_replay",
           chatId,
@@ -1907,6 +2109,7 @@ async function recoverStaleChats(): Promise<void> {
             );
           });
         }
+        await scheduleQueuedTurnsForRepo(r.path);
       } catch (err) {
         console.warn(
           `[server] recovery skipped for ${r.path}:`,

@@ -942,7 +942,7 @@ export function Composer(props: Props) {
           <div ref={modelWrapRef} className="popup-wrap">
             <button
               ref={modelBtnRef}
-              className={`model-pill-btn${modelPopupOpen ? " active" : ""}`}
+              className={`model-pill-btn${modelPopupOpen ? " active" : ""}${isStreaming ? " is-disabled" : ""}`}
               onClick={() => {
                 if (isStreaming) return;
                 setModelTooltipOpen(false);
@@ -950,10 +950,16 @@ export function Composer(props: Props) {
               }}
               onMouseEnter={() => setModelTooltipOpen(true)}
               onMouseLeave={() => setModelTooltipOpen(false)}
-              disabled={isStreaming}
+              // Not using the `disabled` attribute while streaming — disabled
+              // buttons swallow mouse events, which would hide the model
+              // tooltip. The onClick guard above prevents opening the picker.
+              aria-disabled={isStreaming}
               aria-label="Switch model"
             >
-              <Bot size={14} />
+              <span className="model-pill-label">
+                {availableModels.find((m) => m.id === model)?.label ?? model}
+              </span>
+              <Bot size={14} className="model-pill-bot-icon" aria-hidden="true" />
             </button>
             {modelTooltipOpen && !modelPopupOpen &&
               createPortal(
@@ -1007,7 +1013,7 @@ export function Composer(props: Props) {
               title="Mode (Shift+Tab to cycle)"
             >
               <span className="mode-pill-icon">{meta.icon}</span>
-              {meta.label}
+              <span className="mode-pill-label">{meta.label}</span>
             </button>
             {modePopupOpen && (
               <div className="mode-popup" role="dialog">
@@ -1045,23 +1051,18 @@ export function Composer(props: Props) {
           </div>}
 
           {isStreaming ? (
-            <>
-              <button
-                className="send-btn stop"
-                onClick={onInterrupt}
-                title="Stop"
-              >
-                <Square size={12} />
-              </button>
-              <button
-                className="send-btn"
-                onClick={submit}
-                disabled={disabled || (text.trim() === "" && attachments.length === 0)}
-                title="Send — runs after the current turn"
-              >
-                <ArrowUp size={16} />
-              </button>
-            </>
+            (() => {
+              const hasContent = text.trim() !== "" || attachments.length > 0;
+              return (
+                <button
+                  className={hasContent ? "send-btn" : "send-btn stop"}
+                  onClick={hasContent ? submit : onInterrupt}
+                  title={hasContent ? "Queue — runs after the current turn" : "Stop"}
+                >
+                  {hasContent ? <ArrowUp size={16} /> : <Square size={12} />}
+                </button>
+              );
+            })()
           ) : (
             <button
               className="send-btn"

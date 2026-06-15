@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { CheckCircle, ExternalLink, Eye, EyeOff, AlertCircle, Bell, Mic } from "lucide-react";
 import { envApi } from "../lib/api.js";
+import { enablePush } from "../lib/push.js";
 
 interface EnvVarDef {
   key: string;
@@ -165,8 +166,23 @@ function normaliseNotificationPermission(): PermStatus {
 function PermissionRow({ def, status }: { def: PermDef; status: PermStatus | null }) {
   const granted = status === "granted";
 
+  // Desktop opens native System Settings via the Electron bridge. On the web
+  // (phone PWA) there's no such bridge, but the browser can request the
+  // notification permission directly — which works in an installed iOS PWA.
+  const isElectron = typeof window !== "undefined" && !!window.electronPermissions;
+  const canRequestWeb =
+    def.id === "notifications" &&
+    typeof Notification !== "undefined" &&
+    typeof Notification.requestPermission === "function";
+  const showActionButton = isElectron || canRequestWeb;
+
   const handleOpenSettings = () => {
-    void window.electronPermissions?.openSettings(def.id);
+    if (window.electronPermissions) {
+      void window.electronPermissions.openSettings(def.id);
+      return;
+    }
+    // Web (phone PWA): request permission and register for push in one go.
+    if (canRequestWeb) void enablePush();
   };
 
   return (
@@ -190,13 +206,15 @@ function PermissionRow({ def, status }: { def: PermDef; status: PermStatus | nul
                 <AlertCircle size={11} />
                 {status === "denied" ? "Denied" : "Not set"}
               </span>
-              <button
-                type="button"
-                className="perm-row-settings-btn"
-                onClick={handleOpenSettings}
-              >
-                Open Settings
-              </button>
+              {showActionButton && (
+                <button
+                  type="button"
+                  className="perm-row-settings-btn"
+                  onClick={handleOpenSettings}
+                >
+                  {isElectron ? "Open Settings" : "Enable"}
+                </button>
+              )}
             </>
           )}
         </div>

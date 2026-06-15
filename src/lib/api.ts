@@ -26,7 +26,7 @@ function _getTtl(path: string): number {
   if (path.startsWith('/api/github/')) return 30_000;  // PR data changes slowly
   if (path.startsWith('/api/git/status')) return 5_000; // git status: short TTL
   if (path.startsWith('/api/git/log')) return 10_000;   // git log: medium TTL
-  if (path.startsWith('/api/chats')) return 10_000;     // chat list: short TTL so repo switches are instant
+  if (path.startsWith('/api/chats')) return 0;          // chat state changes over WS; avoid stale status on repo switches
   return 0;
 }
 
@@ -161,11 +161,12 @@ export const api = {
       `/api/chats?repoPath=${encodeURIComponent(repoPath)}`,
     ).then((r) => r.chats),
 
-  createChat: (repoPath: string, model: Model, permissionMode: PermissionMode) =>
+  createChat: (repoPath: string, model: Model, permissionMode: PermissionMode, id?: string) =>
     send<{ chat: ChatRecord }>("POST", `/api/chats`, {
       repoPath,
       model,
       permissionMode,
+      ...(id ? { id } : {}),
     }).then((r) => r.chat),
 
   getChat: (repoPath: string, chatId: string) =>
@@ -284,6 +285,22 @@ export const api = {
     send<{ ok: boolean }>("DELETE", `/api/schedules/${id}`),
 };
 
+// ── Caffeinate (keep Mac awake) ──────────────────────────────────────────────
+export interface CaffeineStatus {
+  active: boolean;
+  secondsRemaining: number;
+  keepDisplayAwake: boolean;
+  supported: boolean;
+}
+
+export const caffeineApi = {
+  getStatus: () => getJson<CaffeineStatus>(`/api/caffeinate`),
+  addHour: () => send<CaffeineStatus>("POST", `/api/caffeinate/add`),
+  stop: () => send<CaffeineStatus>("POST", `/api/caffeinate/stop`),
+  setDisplay: (on: boolean) =>
+    send<CaffeineStatus>("POST", `/api/caffeinate/display`, { on }),
+};
+
 // ── Semantic search ────────────────────────────────────────────────────────────
 // ── Env var management ─────────────────────────────────────────────────────
 export const envApi = {
@@ -316,6 +333,7 @@ export interface GitStatus {
   behind: number;
   isDirty: boolean;
   hasUpstream: boolean;
+  isDetached: boolean;
 }
 
 export interface GitCommit {

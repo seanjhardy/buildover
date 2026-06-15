@@ -67,14 +67,20 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // Listen on all interfaces (IPv4 + IPv6). By default Vite binds only IPv6
+    // [::1], but `tailscale serve` proxies to IPv4 127.0.0.1 — the mismatch
+    // makes the tunnel return 502 (blank page on the phone). `host: true` binds
+    // both so the proxy reaches the dev server.
+    host: true,
     // Accept the Tailscale MagicDNS hostname so the phone can load the dev
     // server through `tailscale serve` without Vite's host check rejecting it.
     allowedHosts: [".ts.net"],
     proxy: {
       "/api": "http://localhost:8787",
       "/focus": "http://localhost:8787",
-      // WebSocket endpoints — proxied so the dev server (:5173) is a complete
-      // stand-in for the backend, including over a tunnel.
+      // WebSocket endpoints — proxied (ws: true) so the dev server (:5173) is a
+      // complete stand-in for the backend, including over a tunnel. Without this
+      // the client connection hangs in "connecting" forever in Vite dev.
       "/agent": { target: "ws://localhost:8787", ws: true },
       "/orchestrator": { target: "ws://localhost:8787", ws: true },
       "/terminal": { target: "ws://localhost:8787", ws: true },

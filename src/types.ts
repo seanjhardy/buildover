@@ -79,6 +79,7 @@ export interface InstalledMcpServer {
 export type ChatStatus =
   | "awaiting_input"
   | "running"
+  | "queued"
   | "agent_done"
   | "idle"
   | "finished"
@@ -219,11 +220,20 @@ export interface ChatRecord {
   status: ChatStatus;
   userMarkedFinished: boolean;
   sessionId?: string;
+  /** One-shot marker set by fork / branch-switch / revert. When present, the
+   *  next agent turn resumes `sessionId` only up to and including this SDK
+   *  message UUID (forking the SDK session at that point) so the model never
+   *  sees messages that were edited away or reverted. Cleared when the next
+   *  turn's system_init establishes the forked session. */
+  resumeSessionAt?: string;
   model: Model;
   permissionMode: PermissionMode;
   createdAt: string;
   updatedAt: string;
   events: ChatEvent[];
+  /** User turns deferred because Claude usage is exhausted. The user message
+   *  is already persisted in events; these entries are the runnable work queue. */
+  queuedTurns?: QueuedChatTurn[];
   /** Most recent context window usage — updated on every turn, used to
    *  re-populate the context ring when replaying/loading a chat. */
   lastContextUsage?: ContextUsage;
@@ -242,6 +252,19 @@ export interface ChatRecord {
   worktreePath?: string;
   /** Branch checked out in `worktreePath` (e.g. `subagent/<chatId>`). */
   worktreeBranch?: string;
+}
+
+export interface QueuedChatTurn {
+  id: string;
+  text: string;
+  model: Model;
+  permissionMode: PermissionMode;
+  attachments?: Attachment[];
+  origin?: MessageOrigin;
+  originLabel?: string;
+  createdAt: string;
+  runAfter: string | null;
+  reason: string;
 }
 
 // ---- Plans / tickets (coordinator workflow) ----
