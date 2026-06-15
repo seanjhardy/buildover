@@ -67,9 +67,17 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    // Accept the Tailscale MagicDNS hostname so the phone can load the dev
+    // server through `tailscale serve` without Vite's host check rejecting it.
+    allowedHosts: [".ts.net"],
     proxy: {
       "/api": "http://localhost:8787",
       "/focus": "http://localhost:8787",
+      // WebSocket endpoints — proxied so the dev server (:5173) is a complete
+      // stand-in for the backend, including over a tunnel.
+      "/agent": { target: "ws://localhost:8787", ws: true },
+      "/orchestrator": { target: "ws://localhost:8787", ws: true },
+      "/terminal": { target: "ws://localhost:8787", ws: true },
     },
   },
 });

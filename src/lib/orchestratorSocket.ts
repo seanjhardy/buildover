@@ -2,6 +2,7 @@ import type {
   OrchestratorClientMessage,
   OrchestratorEvent,
 } from "../types.js";
+import { wsUrl } from "./serverOrigin.js";
 
 export type OrchestratorConnection =
   | "connecting"
@@ -9,10 +10,7 @@ export type OrchestratorConnection =
   | "error"
   | "closed";
 
-// Fall back to 'localhost' when window.location.hostname is empty, which
-// happens in Electron production builds where the page is served via file://.
-const host = window.location.hostname || "localhost";
-const WS_URL = `ws://${host}:8787/orchestrator`;
+const WS_URL = wsUrl("/orchestrator");
 
 type ConnectionListener = (c: OrchestratorConnection) => void;
 type EventListener = (event: OrchestratorEvent) => void;

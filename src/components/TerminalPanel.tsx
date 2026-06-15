@@ -5,6 +5,7 @@ import { WebLinksAddon } from "@xterm/addon-web-links";
 import { Plus, X, ChevronDown, Terminal as TerminalIcon } from "lucide-react";
 import "@xterm/xterm/css/xterm.css";
 import { openExternalUrl } from "../lib/openExternalUrl.js";
+import { wsUrl } from "../lib/serverOrigin.js";
 
 // ── Types ──────────────────────────────────────────────────────────────────────
 
@@ -216,7 +217,7 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
     const connect = () => {
       if (disposed) return;
 
-      const ws = new WebSocket("ws://localhost:8787/terminal");
+      const ws = new WebSocket(wsUrl("/terminal"));
       wsRef.current = ws;
 
       ws.onopen = () => {

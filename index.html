@@ -2,8 +2,26 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
     <title>buildover</title>
+
+    <!-- PWA: installable, branded, full-screen on iOS "Add to Home Screen" -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <meta name="theme-color" content="#181818" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="buildover" />
+    <script>
+      // Register the service worker so the app is installable / launches
+      // standalone. Best-effort: never block app startup on it.
+      if ("serviceWorker" in navigator) {
+        window.addEventListener("load", function () {
+          navigator.serviceWorker.register("/sw.js").catch(function () {});
+        });
+      }
+    </script>
     <script>
       // Apply saved theme before first paint to prevent flash
       try {

@@ -10,6 +10,7 @@ import type {
   SearchResult,
   SearchIndexStatus,
 } from "../types.js";
+import { httpBase } from "./serverOrigin.js";
 
 // ── Response cache & in-flight deduplication ──────────────────────────────────
 // Eliminates redundant network requests when multiple callers fetch the same
@@ -37,10 +38,11 @@ export function invalidateApiCache(urlSubstring: string): void {
 }
 
 // In Electron production, the page is served from file:// so there is no
-// implicit base URL for relative fetch() paths. Detect this and prefix all
-// API calls with the explicit Express server origin.
+// implicit base URL for relative fetch() paths; we prefix the explicit local
+// server origin. In every other context (Vite dev, or served by Express itself
+// over HTTPS to the phone) the API is same-origin, so this is an empty string.
 function getApiBase(): string {
-  return window.location.protocol === "file:" ? "http://localhost:8787" : "";
+  return httpBase();
 }
 
 async function getJson<T>(path: string): Promise<T> {

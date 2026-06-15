@@ -1,5 +1,6 @@
 import express from "express";
 import { createServer } from "node:http";
+import { existsSync } from "node:fs";
 import { readFile as fsReadFile, readdir, readFile, writeFile, stat as fsStat } from "node:fs/promises";
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
@@ -124,6 +125,11 @@ import type {
 } from "../src/types.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
+// Bind to loopback by default so the server is never directly exposed on the
+// LAN or public internet. Remote phone access goes through `tailscale serve`,
+// which reverse-proxies from the tailnet to 127.0.0.1:PORT here — so the
+// tailnet is the only network boundary. Set HOST=0.0.0.0 to override for LAN.
+const HOST = process.env.HOST ?? "127.0.0.1";
 
 const app = express();
 app.use(express.json({ limit: "10mb" }));
@@ -1544,6 +1550,36 @@ app.post("/api/self/force-pull", async (_req, res) => {
   }
 });
 
+// ---- Static SPA (remote / phone access) ----
+// When a built frontend exists in dist/, serve it from this same Express server
+// so the whole app (UI + API + WS) is reachable on one origin. This is what lets
+// a phone load the app over Tailscale at https://<laptop>.<tailnet>.ts.net with
+// everything same-origin (and wss:// for sockets). In normal desktop dev the UI
+// is served by Vite on :5173 instead and dist/ may be absent — hence the guard.
+//
+// Registered AFTER all /api routes above so it never shadows them. The catch-all
+// only matches GET navigations that aren't API/health/focus/WS paths, so a
+// missing API route still 404s as JSON rather than returning index.html.
+const distDir = join(process.cwd(), "dist");
+const distIndex = join(distDir, "index.html");
+// Register unconditionally and probe per-request, so a dist/ built AFTER the
+// server starts (the common case: `npm run build:web` while it's running) is
+// picked up without a restart. With no build present these are harmless:
+// express.static falls through, and the catch-all 404s like before.
+app.use(express.static(distDir));
+app.get(
+  /^(?!\/(api|health|focus|agent|orchestrator|terminal)(\/|$)).*/,
+  (_req, res, next) => {
+    if (existsSync(distIndex)) res.sendFile(distIndex);
+    else next();
+  },
+);
+if (existsSync(distIndex)) {
+  console.log(`[server] serving built SPA from ${distDir}`);
+} else {
+  console.log("[server] no dist/ build yet — run `npm run build:web` to serve the phone UI");
+}
+
 // ---- WebSocket multiplexer ----
 const httpServer = createServer(app);
 // Both WS endpoints use noServer mode so we can route a single `upgrade`
@@ -1839,10 +1875,10 @@ orchWss.on("connection", (ws: WebSocket) => {
   });
 });
 
-httpServer.listen(PORT, () => {
+httpServer.listen(PORT, HOST, () => {
   // eslint-disable-next-line no-console
-  console.log(`[server] listening on http://localhost:${PORT}`);
-  console.log(`[server] websocket at ws://localhost:${PORT}/agent`);
+  console.log(`[server] listening on http://${HOST}:${PORT}`);
+  console.log(`[server] websocket at ws://${HOST}:${PORT}/agent`);
   void recoverStaleChats();
   void startScheduler();
   startSelfUpdateChecker();
