@@ -158,6 +158,20 @@ const PORT = Number(process.env.PORT ?? 8787);
 // tailnet is the only network boundary. Set HOST=0.0.0.0 to override for LAN.
 const HOST = process.env.HOST ?? "127.0.0.1";
 
+process.on("unhandledRejection", (reason) => {
+  console.error("[server] unhandled rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[server] uncaught exception:", err);
+  const code = (err as NodeJS.ErrnoException).code;
+  const syscall = (err as NodeJS.ErrnoException).syscall;
+  if (syscall === "listen" || code === "EADDRINUSE" || code === "EACCES") {
+    process.exitCode = 1;
+    setTimeout(() => process.exit(1), 10).unref();
+  }
+});
+
 const app = express();
 app.use(express.json({ limit: "10mb" }));
 
@@ -2098,17 +2112,9 @@ async function recoverStaleChats(): Promise<void> {
       try {
         const healedIds = await recoverStaleChatsForRepoWithIds(r.path);
         total += healedIds.length;
-        // Fire retries in the background — don't await so one slow agent
-        // doesn't block recovery of the remaining repos/chats.
-        for (const chatId of healedIds) {
-          const session = getSession(r.path, chatId);
-          session.retryAfterRestart().catch((err) => {
-            console.warn(
-              `[server] retry failed for ${chatId}:`,
-              err instanceof Error ? err.message : err,
-            );
-          });
-        }
+        // Do not auto-retry healed chats on startup. A persisted bad turn can
+        // otherwise crash the server, restart, get retried again, and loop.
+        // The user can retry explicitly from the healed transcript.
         await scheduleQueuedTurnsForRepo(r.path);
       } catch (err) {
         console.warn(
@@ -2117,7 +2123,7 @@ async function recoverStaleChats(): Promise<void> {
         );
       }
     }
-    if (total > 0) console.log(`[server] recovered and retrying ${total} stale chat(s)`);
+    if (total > 0) console.log(`[server] recovered ${total} stale chat(s)`);
   } catch (err) {
     console.warn(
       "[server] stale-chat recovery failed:",

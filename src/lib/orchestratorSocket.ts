@@ -42,6 +42,7 @@ class OrchestratorSocket {
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
     ws.addEventListener("open", () => {
+      if (this.ws !== ws) return;
       this.setConnection("connected");
       this.retryDelayMs = 500;
       while (this.outbox.length > 0) {
@@ -49,12 +50,17 @@ class OrchestratorSocket {
         if (msg) ws.send(JSON.stringify(msg));
       }
     });
-    ws.addEventListener("error", () => this.setConnection("error"));
+    ws.addEventListener("error", () => {
+      if (this.ws !== ws) return;
+      this.setConnection("error");
+    });
     ws.addEventListener("close", () => {
+      if (this.ws !== ws) return;
       this.setConnection("closed");
       this.scheduleReconnect();
     });
     ws.addEventListener("message", (ev) => {
+      if (this.ws !== ws) return;
       let event: OrchestratorEvent;
       try {
         event = JSON.parse(ev.data) as OrchestratorEvent;

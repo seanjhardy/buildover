@@ -43,6 +43,7 @@ class AgentSocket {
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
     ws.addEventListener("open", () => {
+      if (this.ws !== ws) return;
       const isReconnect = this.hasConnectedBefore;
       this.hasConnectedBefore = true;
       this.setConnection("connected");
@@ -65,12 +66,17 @@ class AgentSocket {
         }
       }
     });
-    ws.addEventListener("error", () => this.setConnection("error"));
+    ws.addEventListener("error", () => {
+      if (this.ws !== ws) return;
+      this.setConnection("error");
+    });
     ws.addEventListener("close", () => {
+      if (this.ws !== ws) return;
       this.setConnection("closed");
       this.scheduleReconnect();
     });
     ws.addEventListener("message", (ev) => {
+      if (this.ws !== ws) return;
       let event: AgentEvent;
       try {
         event = JSON.parse(ev.data) as AgentEvent;
@@ -138,7 +144,6 @@ class AgentSocket {
     }
     if (this.ws) {
       this.ws.close();
-      this.ws = null;
     }
     this.connect();
   }

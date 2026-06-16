@@ -96,6 +96,10 @@ export function EmptyWorkspace({
       <div className="ew-orb ew-orb-secondary" aria-hidden="true" />
 
       <div className="ew-layout">
+        {/* Left column */}
+        <SetupPanel />
+
+        {/* Center column — logo / hero */}
         <div className="empty-workspace-card">
           {/* Icon cluster + central logo */}
         <div className="ew-icon-cluster" aria-hidden="true">
@@ -167,11 +171,8 @@ export function EmptyWorkspace({
         </div>
       </div>
 
-      {/* Setup panel — right column */}
-      <div className="ew-right-col">
-        <SetupPanel />
-        <RemoteAccessCard />
-      </div>
+      {/* Right column */}
+      <RemoteAccessCard />
       </div>
     </div>
   );

@@ -176,6 +176,11 @@
     display: none;
   }
 
+  /* ---- Hide the floating coordinator mic (orchestrator FAB) on mobile. ---- */
+  .orch-fab {
+    display: none;
+  }
+
   /* ---- Composer permission pill: icon only (hide the text label). ---- */
   .mode-pill .mode-pill-label {
     display: none;

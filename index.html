@@ -8,7 +8,7 @@
     <!-- PWA: installable, branded, full-screen on iOS "Add to Home Screen" -->
     <link rel="manifest" href="/manifest.webmanifest" />
     <meta name="theme-color" content="#181818" />
-    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png?v=3" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
@@ -29,9 +29,62 @@
         if (t) document.documentElement.dataset.theme = t;
       } catch(e) {}
     </script>
+    <style>
+      /* Instant branded splash. These rules are inline (no external CSS/JS
+         dependency) so the very first paint is the dark buildover screen — no
+         white flash while the JS bundle + app stylesheet load (most noticeable
+         on mobile over the tunnel). React clears #root on mount, which removes
+         the splash automatically. */
+      html, body { margin: 0; background: #181818; }
+      #app-splash {
+        position: fixed;
+        inset: 0;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 20px;
+        background: #181818;
+        color: #e5e5e5;
+        font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+        /* clear the iPhone status bar */
+        padding-top: env(safe-area-inset-top, 0px);
+      }
+      #app-splash .spl-logo {
+        width: 76px;
+        height: 76px;
+        border-radius: 18px;
+        animation: spl-pulse 1.6s ease-in-out infinite;
+      }
+      #app-splash .spl-name {
+        font-size: 15px;
+        font-weight: 600;
+        letter-spacing: 0.2px;
+        opacity: 0.85;
+      }
+      #app-splash .spl-spin {
+        width: 22px;
+        height: 22px;
+        border-radius: 50%;
+        border: 2px solid rgba(217, 119, 87, 0.25);
+        border-top-color: #d97757;
+        animation: spl-rot 0.8s linear infinite;
+      }
+      @keyframes spl-rot { to { transform: rotate(360deg); } }
+      @keyframes spl-pulse {
+        0%, 100% { opacity: 1; transform: scale(1); }
+        50% { opacity: 0.78; transform: scale(0.97); }
+      }
+    </style>
   </head>
   <body>
-    <div id="root"></div>
+    <div id="root">
+      <div id="app-splash">
+        <img class="spl-logo" src="/icons/apple-touch-icon.png?v=3" alt="" />
+        <div class="spl-name">buildover</div>
+        <div class="spl-spin"></div>
+      </div>
+    </div>
     <script type="module" src="/src/main.tsx"></script>
   </body>
 </html>

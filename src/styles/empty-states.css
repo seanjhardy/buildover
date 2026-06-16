@@ -31,11 +31,16 @@
 .empty-workspace {
   flex: 1;
   display: flex;
-  align-items: center;
+  /* `safe center` centers when it fits but falls back to top-aligned (rather
+     than clipping the top) once content is taller than the viewport, so the
+     page scrolls instead of cutting off. */
+  align-items: safe center;
   justify-content: center;
   padding: var(--app-spacing-xlarge);
   position: relative;
-  overflow: hidden;
+  overflow-y: auto;
+  overflow-x: hidden; /* no sideways scroll (glow orbs / wide content) on phone */
+  overscroll-behavior: contain;
 }
 
 /* Ambient glow orbs */
@@ -269,15 +274,34 @@
   align-items: flex-start;
   gap: 28px;
   width: 100%;
-  max-width: 920px;
+  max-width: 1180px;
   justify-content: center;
 }
 
-/* On narrow viewports stack vertically */
-@media (max-width: 820px) {
+/* Three columns: setup panel | logo (center) | remote-access card. Equal-width
+   flanks (flex:1 1 0 with the same cap) keep the centre logo truly centred. */
+.ew-layout > .setup-panel,
+.ew-layout > .ew-remote {
+  flex: 1 1 0;
+  min-width: 0;
+  max-width: 340px;
+}
+.ew-layout > .empty-workspace-card {
+  flex: 0 0 auto;
+}
+
+/* On narrow viewports stack vertically: logo first, then the two panels. */
+@media (max-width: 900px) {
   .ew-layout {
     flex-direction: column;
     align-items: center;
+  }
+  .ew-layout > .empty-workspace-card { order: -1; }
+  .ew-layout > .setup-panel,
+  .ew-layout > .ew-remote {
+    flex: none;
+    width: 100%;
+    max-width: 460px;
   }
 }
 
@@ -704,14 +728,7 @@
   gap: var(--app-spacing-large);
 }
 
-/* ---- Right column: setup panel + remote-access tutorial ---- */
-.ew-right-col {
-  display: flex;
-  flex-direction: column;
-  gap: var(--app-spacing-large);
-  min-width: 0;
-}
-
+/* ---- Remote-access tutorial card ---- */
 .ew-remote {
   border: 1px solid var(--app-primary-border-color);
   border-radius: 12px;

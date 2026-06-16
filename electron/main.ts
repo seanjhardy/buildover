@@ -4,7 +4,6 @@ const { spawn } = require("child_process");
 const http = require("http");
 
 const PROJECT_DIR = path.resolve(__dirname, "..");
-const NPM = "npm";
 const EXTRA_PATH = [
   "/opt/homebrew/bin",
   "/opt/homebrew/sbin",
@@ -23,6 +22,42 @@ const ENV = {
 let mainWindow: any = null;
 let serverProcess: any = null;
 let clientProcess: any = null;
+let isQuitting = false;
+
+function trackChild(
+  label: "server" | "client",
+  child: any,
+  spawnFn: () => any,
+): void {
+  let restartTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleRestart = (reason: string) => {
+    if (isQuitting || restartTimer) return;
+    restartTimer = setTimeout(() => {
+      restartTimer = null;
+      if (isQuitting) return;
+      const next = spawnFn();
+      trackChild(label, next, spawnFn);
+      if (label === "server") serverProcess = next;
+      else clientProcess = next;
+    }, 1000);
+    console.warn(`[electron] restarting ${label} after ${reason}`);
+  };
+
+  child.on("exit", (code: number | null, signal: string | null) => {
+    if (isQuitting) return;
+    console.warn(`[electron] ${label} exited`, { code, signal });
+    // Dev servers should stay alive for the lifetime of the Electron app.
+    // If one dies unexpectedly, restart it after a short backoff so the UI
+    // doesn't fall into a "server closed" state a few seconds after launch.
+    scheduleRestart(`exit ${code ?? "null"}${signal ? `/${signal}` : ""}`);
+  });
+  child.on("error", (err: Error) => {
+    if (!isQuitting) {
+      console.error(`[electron] ${label} failed to start:`, err);
+      scheduleRestart(err.message);
+    }
+  });
+}
 
 // Check if a port is already accepting connections
 function isPortUp(port: number): Promise<boolean> {
@@ -52,16 +87,32 @@ async function startServers(): Promise<void> {
     isPortUp(5173),
   ]);
   if (!serverUp) {
-    serverProcess = spawn(NPM, ["run", "dev:server"], {
-      cwd: PROJECT_DIR, env: ENV, stdio: "ignore",
+    const spawnServer = () => spawn("node", [
+      "--env-file-if-exists=.env",
+      "--import",
+      "tsx",
+      "server/index.ts",
+    ], {
+      cwd: PROJECT_DIR,
+      env: ENV,
+      stdio: "ignore",
     });
+    serverProcess = spawnServer();
+    trackChild("server", serverProcess, spawnServer);
   }
   if (!clientUp) {
-    clientProcess = spawn(NPM, ["run", "dev:client"], {
-      cwd: PROJECT_DIR, env: ENV, stdio: "ignore",
+    const spawnClient = () => spawn(path.join(PROJECT_DIR, "node_modules", ".bin", "vite"), [], {
+      cwd: PROJECT_DIR,
+      env: ENV,
+      stdio: "ignore",
     });
+    clientProcess = spawnClient();
+    trackChild("client", clientProcess, spawnClient);
   }
-  await waitForPort(5173);
+  await Promise.all([
+    waitForPort(8787),
+    waitForPort(5173),
+  ]);
 }
 
 function createWindow(): void {
@@ -172,6 +223,7 @@ app.on("window-all-closed", () => {
 });
 
 app.on("before-quit", () => {
+  isQuitting = true;
   serverProcess?.kill();
   clientProcess?.kill();
 });
