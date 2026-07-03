@@ -21,6 +21,7 @@ export interface UseChatsReturn {
   ) => Promise<ChatRecord>;
   setUserFinished: (chatId: string, finished: boolean) => Promise<void>;
   rename: (chatId: string, title: string) => Promise<void>;
+  setStarred: (chatId: string, starred: boolean) => Promise<void>;
   deleteChat: (chatId: string) => Promise<void>;
 }
 
@@ -227,6 +228,28 @@ export function useChats(
     [repoPath],
   );
 
+  const setStarred = useCallback(
+    async (chatId: string, starred: boolean) => {
+      if (!repoPath) return;
+      // Optimistic update so the chat jumps to/from the pinned section instantly.
+      setChats((prev) =>
+        prev.map((c) => (c.id === chatId ? { ...c, starred } : c)),
+      );
+      try {
+        const updated = await api.patchChat(repoPath, chatId, { starred });
+        setChats((prev) =>
+          prev.map((c) => (c.id === chatId ? recordToSummary(updated) : c)),
+        );
+      } catch {
+        // Roll back on failure.
+        setChats((prev) =>
+          prev.map((c) => (c.id === chatId ? { ...c, starred: !starred } : c)),
+        );
+      }
+    },
+    [repoPath],
+  );
+
   const deleteChat = useCallback(
     async (chatId: string) => {
       if (!repoPath) return;
@@ -247,6 +270,7 @@ export function useChats(
     createChat,
     setUserFinished,
     rename,
+    setStarred,
     deleteChat,
   };
 }
@@ -272,6 +296,7 @@ function recordToSummary(record: ChatRecord): ChatSummary {
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     preview: previewParts.join(" ").slice(0, 600),
+    starred: record.starred,
     kind: record.kind,
     parentChatId: record.parentChatId,
     task: record.task,

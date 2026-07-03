@@ -43,6 +43,15 @@ export function plansPath(repoPath: string): string {
   return join(repoBuildoverDir(repoPath), "plans.json");
 }
 
+/**
+ * Per-repo directory where subagents write curated context bundles (relevant
+ * file dumps) for their parent coordinator to read. Kept under the buildover
+ * home, not inside the user's repo, so it never pollutes their working tree.
+ */
+export function contextDir(repoPath: string): string {
+  return join(repoBuildoverDir(repoPath), "context");
+}
+
 async function readJson<T>(path: string): Promise<T | null> {
   try {
     const raw = await readFile(path, "utf8");

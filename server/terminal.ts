@@ -1,8 +1,10 @@
 import { type WebSocket, WebSocketServer } from "ws";
 import * as pty from "node-pty";
 import os from "os";
-import { existsSync, mkdirSync, writeFileSync } from "fs";
+import { existsSync, mkdirSync, writeFileSync, readdirSync } from "fs";
+import { execFileSync } from "child_process";
 import path from "path";
+import { completeTerminalCommand } from "./terminalComplete.js";
 
 // ── Custom ZDOTDIR for orange prompt ─────────────────────────────────────────
 // Creates a tiny .zshrc that (1) sources the user's real ~/.zshrc so all their
@@ -24,11 +26,14 @@ type TerminalClientMsg =
   | { type: "create"; tabId: string; cwd: string }
   | { type: "input"; tabId: string; data: string }
   | { type: "resize"; tabId: string; cols: number; rows: number }
-  | { type: "destroy"; tabId: string };
+  | { type: "destroy"; tabId: string }
+  | { type: "complete"; tabId: string; line: string; cwd?: string };
 
 interface PtySession {
   process: pty.IPty;
   tabId: string;
+  recentCommands: string[];
+  inputBuffer: string;
 }
 
 function resolveShell(): string {
@@ -41,9 +46,38 @@ function resolveShell(): string {
   return "/bin/sh";
 }
 
+const dirCache = new Map<string, { entries: string[]; ts: number }>();
+const DIR_CACHE_TTL = 10_000;
+
+function getDirEntries(dirPath: string): string[] {
+  const cached = dirCache.get(dirPath);
+  if (cached && Date.now() - cached.ts < DIR_CACHE_TTL) return cached.entries;
+  try {
+    const entries = readdirSync(dirPath).slice(0, 50);
+    dirCache.set(dirPath, { entries, ts: Date.now() });
+    return entries;
+  } catch {
+    return [];
+  }
+}
+
+function getPtyCwd(pid: number): string | null {
+  try {
+    const out = execFileSync("lsof", ["-p", String(pid), "-d", "cwd", "-Fn"], {
+      timeout: 500,
+      encoding: "utf8",
+    });
+    for (const line of out.split("\n")) {
+      if (line.startsWith("n") && line.length > 1) return line.slice(1);
+    }
+  } catch { /* ignore */ }
+  return null;
+}
+
 export function attachTerminalWss(wss: WebSocketServer): void {
   wss.on("connection", (ws: WebSocket) => {
     const sessions = new Map<string, PtySession>();
+    const pendingCompletions = new Map<string, AbortController>();
 
     const send = (msg: object) => {
       if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(msg));
@@ -105,7 +139,12 @@ export function attachTerminalWss(wss: WebSocketServer): void {
             send({ type: "exit", tabId: msg.tabId, code: exitCode });
           });
 
-          sessions.set(msg.tabId, { process: ptyProcess, tabId: msg.tabId });
+          sessions.set(msg.tabId, {
+            process: ptyProcess,
+            tabId: msg.tabId,
+            recentCommands: [],
+            inputBuffer: "",
+          });
 
           // Notify the client immediately so it can clear the loading overlay
           // without waiting for the shell to finish sourcing ~/.zshrc etc.
@@ -114,7 +153,58 @@ export function attachTerminalWss(wss: WebSocketServer): void {
         }
 
         case "input": {
-          sessions.get(msg.tabId)?.process.write(msg.data);
+          const si = sessions.get(msg.tabId);
+          if (!si) break;
+          si.process.write(msg.data);
+
+          for (const ch of msg.data) {
+            if (ch === "\r" || ch === "\n") {
+              const cmd = si.inputBuffer.trim();
+              if (cmd) {
+                si.recentCommands.push(cmd);
+                if (si.recentCommands.length > 15) si.recentCommands.shift();
+              }
+              si.inputBuffer = "";
+            } else if (ch === "\x7f" || ch === "\b") {
+              si.inputBuffer = si.inputBuffer.slice(0, -1);
+            } else if (ch === "\x03" || ch === "\x15") {
+              si.inputBuffer = "";
+            } else if (ch >= " ") {
+              si.inputBuffer += ch;
+            }
+          }
+          break;
+        }
+
+        case "complete": {
+          const prev = pendingCompletions.get(msg.tabId);
+          if (prev) prev.abort();
+
+          const abort = new AbortController();
+          pendingCompletions.set(msg.tabId, abort);
+
+          const sess = sessions.get(msg.tabId);
+          const cwd = sess ? getPtyCwd(sess.process.pid) ?? msg.cwd : msg.cwd;
+          const dirEntries = cwd ? getDirEntries(cwd) : undefined;
+
+          completeTerminalCommand({
+            line: msg.line,
+            history: sess?.recentCommands,
+            cwd: cwd ?? undefined,
+            dirEntries,
+            signal: abort.signal,
+          })
+            .then((result) => {
+              if (!abort.signal.aborted && result) {
+                send({ type: "suggestion", tabId: msg.tabId, text: result.text, mode: result.mode });
+              }
+            })
+            .catch(() => {})
+            .finally(() => {
+              if (pendingCompletions.get(msg.tabId) === abort) {
+                pendingCompletions.delete(msg.tabId);
+              }
+            });
           break;
         }
 

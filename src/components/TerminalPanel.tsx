@@ -37,6 +37,43 @@ export interface TerminalPanelHandle {
 const TERMINAL_FONT_SIZE = 11;
 const MIN_FIT_WIDTH = 40;
 const MIN_FIT_HEIGHT = 40;
+const AC_DEBOUNCE_MS = 400;
+const AC_MIN_CHARS = 3;
+
+function getCurrentCommand(terminal: Terminal): string {
+  const buffer = terminal.buffer.active;
+  const y = buffer.baseY + buffer.cursorY;
+  const line = buffer.getLine(y);
+  if (!line) return "";
+  const text = line.translateToString(true);
+  const idx = text.indexOf("> ");
+  if (idx < 0 || idx > 50) return "";
+  return text.slice(idx + 2);
+}
+
+function getCursorPixelPos(
+  terminal: Terminal,
+  container: HTMLDivElement,
+): { x: number; y: number } | null {
+  const core = (terminal as any)._core;
+  const dims = core?._renderService?.dimensions;
+  if (!dims) return null;
+
+  const cellW: number = dims.css.cell.width;
+  const cellH: number = dims.css.cell.height;
+
+  const screenEl = container.querySelector(".xterm-screen") as HTMLElement | null;
+  const area = container.closest(".terminal-xterm-area") as HTMLElement | null;
+  if (!screenEl || !area) return null;
+
+  const areaRect = area.getBoundingClientRect();
+  const screenRect = screenEl.getBoundingClientRect();
+
+  return {
+    x: screenRect.left - areaRect.left + terminal.buffer.active.cursorX * cellW,
+    y: screenRect.top - areaRect.top + terminal.buffer.active.cursorY * cellH + 2,
+  };
+}
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
@@ -134,6 +171,31 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
   // Tracks tabs that are currently executing a run-panel command (cleared on prompt detection)
   const runningTabIdsRef = useRef<Set<string>>(new Set());
 
+  // ── Autocomplete (ghost text) state ──────────────────────────────────────────
+  const ghostTextRef = useRef<string | null>(null);
+  const ghostModeRef = useRef<"append" | "replace">("append");
+  const acTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [ghostText, setGhostText] = useState<string | null>(null);
+  const [ghostPos, setGhostPos] = useState<{ x: number; y: number } | null>(null);
+  const [ghostMode, setGhostMode] = useState<"append" | "replace">("append");
+
+  const clearGhost = useCallback(() => {
+    if (acTimerRef.current) clearTimeout(acTimerRef.current);
+    acTimerRef.current = null;
+    ghostTextRef.current = null;
+    ghostModeRef.current = "append";
+    setGhostText(null);
+    setGhostPos(null);
+    setGhostMode("append");
+  }, []);
+
+  const triggerCompletionRef = useRef<(tabId: string) => void>(() => {});
+  const clearGhostRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    clearGhostRef.current = clearGhost;
+  }, [clearGhost]);
+
   useEffect(() => {
     tabsRef.current = tabs;
   }, [tabs]);
@@ -188,6 +250,20 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
       pendingRef.current.push(msg);
     }
   }, []);
+
+  useEffect(() => {
+    triggerCompletionRef.current = (tabId: string) => {
+      if (acTimerRef.current) clearTimeout(acTimerRef.current);
+      acTimerRef.current = setTimeout(() => {
+        const inst = terminalsRef.current.get(tabId);
+        if (!inst) return;
+        const cmd = getCurrentCommand(inst.terminal);
+        if (cmd.length >= AC_MIN_CHARS) {
+          wsSend({ type: "complete", tabId, line: cmd });
+        }
+      }, AC_DEBOUNCE_MS);
+    };
+  }, [wsSend]);
 
   const fitTerminalWhenReady = useCallback((
     tabId: string,
@@ -245,6 +321,7 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
         try {
           const msg = JSON.parse(ev.data as string) as {
             type: string; tabId: string; data?: string; code?: number; message?: string;
+            text?: string;
           };
           if (msg.type === "ready") {
             // PTY has been spawned — clear the loading overlay immediately so
@@ -279,6 +356,20 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
               );
               const tab = tabsRef.current.find((t) => t.id === msg.tabId);
               if (tab) wsSend({ type: "create", tabId: tab.id, cwd: tab.cwd });
+            }
+          } else if (msg.type === "suggestion" && msg.text) {
+            const inst = terminalsRef.current.get(msg.tabId);
+            const container = containerRefs.current.get(msg.tabId);
+            if (inst && container) {
+              const pos = getCursorPixelPos(inst.terminal, container);
+              if (pos) {
+                const mode = (msg as any).mode === "replace" ? "replace" as const : "append" as const;
+                ghostTextRef.current = msg.text;
+                ghostModeRef.current = mode;
+                setGhostText(msg.text);
+                setGhostPos(pos);
+                setGhostMode(mode);
+              }
             }
           }
         } catch { /* ignore */ }
@@ -323,6 +414,7 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
       lineHeight: 1.4,
       cursorBlink: true,
       cursorStyle: "bar",
+      cursorInactiveStyle: "bar",
       scrollback: 5000,
       allowTransparency: false,
       macOptionIsMeta: true,
@@ -336,9 +428,33 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
     }));
     terminal.open(container);
 
+    terminal.attachCustomKeyEventHandler((event: KeyboardEvent) => {
+      if (event.type !== "keydown") return true;
+      if (event.key === "Tab" && !event.shiftKey && ghostTextRef.current) {
+        event.preventDefault();
+        if (ghostModeRef.current === "replace") {
+          wsSend({ type: "input", tabId: tab.id, data: "\x01\x0b" + ghostTextRef.current });
+        } else {
+          wsSend({ type: "input", tabId: tab.id, data: ghostTextRef.current });
+        }
+        clearGhostRef.current();
+        return false;
+      }
+      if (event.key === "Escape" && ghostTextRef.current) {
+        clearGhostRef.current();
+        return false;
+      }
+      return true;
+    });
+
     terminal.onData((data) => {
       if (settingUpTabIdsRef.current.has(tab.id) || !wsOpenRef.current) return;
       wsSend({ type: "input", tabId: tab.id, data });
+
+      clearGhostRef.current();
+      if (data === "\r" || data === "\n" || data === "\x03") return;
+      if (data.charCodeAt(0) === 0x1b) return;
+      triggerCompletionRef.current(tab.id);
     });
     terminal.onResize(({ cols, rows }) => wsSend({ type: "resize", tabId: tab.id, cols, rows }));
 
@@ -395,6 +511,7 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
 
   // When switching tabs, fit + focus the newly visible terminal
   useEffect(() => {
+    clearGhost();
     if (!isOpen || !activeTabId) return;
     const tab = tabs.find((t) => t.id === activeTabId);
     const container = containerRefs.current.get(activeTabId);
@@ -611,6 +728,14 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
               style={{ display: tab.id === activeTabId ? "flex" : "none" }}
             />
           ))}
+          {ghostText && ghostPos && (
+            <div
+              className={`terminal-ghost-text${ghostMode === "replace" ? " terminal-ghost-text--replace" : ""}`}
+              style={{ left: ghostPos.x, top: ghostPos.y }}
+            >
+              {ghostMode === "replace" ? `→ ${ghostText}` : ghostText}
+            </div>
+          )}
           {activeTabSettingUp && (
             <div className="terminal-loading-overlay" aria-live="polite">
               <span className="terminal-loading-spinner" />

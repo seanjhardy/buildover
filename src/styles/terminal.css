@@ -154,6 +154,24 @@
   background-color: var(--app-primary-background);
 }
 
+/* ── Ghost text (autocomplete suggestion) ──────────────────── */
+.terminal-ghost-text {
+  position: absolute;
+  pointer-events: none;
+  color: rgba(180, 180, 180, 0.38);
+  font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas,
+    "Liberation Mono", monospace;
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre;
+  z-index: 5;
+  user-select: none;
+}
+
+.terminal-ghost-text--replace {
+  color: rgba(217, 119, 87, 0.5);
+}
+
 .terminal-loading-overlay {
   position: absolute;
   inset: 2px 0 2px 4px;

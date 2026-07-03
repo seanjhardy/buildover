@@ -1,5 +1,5 @@
-import { memo } from "react";
-import { ArchiveRestore, Bot, Check, Trash2 } from "lucide-react";
+import { memo, useEffect, useRef, useState } from "react";
+import { ArchiveRestore, Bot, Check, Pencil, Star, Trash2 } from "lucide-react";
 import { StatusIcon } from "./StatusIcon.js";
 import type { ChatSummary } from "../types.js";
 
@@ -11,6 +11,8 @@ interface Props {
   onSelect: (chatId: string) => void;
   onToggleFinished: (chatId: string, finished: boolean) => void;
   onDelete: (chatId: string) => void;
+  onToggleStar?: (chatId: string, starred: boolean) => void;
+  onRename?: (chatId: string, title: string) => void;
   draftText?: string;
 }
 
@@ -22,17 +24,47 @@ function ChatSidebarItemInner({
   onSelect,
   onToggleFinished,
   onDelete,
+  onToggleStar,
+  onRename,
   draftText,
 }: Props) {
   const finished = chat.userMarkedFinished;
   const finishedLabel = finished ? "Unarchive" : "Mark finished";
   const isCoordinator = chat.kind === "coordinator";
   const isSubagent = chat.kind === "subagent";
+  const starred = !!chat.starred;
+
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(chat.title);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (editing) {
+      inputRef.current?.focus();
+      inputRef.current?.select();
+    }
+  }, [editing]);
+
+  const startEditing = () => {
+    setDraft(chat.title);
+    setEditing(true);
+  };
+
+  const commit = () => {
+    const next = draft.trim();
+    if (next && next !== chat.title) onRename?.(chat.id, next);
+    setEditing(false);
+  };
+
+  const cancel = () => {
+    setDraft(chat.title);
+    setEditing(false);
+  };
 
   return (
     <div
       className={`chat-item ${active ? "active" : ""}${isCoordinator ? " chat-item--coordinator" : ""}${isSubagent ? " chat-item--subagent" : ""}`}
-      onClick={() => onSelect(chat.id)}
+      onClick={() => !editing && onSelect(chat.id)}
       title={chat.title}
     >
       {isCoordinator ? (
@@ -43,27 +75,73 @@ function ChatSidebarItemInner({
         <StatusIcon status={chat.status} />
       )}
       <div className="chat-item-body">
-        <div className="chat-item-title">
-          {isSubagent && (
-            <span className="chat-item-agent-badge" title="Agent-spawned chat" aria-hidden="true">
-              <Bot size={11} />
-            </span>
-          )}
-          {chat.title}
-        </div>
-        {draftText ? (
+        {editing ? (
+          <input
+            ref={inputRef}
+            className="chat-item-rename-input"
+            value={draft}
+            onChange={(e) => setDraft(e.target.value)}
+            onClick={(e) => e.stopPropagation()}
+            onKeyDown={(e) => {
+              e.stopPropagation();
+              if (e.key === "Enter") commit();
+              else if (e.key === "Escape") cancel();
+            }}
+            onBlur={commit}
+          />
+        ) : (
+          <div className="chat-item-title">
+            {isSubagent && (
+              <span className="chat-item-agent-badge" title="Agent-spawned chat" aria-hidden="true">
+                <Bot size={11} />
+              </span>
+            )}
+            {starred && !isCoordinator && (
+              <Star
+                size={11}
+                className="chat-item-star-indicator"
+                fill="currentColor"
+                aria-hidden="true"
+              />
+            )}
+            {chat.title}
+          </div>
+        )}
+        {!editing && (draftText ? (
           <div className="chat-item-preview chat-item-draft">
             ✏ {draftText}
           </div>
         ) : chat.preview ? (
           <div className="chat-item-preview">{chat.preview}</div>
-        ) : null}
+        ) : null)}
       </div>
-      {!isCoordinator && (
+      {!isCoordinator && !editing && (
         <div
           className="chat-item-actions"
           onClick={(e) => e.stopPropagation()}
         >
+          {onToggleStar && (
+            <button
+              type="button"
+              className={`chat-item-action${starred ? " starred" : ""}`}
+              onClick={() => onToggleStar(chat.id, !starred)}
+              aria-label={starred ? "Unstar chat" : "Star chat"}
+              title={starred ? "Unstar chat" : "Star chat"}
+            >
+              <Star size={14} fill={starred ? "currentColor" : "none"} aria-hidden="true" />
+            </button>
+          )}
+          {onRename && (
+            <button
+              type="button"
+              className="chat-item-action"
+              onClick={startEditing}
+              aria-label="Rename chat"
+              title="Rename chat"
+            >
+              <Pencil size={14} aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             className="chat-item-action"

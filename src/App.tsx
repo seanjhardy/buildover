@@ -34,7 +34,8 @@ import { PlanViewer } from "./components/PlanViewer.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { CaffeineButton } from "./components/CaffeineButton.js";
 import { NotificationButton } from "./components/NotificationButton.js";
-import { LocalQueueBanner, QueuedTurnsBanner } from "./components/QueuedTurnsBanner.js";
+import { QueuedTurnsBanner } from "./components/QueuedTurnsBanner.js";
+import { MessageQueue } from "./components/MessageQueue.js";
 import { useAgent } from "./hooks/useAgent.js";
 import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
 import { useAudioRingBuffer } from "./hooks/useAudioRingBuffer.js";
@@ -100,7 +101,7 @@ export default function App() {
         .filter((c) => c.parentChatId === activeChatId)
         .map((c) => ({
           id: c.id,
-          label: c.task ?? c.title,
+          label: c.title ?? c.task,
           status: c.status,
           chatId: c.id,
         }))
@@ -570,6 +571,14 @@ Important rules for commands:
     void chats.setUserFinished(id, finished);
   }, [chats]);
 
+  const handleToggleStar = useCallback((id: string, starred: boolean) => {
+    void chats.setStarred(id, starred);
+  }, [chats]);
+
+  const handleRename = useCallback((id: string, title: string) => {
+    void chats.rename(id, title);
+  }, [chats]);
+
   // Stable callback so Composer receives the same function reference across
   // renders and the debounced draft notification doesn't re-trigger unnecessarily.
   const handleDraftChange = useCallback(
@@ -923,6 +932,8 @@ Important rules for commands:
                   onCreateChat={handleCreateChat}
                   onToggleFinished={handleToggleFinished}
                   onDeleteChat={handleDeleteChat}
+                  onToggleStar={handleToggleStar}
+                  onRename={handleRename}
                   chatDrafts={chatDrafts}
                   repoPath={activeRepo.path}
                   onClosePreview={closePreview}
@@ -946,6 +957,8 @@ Important rules for commands:
                   onCreate={handleCreateChat}
                   onToggleFinished={handleToggleFinished}
                   onDelete={handleDeleteChat}
+                  onToggleStar={handleToggleStar}
+                  onRename={handleRename}
                   repoPath={activeRepo.path}
                   chatDrafts={chatDrafts}
                   onOpenGraph={() => setGitGraphOpen(true)}
@@ -1226,7 +1239,6 @@ Important rules for commands:
                               chatId={activeChatId ?? undefined}
                             />
                             <QueuedTurnsBanner queuedTurns={agent.queuedTurns} />
-                            <LocalQueueBanner localQueue={agent.localQueue} />
                             {agent.pendingAttention && (
                               <AttentionPrompt
                                 pending={agent.pendingAttention}
@@ -1239,12 +1251,27 @@ Important rules for commands:
                                 onRespond={agent.respondPermission}
                               />
                             )}
-                            <div style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
+                            <div className="composer-dock" style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
+                              <MessageQueue
+                                queue={agent.localQueue}
+                                paused={agent.queuePaused}
+                                onTogglePause={agent.toggleQueuePaused}
+                                onRemove={agent.removeQueued}
+                                onFastTrack={agent.fastTrackQueued}
+                                onReorder={agent.reorderQueue}
+                              />
                               <Composer
                                 key={activeChatId ?? "none"}
                                 chatId={activeChatId ?? ""}
                                 onSend={(text, attachments) =>
                                   agent.send(text, {
+                                    model,
+                                    permissionMode,
+                                    attachments,
+                                  })
+                                }
+                                onQueuePaused={(text, attachments) =>
+                                  agent.enqueuePaused(text, {
                                     model,
                                     permissionMode,
                                     attachments,

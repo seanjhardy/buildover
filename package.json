@@ -15,7 +15,7 @@
     "electron:compile": "tsc -p electron/tsconfig.json && mv dist-electron/main.js dist-electron/main.cjs && mv dist-electron/preload.js dist-electron/preload.cjs",
     "electron:dev:only": "wait-on http://localhost:5173 && cross-env ELECTRON_IS_DEV=1 ./node_modules/.bin/electron dist-electron/main.cjs",
     "electron:dev": "concurrently -n server,client,electron -c yellow,cyan,magenta \"npm:dev:server\" \"npm:dev:client\" \"npm:electron:dev:only\"",
-    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist-server/index.cjs --external:@anthropic-ai/claude-agent-sdk --external:ws --external:express --external:node-cron --external:better-sqlite3 --external:@xenova/transformers",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --target=node22 --format=cjs --outfile=dist-server/index.cjs --external:@anthropic-ai/claude-agent-sdk --external:ws --external:express --external:node-cron --external:better-sqlite3 --external:@xenova/transformers --external:node-llama-cpp",
     "electron:build": "npm run build:web && npm run build:server && npm run electron:compile && electron-builder --mac",
     "electron:build:dir": "npm run build:web && npm run build:server && npm run electron:compile && electron-builder --mac --dir"
   },
@@ -74,6 +74,7 @@
     "highlight.js": "^11.11.1",
     "lucide-react": "^1.14.0",
     "node-cron": "^4.2.1",
+    "node-llama-cpp": "^3.18.1",
     "node-pty": "^1.2.0-beta.13",
     "openwakeword-wasm-browser": "^0.1.1",
     "react": "^18.3.1",

@@ -177,7 +177,7 @@ export const api = {
   patchChat: (
     repoPath: string,
     chatId: string,
-    body: { userMarkedFinished?: boolean; title?: string; model?: string },
+    body: { userMarkedFinished?: boolean; title?: string; model?: string; starred?: boolean },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
       repoPath,

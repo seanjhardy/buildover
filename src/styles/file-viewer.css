@@ -159,7 +159,8 @@
   margin-left: auto;
 }
 
-.file-viewer-close {
+.file-viewer-close,
+.file-viewer-header-btn {
   display: flex;
   align-items: center;
   justify-content: center;
@@ -174,7 +175,8 @@
   padding: 0;
 }
 
-.file-viewer-close:hover {
+.file-viewer-close:hover,
+.file-viewer-header-btn:hover {
   background: var(--app-list-hover-background);
   color: var(--app-primary-foreground);
 }
@@ -194,6 +196,110 @@
   min-width: 0;
   overflow: auto;
   position: relative;
+}
+
+/* --- Rendered markdown view --- */
+.file-viewer-markdown {
+  padding: 20px 28px;
+  max-width: 900px;
+  font-size: 14px;
+  line-height: 1.65;
+  color: var(--app-primary-foreground);
+  word-wrap: break-word;
+}
+
+.file-viewer-markdown h1,
+.file-viewer-markdown h2,
+.file-viewer-markdown h3,
+.file-viewer-markdown h4 {
+  margin: 1.2em 0 0.6em;
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+.file-viewer-markdown h1 { font-size: 1.7em; }
+.file-viewer-markdown h2 { font-size: 1.4em; }
+.file-viewer-markdown h3 { font-size: 1.2em; }
+
+.file-viewer-markdown h1,
+.file-viewer-markdown h2 {
+  padding-bottom: 0.3em;
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+
+.file-viewer-markdown p,
+.file-viewer-markdown ul,
+.file-viewer-markdown ol,
+.file-viewer-markdown blockquote,
+.file-viewer-markdown table {
+  margin: 0 0 1em;
+}
+
+.file-viewer-markdown ul,
+.file-viewer-markdown ol {
+  padding-left: 1.6em;
+}
+
+.file-viewer-markdown li { margin: 0.25em 0; }
+
+.file-viewer-markdown a {
+  color: var(--app-claude-orange);
+  text-decoration: none;
+}
+
+.file-viewer-markdown a:hover { text-decoration: underline; }
+
+.file-viewer-markdown code {
+  font-family: var(--app-monospace-font-family);
+  font-size: 0.88em;
+  background: var(--app-secondary-background);
+  padding: 0.15em 0.4em;
+  border-radius: var(--corner-radius-small);
+}
+
+.file-viewer-markdown pre {
+  background: var(--app-secondary-background);
+  padding: 12px 14px;
+  border-radius: var(--corner-radius-small);
+  overflow-x: auto;
+  margin: 0 0 1em;
+}
+
+.file-viewer-markdown pre code {
+  background: none;
+  padding: 0;
+  font-size: 0.85em;
+}
+
+.file-viewer-markdown blockquote {
+  padding-left: 1em;
+  border-left: 3px solid var(--app-primary-border-color);
+  color: var(--app-secondary-foreground);
+}
+
+.file-viewer-markdown table {
+  border-collapse: collapse;
+  display: block;
+  overflow-x: auto;
+}
+
+.file-viewer-markdown th,
+.file-viewer-markdown td {
+  border: 1px solid var(--app-primary-border-color);
+  padding: 6px 12px;
+}
+
+.file-viewer-markdown th {
+  background: var(--app-secondary-background);
+  font-weight: 600;
+}
+
+.file-viewer-markdown img { max-width: 100%; }
+
+.file-viewer-markdown hr {
+  border: none;
+  border-top: 1px solid var(--app-primary-border-color);
+  margin: 1.5em 0;
 }
 
 .file-viewer-state {

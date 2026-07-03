@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, useRef, useCallback } from "react";
-import { X, AlertCircle, Loader } from "lucide-react";
+import { X, AlertCircle, Loader, Code, Eye } from "lucide-react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { fileApi, gitApi } from "../lib/api.js";
 import type { FileEntry } from "../hooks/useFilesChanged.js";
 import {
@@ -38,6 +40,12 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
   const filename = entry.path.split("/").pop() ?? entry.relPath;
   const lang = getLanguage(filename);
   const isImage = isImageFile(filename);
+  const isMarkdown = lang === "markdown";
+  const [renderMarkdown, setRenderMarkdown] = useState(true);
+  const showRenderedMarkdown = isMarkdown && renderMarkdown && content !== null;
+
+  // Reset to rendered view whenever a new file is opened.
+  useEffect(() => { setRenderMarkdown(true); }, [entry.path]);
 
   // ── Load file content (skip for images — rendered via <img> URL) ────────
   useEffect(() => {
@@ -252,6 +260,16 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
           <span className="file-viewer-tab-path">{entry.relPath}</span>
         </div>
         <div className="file-viewer-header-actions">
+          {isMarkdown && (
+            <button
+              className="file-viewer-header-btn"
+              onClick={() => setRenderMarkdown((v) => !v)}
+              title={renderMarkdown ? "View source" : "View rendered markdown"}
+              aria-label={renderMarkdown ? "View source" : "View rendered markdown"}
+            >
+              {renderMarkdown ? <Code size={14} /> : <Eye size={14} />}
+            </button>
+          )}
           <button className="file-viewer-close" onClick={onClose} title="Close (Esc)" aria-label="Close file viewer">
             <X size={14} />
           </button>
@@ -281,8 +299,14 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
               />
             </div>
           )}
+          {/* ── Rendered markdown ── */}
+          {!loading && !error && showRenderedMarkdown && (
+            <div className="file-viewer-markdown">
+              <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
+            </div>
+          )}
           {/* ── Text / code view ── */}
-          {!loading && !error && content !== null && (
+          {!loading && !error && content !== null && !showRenderedMarkdown && (
             <div className="file-viewer-editor">
               {/* Gutter */}
               <div className="file-viewer-gutter" aria-hidden="true">
@@ -325,7 +349,7 @@ export function FileViewer({ entry, repoPath, onClose, inline }: Props) {
         </div>
 
         {/* Minimap — only for text files */}
-        {!isImage && (
+        {!isImage && !showRenderedMarkdown && (
           <div ref={minimapRef} className="file-viewer-minimap-wrap" aria-hidden="true">
             <canvas
               ref={canvasRef}

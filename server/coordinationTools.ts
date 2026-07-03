@@ -3,6 +3,8 @@ import {
   tool,
   type McpSdkServerConfigWithInstance,
 } from "@anthropic-ai/claude-agent-sdk";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 import { z } from "zod";
 import {
   createChat,
@@ -12,6 +14,7 @@ import {
   setWorktreeInfo,
   toSummary,
 } from "./chats.js";
+import { contextDir } from "./repos.js";
 import {
   ensureWorktree,
   mergeWorktreeBack,
@@ -31,6 +34,7 @@ import type {
   PermissionMode,
   PlanTicket,
 } from "../src/types.js";
+import { SUBAGENT_MODEL } from "../src/types.js";
 
 // In-process MCP server exposing the agent-coordination toolset. Registered
 // for coordinator and subagent chats (delegation can nest — a subagent may
@@ -113,12 +117,67 @@ export async function broadcastPlansUpdated(repoPath: string): Promise<void> {
   }
 }
 
-const MODEL_SCHEMA = z
-  .string()
-  .optional()
-  .describe(
-    "Model for the subagent (e.g. claude-opus-4-8, claude-sonnet-4-6, claude-haiku-4-5). Defaults to your own model.",
-  );
+// Hard cap on how many lines of any single file go into a context bundle.
+// Subagents are told to pass line ranges for big files; this is the backstop
+// so one giant file can't bloat the bundle (and the parent's context) unbounded.
+const MAX_BUNDLE_LINES_PER_FILE = 1200;
+
+interface SharedFileSpec {
+  path: string;
+  reason: string;
+  startLine?: number;
+  endLine?: number;
+}
+
+interface RenderedFile {
+  displayPath: string;
+  rangeLabel: string;
+  reason: string;
+  block: string;
+}
+
+// Reads one file (optionally a line range), returning it as a numbered code
+// block ready to drop into a bundle. `baseDir` resolves repo-relative paths.
+async function renderSharedFile(
+  baseDir: string,
+  spec: SharedFileSpec,
+): Promise<RenderedFile> {
+  const abs = isAbsolute(spec.path) ? spec.path : resolve(baseDir, spec.path);
+  const rel = relative(baseDir, abs);
+  const displayPath = rel && !rel.startsWith("..") ? rel : spec.path;
+  const raw = await readFile(abs, "utf8");
+  const allLines = raw.split("\n");
+
+  let start = spec.startLine ?? 1;
+  let end = spec.endLine ?? allLines.length;
+  start = Math.max(1, start);
+  end = Math.min(allLines.length, end);
+  if (end < start) end = start;
+
+  let truncated = false;
+  if (end - start + 1 > MAX_BUNDLE_LINES_PER_FILE) {
+    end = start + MAX_BUNDLE_LINES_PER_FILE - 1;
+    truncated = true;
+  }
+
+  const width = String(end).length;
+  const body = allLines
+    .slice(start - 1, end)
+    .map((line, i) => `${String(start + i).padStart(width)}  ${line}`)
+    .join("\n");
+
+  const rangeLabel =
+    start === 1 && end === allLines.length
+      ? `${allLines.length} lines`
+      : `lines ${start}–${end} of ${allLines.length}`;
+
+  return {
+    displayPath,
+    rangeLabel: truncated ? `${rangeLabel} (truncated to ${MAX_BUNDLE_LINES_PER_FILE})` : rangeLabel,
+    reason: spec.reason,
+    block: "```\n" + body + "\n```",
+  };
+}
 
 export function makeCoordinationMcp(
   ctx: CoordinationCtx,
@@ -140,13 +199,12 @@ export function makeCoordinationMcp(
         ),
       title: z
         .string()
-        .optional()
+        .min(1)
         .describe("Short chat title shown in the sidebar (e.g. 'Research: auth flow')."),
       ticketId: z
         .string()
         .optional()
         .describe("Plan ticket this subagent will work on, if any."),
-      model: MODEL_SCHEMA,
       permissionMode: z
         .enum(["default", "acceptEdits", "plan", "bypassPermissions"])
         .optional()
@@ -155,7 +213,9 @@ export function makeCoordinationMcp(
     async (args) => {
       try {
         const me = await readChat(ctx.repoPath, ctx.chatId);
-        const model = (args.model as Model | undefined) ?? me?.model ?? "claude-sonnet-4-6";
+        // Subagents always run on Haiku 4.5 (also enforced per-turn in runTurn):
+        // fast and cheap, suited to the focused work handed off here.
+        const model: Model = SUBAGENT_MODEL;
         const permissionMode =
           (args.permissionMode as PermissionMode | undefined) ??
           me?.permissionMode ??
@@ -164,7 +224,7 @@ export function makeCoordinationMcp(
         const record = await createChat(ctx.repoPath, {
           model,
           permissionMode,
-          title: args.title ?? `Agent: ${args.task.slice(0, 48)}`,
+          title: args.title,
           kind: "subagent",
           parentChatId: ctx.chatId,
           task: args.task,
@@ -571,7 +631,126 @@ export function makeCoordinationMcp(
       },
     );
 
-    tools.push(report_to_parent, mark_task_finished);
+    const share_files_with_parent = tool(
+      "share_files_with_parent",
+      [
+        "Hand your coordinator the actual relevant code so it can reason about it directly — not just your summary of it.",
+        "Use this after research/exploration: pick the files (and the specific line ranges) that matter, say why each is relevant, and they're written to a context bundle the coordinator reads.",
+        "The coordinator runs on a stronger model and does the deep thinking; your job is to find and curate the right context for it. Be selective — share what's relevant, with tight line ranges for large files, not whole directories.",
+      ].join(" "),
+      {
+        headline: z
+          .string()
+          .min(3)
+          .describe("One line: what this context is and the question it helps answer."),
+        notes: z
+          .string()
+          .optional()
+          .describe(
+            "Optional findings or a map of how the pieces fit together — the connective tissue the raw files don't show.",
+          ),
+        files: z
+          .array(
+            z.object({
+              path: z.string().describe("File path (repo-relative or absolute)."),
+              reason: z
+                .string()
+                .min(3)
+                .describe("Why this file/section is relevant — your curation insight."),
+              startLine: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe("First line to include (1-based). Omit to include from the top."),
+              endLine: z
+                .number()
+                .int()
+                .min(1)
+                .optional()
+                .describe("Last line to include. Omit to include to the end. Use ranges for large files."),
+            }),
+          )
+          .min(1)
+          .max(40)
+          .describe("The relevant files, most important first."),
+      },
+      async (args) => {
+        try {
+          const me = await readChat(ctx.repoPath, ctx.chatId);
+          const baseDir = me?.worktreePath ?? ctx.repoPath;
+
+          const rendered: RenderedFile[] = [];
+          const failures: string[] = [];
+          for (const spec of args.files as SharedFileSpec[]) {
+            try {
+              rendered.push(await renderSharedFile(baseDir, spec));
+            } catch (e) {
+              failures.push(`${spec.path}: ${e instanceof Error ? e.message : String(e)}`);
+            }
+          }
+
+          if (rendered.length === 0) {
+            return err(
+              `Could not read any of the files you listed:\n${failures.join("\n")}`,
+            );
+          }
+
+          // Assemble the bundle document.
+          const header = [
+            `# Context bundle from subagent ${ctx.chatId}`,
+            ctx.task ? `**Task:** ${ctx.task}` : "",
+            `**Headline:** ${args.headline}`,
+            args.notes ? `\n**Notes:**\n\n${args.notes}` : "",
+            failures.length ? `\n**Could not read:** ${failures.join("; ")}` : "",
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+          const body = rendered
+            .map(
+              (f) =>
+                `## ${f.displayPath} — ${f.reason}\n_(${f.rangeLabel})_\n\n${f.block}`,
+            )
+            .join("\n\n");
+
+          const dir = contextDir(ctx.repoPath);
+          await mkdir(dir, { recursive: true });
+          const bundlePath = join(dir, `${ctx.chatId}-${Date.now()}.md`);
+          await writeFile(bundlePath, `${header}\n\n${body}\n`, "utf8");
+
+          // The message the coordinator sees: headline, notes, an index of what's
+          // in the bundle, and the path to read for the full code.
+          const index = rendered
+            .map((f) => `- \`${f.displayPath}\` (${f.rangeLabel}) — ${f.reason}`)
+            .join("\n");
+          const message = [
+            `[Subagent ${ctx.chatId} — shared context] ${args.headline}`,
+            args.notes ? `\n${args.notes}` : "",
+            `\nRelevant files (full contents written to the bundle below — **Read that file** to see the actual code):`,
+            index,
+            failures.length ? `\nCould not read: ${failures.join("; ")}` : "",
+            `\nContext bundle: ${bundlePath}`,
+          ]
+            .filter(Boolean)
+            .join("\n");
+
+          await getSession(ctx.repoPath, parentChatId).deliverMessage({
+            text: message,
+            origin: "subagent",
+            originLabel: me?.title ?? "Subagent",
+          });
+
+          return ok(
+            `Shared ${rendered.length} file(s) with your coordinator (bundle: ${bundlePath}).${failures.length ? ` ${failures.length} file(s) could not be read.` : ""}`,
+          );
+        } catch (e) {
+          return err(`Failed to share files: ${e instanceof Error ? e.message : String(e)}`);
+        }
+      },
+    );
+
+    tools.push(report_to_parent, mark_task_finished, share_files_with_parent);
   }
 
   return createSdkMcpServer({

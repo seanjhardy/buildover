@@ -809,7 +809,6 @@
   width: 340px;
   flex-shrink: 0;
   align-self: flex-start;
-  max-height: 60%;
   background: var(--app-secondary-background);
   border: 1px solid var(--app-primary-border-color);
   border-radius: 10px;
@@ -837,6 +836,7 @@
   gap: 4px;
   padding: 8px 6px;
   overflow-y: auto;
+  max-height: 50vh;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
@@ -877,6 +877,7 @@
   border: 1px solid var(--app-primary-border-color);
   border-radius: 7px;
   overflow: hidden;
+  flex-shrink: 0;
 }
 
 .plan-ticket--closed {
@@ -907,6 +908,7 @@
   align-items: center;
   gap: 7px;
   width: 100%;
+  min-height: 36px;
   padding: 6px 8px;
   background: transparent;
   border: 0;

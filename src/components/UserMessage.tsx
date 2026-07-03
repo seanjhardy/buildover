@@ -77,6 +77,25 @@ const PencilIcon = () => (
   </svg>
 );
 
+const RefreshIcon = () => (
+  <svg
+    width="14"
+    height="14"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="2"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+  >
+    <path d="M21 2v6h-6" />
+    <path d="M3 12a9 9 0 0 1 15-6.7L21 8" />
+    <path d="M3 22v-6h6" />
+    <path d="M21 12a9 9 0 0 1-15 6.7L3 16" />
+  </svg>
+);
+
 export const UserMessage = memo(function UserMessage({
   text,
   attachments,
@@ -126,6 +145,13 @@ export const UserMessage = memo(function UserMessage({
       setIsEditing(false);
       return;
     }
+    onFork(messageId, trimmed, editAttachments.length > 0 ? editAttachments : undefined);
+    setIsEditing(false);
+  };
+
+  const handleResend = () => {
+    const trimmed = editText.trim();
+    if (!trimmed && editAttachments.length === 0) return;
     onFork(messageId, trimmed, editAttachments.length > 0 ? editAttachments : undefined);
     setIsEditing(false);
   };
@@ -257,16 +283,24 @@ export const UserMessage = memo(function UserMessage({
                 >
                   Cancel
                 </button>
-                <button
-                  className="bubble-edit-submit"
-                  onClick={handleSubmit}
-                  disabled={
-                    (editText.trim() === "" && editAttachments.length === 0) ||
-                    (editText.trim() === text && JSON.stringify(editAttachments) === JSON.stringify(attachments || []))
-                  }
-                >
-                  Send
-                </button>
+                {editText.trim() === text &&
+                JSON.stringify(editAttachments) === JSON.stringify(attachments || []) ? (
+                  <button
+                    className="bubble-edit-submit"
+                    onClick={handleResend}
+                    disabled={editText.trim() === "" && editAttachments.length === 0}
+                  >
+                    Resend
+                  </button>
+                ) : (
+                  <button
+                    className="bubble-edit-submit"
+                    onClick={handleSubmit}
+                    disabled={editText.trim() === "" && editAttachments.length === 0}
+                  >
+                    Send
+                  </button>
+                )}
               </div>
             </div>
           </div>
@@ -298,6 +332,14 @@ export const UserMessage = memo(function UserMessage({
                   aria-label="Edit message"
                 >
                   <PencilIcon />
+                </button>
+                <button
+                  className="bubble-edit-btn"
+                  onClick={() => onFork(messageId, text, attachments)}
+                  title="Resend message"
+                  aria-label="Resend message"
+                >
+                  <RefreshIcon />
                 </button>
                 {checkpointId && onRevert && (
                   <button

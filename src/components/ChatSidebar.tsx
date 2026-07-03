@@ -12,6 +12,8 @@ interface Props {
   onCreate: () => void;
   onToggleFinished: (chatId: string, finished: boolean) => void;
   onDelete: (chatId: string) => void;
+  onToggleStar: (chatId: string, starred: boolean) => void;
+  onRename: (chatId: string, title: string) => void;
   repoPath: string;
   chatDrafts?: Record<string, string>;
   onOpenGraph?: () => void;
@@ -138,6 +140,8 @@ export function ChatItemsByRecency({
   onSelect,
   onToggleFinished,
   onDelete,
+  onToggleStar,
+  onRename,
   chatDrafts,
 }: {
   items: ChatSummary[];
@@ -145,6 +149,8 @@ export function ChatItemsByRecency({
   onSelect: (chatId: string) => void;
   onToggleFinished: (chatId: string, finished: boolean) => void;
   onDelete: (chatId: string) => void;
+  onToggleStar?: (chatId: string, starred: boolean) => void;
+  onRename?: (chatId: string, title: string) => void;
   chatDrafts: Record<string, string>;
 }) {
   const byRecency = useMemo(() => groupByRecency(items), [items]);
@@ -164,6 +170,8 @@ export function ChatItemsByRecency({
                 onSelect={onSelect}
                 onToggleFinished={onToggleFinished}
                 onDelete={onDelete}
+                onToggleStar={onToggleStar}
+                onRename={onRename}
                 draftText={chatDrafts[c.id]}
               />
             ))}
@@ -181,6 +189,8 @@ export function ChatSidebar({
   onCreate,
   onToggleFinished,
   onDelete,
+  onToggleStar,
+  onRename,
   repoPath,
   chatDrafts = {},
   onOpenGraph,
@@ -230,6 +240,24 @@ export function ChatSidebar({
     [chats],
   );
 
+  // Starred (non-coordinator, non-archived) chats are pinned above the groups.
+  const starred = useMemo(
+    () =>
+      chats
+        .filter(
+          (c) =>
+            c.starred &&
+            c.kind !== "coordinator" &&
+            c.kind !== "subagent" &&
+            c.status !== "finished",
+        )
+        .sort(
+          (a, b) =>
+            new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime(),
+        ),
+    [chats],
+  );
+
   // Normal grouped list (used when not in search mode)
   const grouped = useMemo(() => {
     const archive: ChatSummary[] = [];
@@ -238,6 +266,7 @@ export function ChatSidebar({
     for (const c of chats) {
       if (c.kind === "coordinator") continue; // pinned separately
       if (c.kind === "subagent") continue;    // shown in parent chat's Agents panel
+      if (c.starred && c.status !== "finished") continue; // shown in Starred section
       if (c.status === "finished") {
         archive.push(c);
       } else {
@@ -345,6 +374,24 @@ export function ChatSidebar({
                 />
               </div>
             )}
+            {starred.length > 0 && (
+              <div className="chat-group">
+                <div className="chat-group-label">Starred</div>
+                {starred.map((c) => (
+                  <ChatSidebarItem
+                    key={c.id}
+                    chat={c}
+                    active={c.id === activeChatId}
+                    onSelect={onSelect}
+                    onToggleFinished={onToggleFinished}
+                    onDelete={onDelete}
+                    onToggleStar={onToggleStar}
+                    onRename={onRename}
+                    draftText={chatDrafts[c.id]}
+                  />
+                ))}
+              </div>
+            )}
             {GROUP_ORDER.map((status) => {
               const items = grouped.groups.get(status) ?? [];
               if (items.length === 0) return null;
@@ -357,6 +404,8 @@ export function ChatSidebar({
                     onSelect={onSelect}
                     onToggleFinished={onToggleFinished}
                     onDelete={onDelete}
+                    onToggleStar={onToggleStar}
+                    onRename={onRename}
                     chatDrafts={chatDrafts}
                   />
                 </div>
@@ -386,6 +435,8 @@ export function ChatSidebar({
                     onSelect={onSelect}
                     onToggleFinished={onToggleFinished}
                     onDelete={onDelete}
+                    onToggleStar={onToggleStar}
+                    onRename={onRename}
                     chatDrafts={chatDrafts}
                   />
                 )}

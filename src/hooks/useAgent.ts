@@ -130,10 +130,72 @@ interface SendOptions {
 }
 
 /** A user message held client-side while the agent is mid-turn.
- *  Drained one at a time after each turn ends. */
+ *  Drained one at a time after each turn ends. Persisted to localStorage per
+ *  chat so the queue survives chat switches and full app restarts. */
 export interface LocalQueuedMessage {
+  id: string;
   text: string;
   opts: SendOptions;
+}
+
+const QUEUE_KEY_PREFIX = "buildover.queue.";
+
+function newQueueId(): string {
+  return `q-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+// Load the persisted queue for a chat. Tolerates missing/corrupt data and
+// backfills ids for any legacy entries that predate the id field.
+function loadQueue(chatId: string | null): LocalQueuedMessage[] {
+  if (!chatId) return [];
+  try {
+    const raw = localStorage.getItem(QUEUE_KEY_PREFIX + chatId);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter(
+        (m): m is LocalQueuedMessage =>
+          m && typeof m.text === "string" && typeof m.opts === "object",
+      )
+      .map((m) => ({ ...m, id: m.id ?? newQueueId() }));
+  } catch {
+    return [];
+  }
+}
+
+function saveQueue(chatId: string | null, queue: LocalQueuedMessage[]): void {
+  if (!chatId) return;
+  try {
+    if (queue.length === 0) {
+      localStorage.removeItem(QUEUE_KEY_PREFIX + chatId);
+    } else {
+      localStorage.setItem(QUEUE_KEY_PREFIX + chatId, JSON.stringify(queue));
+    }
+  } catch {
+    // localStorage unavailable or over quota — keep the in-memory queue only.
+  }
+}
+
+const PAUSED_KEY_PREFIX = "buildover.queuePaused.";
+
+function loadPaused(chatId: string | null): boolean {
+  if (!chatId) return false;
+  try {
+    return localStorage.getItem(PAUSED_KEY_PREFIX + chatId) === "1";
+  } catch {
+    return false;
+  }
+}
+
+function savePaused(chatId: string | null, paused: boolean): void {
+  if (!chatId) return;
+  try {
+    if (paused) localStorage.setItem(PAUSED_KEY_PREFIX + chatId, "1");
+    else localStorage.removeItem(PAUSED_KEY_PREFIX + chatId);
+  } catch {
+    // localStorage unavailable — keep the in-memory pause state only.
+  }
 }
 
 interface UseAgentReturn {
@@ -153,6 +215,17 @@ interface UseAgentReturn {
   slashCommands: string[];
   queuedTurns: QueuedChatTurn[];
   localQueue: LocalQueuedMessage[];
+  /** When true, the queue is held: messages persist but are not auto-sent
+   *  when the current turn ends. */
+  queuePaused: boolean;
+  toggleQueuePaused: () => void;
+  /** Queue a message in a paused state (long-press send). */
+  enqueuePaused: (text: string, opts: SendOptions) => void;
+  removeQueued: (id: string) => void;
+  /** Move a queued message to the front and send it immediately, interrupting
+   *  the in-flight turn if one is running. */
+  fastTrackQueued: (id: string) => void;
+  reorderQueue: (fromIndex: number, toIndex: number) => void;
   send: (text: string, opts: SendOptions) => void;
   revertToCheckpoint: (checkpointId: string) => void;
   respondPermission: (
@@ -194,10 +267,21 @@ export function useAgent(
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
   const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>([]);
-  // Messages the user sent while the agent was mid-turn.  Held locally and
-  // drained one-at-a-time after each turn completes so they never appear in
-  // the chat until the agent is actually ready to handle them.
-  const [localQueue, setLocalQueue] = useState<LocalQueuedMessage[]>([]);
+  // Messages the user sent while the agent was mid-turn.  Held locally,
+  // persisted per-chat, and drained one-at-a-time after each turn completes so
+  // they never appear in the chat until the agent is actually ready to handle
+  // them. Initialised from localStorage so a queue survives an app restart.
+  const [localQueue, setLocalQueue] = useState<LocalQueuedMessage[]>(() =>
+    loadQueue(chatId),
+  );
+  // When paused, the drain effect holds messages instead of auto-sending them.
+  // Persisted per-chat so pausing survives chat switches and app restarts.
+  const [queuePaused, setQueuePaused] = useState(() => loadPaused(chatId));
+  // Gate auto-draining until the first chat_replay has synced the true server
+  // streaming state. On mount isStreaming defaults to false, so without this a
+  // persisted queue could fire a message into a turn that is still running
+  // server-side (the very thing the queue exists to prevent).
+  const [replaySynced, setReplaySynced] = useState(false);
 
   // Tracks the number of turn_start events that haven't been matched by a
   // turn_end yet. This lets us guard against stale chat_status events (e.g.
@@ -217,10 +301,27 @@ export function useAgent(
   const chatIdRef = useRef(chatId);
   chatIdRef.current = chatId;
 
-  // Clear the local queue whenever the active chat changes.
+  // Load the persisted queue whenever the active chat changes, and reset the
+  // pause toggle to its default for the new chat. (Previously this cleared the
+  // queue, which is why queued messages vanished on chat switch.)
   useEffect(() => {
-    setLocalQueue([]);
+    setLocalQueue(loadQueue(chatId));
+    setQueuePaused(loadPaused(chatId));
+    setReplaySynced(false);
   }, [chatId]);
+
+  // Persist the queue and pause state whenever they change so both survive an
+  // app restart. On a chatId switch the load effect above runs first with the
+  // old values still in state, so these effects are skipped that render and
+  // only fire once the freshly-loaded values are committed — no cross-chat
+  // leakage.
+  useEffect(() => {
+    saveQueue(chatIdRef.current, localQueue);
+  }, [localQueue]);
+
+  useEffect(() => {
+    savePaused(chatIdRef.current, queuePaused);
+  }, [queuePaused]);
 
   // Drain one locally-queued message as soon as the agent is genuinely idle:
   //   • isStreaming=false  — the turn counter dropped to zero (turn_end)
@@ -228,7 +329,13 @@ export function useAgent(
   // Each drained message starts a new turn; when that turn ends this effect
   // fires again to drain the next one, producing a FIFO cascade.
   useEffect(() => {
-    if (!isStreaming && !pendingAttention && localQueueRef.current.length > 0) {
+    if (
+      replaySynced &&
+      !isStreaming &&
+      !pendingAttention &&
+      !queuePaused &&
+      localQueueRef.current.length > 0
+    ) {
       const [next, ...rest] = localQueueRef.current;
       setLocalQueue(rest);
       const id = chatIdRef.current;
@@ -245,7 +352,7 @@ export function useAgent(
       }
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isStreaming, pendingAttention, repoPath]);
+  }, [replaySynced, isStreaming, pendingAttention, queuePaused, repoPath]);
 
   // Track permission requestId -> tool_use block ID mapping for live updates
   const requestToToolUseIdRef = useRef(new Map<string, string>());
@@ -501,6 +608,8 @@ export function useAgent(
           setIsStreaming(true);
         }
         // else: running and counter > 0 — live signal already correct, leave it.
+        // The server streaming state is now known — allow the queue to drain.
+        setReplaySynced(true);
       }
       // Note: we intentionally do NOT touch isStreaming for chat_status events.
       // chat_status "running"/"awaiting_input" can arrive out of order relative
@@ -559,7 +668,7 @@ export function useAgent(
       // effect above fires as soon as the turn ends and sends queued messages
       // one at a time — each starts a new turn whose completion drains the next.
       if (isStreamingRef.current) {
-        setLocalQueue((q) => [...q, { text, opts }]);
+        setLocalQueue((q) => [...q, { id: newQueueId(), text, opts }]);
         return;
       }
       agentSocket.send({
@@ -620,6 +729,56 @@ export function useAgent(
     const id = chatIdRef.current;
     if (!id) return;
     agentSocket.send({ type: "interrupt", chatId: id });
+  }, []);
+
+  const toggleQueuePaused = useCallback(() => {
+    setQueuePaused((p) => !p);
+  }, []);
+
+  // Add a message to the queue and pause it, regardless of whether the agent
+  // is currently streaming. Used by the composer's long-press-to-queue gesture
+  // so the message is held until the user resumes the queue.
+  const enqueuePaused = useCallback((text: string, opts: SendOptions) => {
+    setQueuePaused(true);
+    setLocalQueue((q) => [...q, { id: newQueueId(), text, opts }]);
+  }, []);
+
+  const removeQueued = useCallback((id: string) => {
+    setLocalQueue((q) => q.filter((m) => m.id !== id));
+  }, []);
+
+  const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
+    setLocalQueue((q) => {
+      if (
+        fromIndex === toIndex ||
+        fromIndex < 0 ||
+        toIndex < 0 ||
+        fromIndex >= q.length ||
+        toIndex >= q.length
+      ) {
+        return q;
+      }
+      const next = [...q];
+      const [moved] = next.splice(fromIndex, 1);
+      next.splice(toIndex, 0, moved);
+      return next;
+    });
+  }, []);
+
+  // Fast-track: move the message to the front, un-pause, and interrupt any
+  // in-flight turn. The drain effect then sends it as soon as the turn ends
+  // (or immediately, if the agent was already idle).
+  const fastTrackQueued = useCallback((id: string) => {
+    setQueuePaused(false);
+    setLocalQueue((q) => {
+      const item = q.find((m) => m.id === id);
+      if (!item) return q;
+      return [item, ...q.filter((m) => m.id !== id)];
+    });
+    if (isStreamingRef.current) {
+      const cid = chatIdRef.current;
+      if (cid) agentSocket.send({ type: "interrupt", chatId: cid });
+    }
   }, []);
 
   const setPermissionMode = useCallback((mode: PermissionMode) => {
@@ -695,6 +854,12 @@ export function useAgent(
     slashCommands,
     queuedTurns,
     localQueue,
+    queuePaused,
+    toggleQueuePaused,
+    enqueuePaused,
+    removeQueued,
+    fastTrackQueued,
+    reorderQueue,
     send,
     revertToCheckpoint,
     respondPermission,

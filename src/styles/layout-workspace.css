@@ -9,6 +9,29 @@
   flex-direction: row;
   min-height: 0;
   overflow: hidden;
+  position: relative;
+}
+
+/* A single very subtle orange orb sitting in the lower-left, well inside the
+   pane so the full soft circle reads as background (its core stays clear of the
+   centred message column). It's the light source the card borders catch. */
+.chat-pane-body::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 0;
+  background: radial-gradient(
+    circle at 14% 82%,
+    color-mix(in srgb, var(--app-claude-orange) 5%, transparent) 0%,
+    transparent 34%
+  );
+}
+
+/* Keep the chat content above the ambient glow. */
+.chat-pane-body > * {
+  position: relative;
+  z-index: 1;
 }
 
 /* chat-group: centred flex row — [left-rail] [chat-column] [right-rail]
@@ -321,13 +344,41 @@
   width: var(--sidebar-width, 280px);
   flex-shrink: 0;
   border-right: 1px solid var(--app-primary-border-color);
-  background: var(--app-secondary-background);
+  /* Faint orange bleed at the lower-right, where the sidebar faces the chat orb
+     — a tiny amount of the background light spilling onto the surface. */
+  background:
+    radial-gradient(
+      circle 170px at 100% 84%,
+      color-mix(in srgb, var(--app-claude-orange) 10%, transparent) 0%,
+      transparent 100%
+    ),
+    var(--app-secondary-background);
   display: flex;
   flex-direction: column;
   min-height: 0;
   position: relative;
   z-index: 1; /* Ensure the sidebar stays on top when workspace-panels slides left */
   overflow: hidden;
+}
+/* Directional edge light: a small orange spot on the right border where it
+   faces the chat orb (same lower-right anchor as the bleed above), fading out
+   along the rest of the edge. The mask keeps the gradient to the border ring. */
+.chat-sidebar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  padding: 2px;
+  background: radial-gradient(
+    circle at 100% 84%,
+    color-mix(in srgb, var(--app-claude-orange) 60%, transparent) 0%,
+    transparent 24%
+  );
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+          mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  mask-composite: exclude;
 }
 .chat-sidebar::before {
   content: "";
@@ -499,13 +550,13 @@
 .chat-item:hover .chat-item-preview {
   -webkit-mask-image: linear-gradient(
     to right,
-    #000 calc(100% - 88px),
-    transparent calc(100% - 56px)
+    #000 calc(100% - 130px),
+    transparent calc(100% - 98px)
   );
   mask-image: linear-gradient(
     to right,
-    #000 calc(100% - 88px),
-    transparent calc(100% - 56px)
+    #000 calc(100% - 130px),
+    transparent calc(100% - 98px)
   );
 }
 .chat-item-actions {
@@ -545,6 +596,34 @@
 }
 .chat-item-action.danger:hover {
   color: var(--app-error);
+}
+.chat-item-action.starred {
+  color: var(--app-warning, #e3b341);
+  opacity: 1;
+}
+.chat-item-action.starred:hover {
+  color: var(--app-warning, #e3b341);
+}
+
+/* Small gold star shown inline before a starred chat's title. */
+.chat-item-star-indicator {
+  margin-right: 4px;
+  vertical-align: -1px;
+  color: var(--app-warning, #e3b341);
+}
+
+/* Inline rename input replaces the title while editing. */
+.chat-item-rename-input {
+  width: 100%;
+  box-sizing: border-box;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--app-primary-foreground);
+  background: var(--app-input-background);
+  border: 1px solid var(--app-claude-orange);
+  border-radius: 4px;
+  padding: 2px 4px;
+  outline: none;
 }
 
 /* ---- Coordinator (pinned) + agent-spawned chats ---- */

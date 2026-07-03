@@ -13,6 +13,13 @@ export const MODELS: { id: string; label: string }[] = [
 
 export const DEFAULT_MODEL: Model = "claude-opus-4-8";
 
+/**
+ * Subagents always run on Haiku 4.5 — fast and cheap, suited to the focused,
+ * well-scoped work a coordinator hands off. Enforced by chat kind in runTurn,
+ * so it holds regardless of who spawned the subagent or how a turn is resumed.
+ */
+export const SUBAGENT_MODEL: Model = "claude-haiku-4-5";
+
 export type PermissionMode =
   | "default"
   | "acceptEdits"
@@ -113,6 +120,8 @@ export interface ChatSummary {
   createdAt: string;
   updatedAt: string;
   preview: string;
+  /** User pinned this chat to the top of the sidebar. Absent === not starred. */
+  starred?: boolean;
   /** Chat kind — absent means "user" (a normal user-created chat). */
   kind?: ChatKind;
   /** For subagent chats: the chat that spawned this one. */
@@ -240,6 +249,8 @@ export interface ChatRecord {
   /** Diverging conversation branches created via message editing. Absent on
    *  linear chats. record.events is always the currently active branch. */
   branches?: ChatBranch[];
+  /** User pinned this chat to the top of the sidebar. Absent === not starred. */
+  starred?: boolean;
   /** Chat kind — absent means "user" (a normal user-created chat). */
   kind?: ChatKind;
   /** For subagent chats: the chat that spawned this one. */

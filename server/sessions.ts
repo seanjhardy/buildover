@@ -33,6 +33,7 @@ import type {
   PermissionMode,
   QueuedChatTurn,
 } from "../src/types.js";
+import { SUBAGENT_MODEL } from "../src/types.js";
 
 export type Subscriber = (event: AgentEvent) => void;
 
@@ -59,10 +60,21 @@ interface PendingAttention {
   resolve: (result: { feedback?: string; interrupt?: boolean }) => void;
 }
 
-// Percentage of context window used that triggers automatic compaction.
-const AUTO_COMPACT_THRESHOLD = 80;
+// Absolute context-window usage (in tokens) that triggers automatic compaction.
+const AUTO_COMPACT_TOKEN_THRESHOLD = 1_000_000;
 const USAGE_QUEUE_POLL_MS = 60_000;
 const MAX_TIMER_MS = 2_147_483_647;
+
+// The parent-facing tools a subagent uses to reach its coordinator. If a
+// subagent turn ends without calling any of these, it gets nudged once.
+const PARENT_FACING_TOOLS = new Set([
+  "mcp__buildover-agents__report_to_parent",
+  "mcp__buildover-agents__mark_task_finished",
+  "mcp__buildover-agents__share_files_with_parent",
+]);
+
+const PARENT_NUDGE_PROMPT =
+  "You've stopped without contacting your coordinator this turn. If your assignment is complete, call `mark_task_finished` with a summary. If you have a question, a blocker, or an interim finding, call `report_to_parent`. If you genuinely have nothing to report yet and are still working, continue the task. Don't reply to this message with plain text — your coordinator only sees what you send through those tools.";
 
 const queueTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -193,9 +205,9 @@ class AgentSession {
   // canUseTool reads this on every invocation via the getter passed to the
   // SDK, so toggling bypass takes effect on the next decision.
   private currentPermissionMode: PermissionMode = "default";
-  // Latest context window usage percentage — updated each time a context_usage
+  // Latest context window usage in tokens — updated each time a context_usage
   // event arrives. Used to decide whether to auto-compact after a turn ends.
-  private lastContextPct = 0;
+  private lastContextUsedTokens = 0;
   private lastModel: Model = "claude-sonnet-4-6";
   // Set to true when the agent calls ClearContext during a turn. The finally
   // block treats this the same as hitting the auto-compact threshold — it runs
@@ -631,6 +643,9 @@ class AgentSession {
     attachments?: Attachment[];
     isRetry?: boolean;
     silent?: boolean;
+    // Set on the auto-prompt we send a subagent that finished without contacting
+    // its parent. Prevents a second nudge from chaining off the nudge's own turn.
+    nudge?: boolean;
     // Carried through from deliverMessage so a delivered (non-user) message
     // routed via runTurn keeps its origin tag on persist + echo.
     origin?: MessageOrigin;
@@ -671,6 +686,17 @@ class AgentSession {
         return;
       }
       throw new Error("Chat already running");
+    }
+
+    // Subagents always run on Haiku 4.5, enforced here by chat kind — the one
+    // path every turn (first turn, resumed turn, coordinator feedback, queued
+    // turn) flows through. This is the source of truth, independent of whatever
+    // model the spawner stored or the caller passed.
+    {
+      const kindRecord = await readChat(this.repoPath, this.chatId);
+      if ((kindRecord?.kind ?? "user") === "subagent" && args.model !== SUBAGENT_MODEL) {
+        args = { ...args, model: SUBAGENT_MODEL };
+      }
     }
 
     // Check usage limit before starting a new turn. When Claude is exhausted
@@ -795,8 +821,8 @@ class AgentSession {
       "turn_end",
       // Suppress the transient spike in context usage that happens while the
       // compact turn loads the full history to summarize it. The internal
-      // lastContextPct field is still updated (done before the broadcast check)
-      // so the threshold logic works correctly.
+      // lastContextUsedTokens field is still updated (done before the broadcast
+      // check) so the threshold logic works correctly.
       "context_usage",
     ]);
 
@@ -808,12 +834,25 @@ class AgentSession {
     // re-queue the turn instead of leaving a dead-end error in the transcript.
     let deferredErrorMessage: string | null = null;
 
+    // Track whether this subagent turn actually reached out to its parent
+    // (report_to_parent / mark_task_finished / share_files_with_parent). If it
+    // ends without doing so, the finally block nudges it to confirm whether it
+    // meant to report back.
+    let parentContacted = false;
+
     const emit = (event: RawAgentEvent) => {
       // Tag with this session's chatId before broadcasting / persisting.
       const tagged = { ...event, chatId: this.chatId } as AgentEvent;
       // Track context usage so we can auto-compact after the turn ends.
       if (tagged.type === "context_usage") {
-        this.lastContextPct = tagged.pct;
+        this.lastContextUsedTokens = tagged.usedTokens;
+      }
+      if (tagged.type === "assistant") {
+        for (const block of tagged.content) {
+          if (block.type === "tool_use" && PARENT_FACING_TOOLS.has(block.name)) {
+            parentContacted = true;
+          }
+        }
       }
       if (tagged.type === "error") {
         deferredErrorMessage = tagged.message;
@@ -963,7 +1002,31 @@ class AgentSession {
       // usage/session limit being exhausted while the agent was working, the
       // turn is re-queued to revive automatically after the reset instead of
       // surfacing a dead-end error.
-      if (deferredErrorMessage) {
+      // The persisted SDK session no longer exists — typically happens after a
+      // backend restart when the in-process session files are gone but the chat
+      // record still holds the old sessionId. Clear it silently and re-queue
+      // the turn so it retries with a fresh session; no error shown to the user.
+      // Cast needed: TS CFA narrows deferredErrorMessage to null (the assignment
+      // inside the emit closure isn't tracked), so we restore the declared type.
+      if (
+        (deferredErrorMessage as string | null)?.includes("No conversation found with session ID") &&
+        record.sessionId
+      ) {
+        console.warn(
+          `[session] Stale SDK session ${record.sessionId} cleared, re-queuing turn`,
+        );
+        await withChatLock(this.repoPath, this.chatId, async () => {
+          const r = await readChat(this.repoPath, this.chatId);
+          if (r) {
+            r.sessionId = undefined;
+            r.resumeSessionAt = undefined;
+            await writeChat(this.repoPath, r);
+          }
+        });
+        // Put the turn back at the front of the queue; the finally-block drain
+        // will pick it up immediately once this.running is cleared.
+        this.pendingUserTurns.unshift({ ...args, isRetry: true });
+      } else if (deferredErrorMessage) {
         queuedForUsage = await this.finalizeFailure(args, deferredErrorMessage);
       }
     } catch (err) {
@@ -993,7 +1056,8 @@ class AgentSession {
       // would skip the usage check and immediately fail again.
       const shouldCompact =
         !queuedForUsage &&
-        (this.lastContextPct >= AUTO_COMPACT_THRESHOLD || this.pendingCompact) &&
+        (this.lastContextUsedTokens >= AUTO_COMPACT_TOKEN_THRESHOLD ||
+          this.pendingCompact) &&
         !args.text.startsWith("/compact");
       this.pendingCompact = false;
       if (shouldCompact) {
@@ -1017,12 +1081,35 @@ class AgentSession {
         if (next) {
           scheduleQueuedTurnDrain(this.repoPath, this.chatId, next.runAfter);
         } else if (!wasSilent) {
-          // Agent fully finished this chat (no compact, no queued follow-up).
-          // Push to the phone if the Mac has been idle a while (handled inside).
-          void notifyAgentFinished(
-            record?.title ?? this.chatId,
-            basename(this.repoPath),
-          );
+          // A subagent that finished its turn without ever contacting its parent
+          // has most likely forgotten to report back. Send a single auto-prompt
+          // asking it to confirm — `nudge: true` stops the prompt's own turn from
+          // chaining another nudge, so this fires at most once per stretch.
+          if (
+            !args.nudge &&
+            !queuedForUsage &&
+            !deferredErrorMessage &&
+            !this.abort.signal.aborted &&
+            (record?.kind ?? "user") === "subagent" &&
+            record?.parentChatId &&
+            !parentContacted
+          ) {
+            void this.runTurn({
+              text: PARENT_NUDGE_PROMPT,
+              model: this.lastModel,
+              permissionMode: args.permissionMode,
+              nudge: true,
+              origin: "system",
+              originLabel: "System",
+            });
+          } else {
+            // Agent fully finished this chat (no compact, no queued follow-up).
+            // Push to the phone if the Mac has been idle a while (handled inside).
+            void notifyAgentFinished(
+              record?.title ?? this.chatId,
+              basename(this.repoPath),
+            );
+          }
         }
       }
     }

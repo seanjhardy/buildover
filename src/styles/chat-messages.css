@@ -834,7 +834,8 @@
 .bash-summary,
 .search-pattern,
 .web-target,
-.agent-task-desc {
+.agent-task-desc,
+.generic-tool-summary {
   color: var(--app-secondary-foreground);
   font-family: var(--font-mono, monospace);
   font-size: 11px;
@@ -1011,6 +1012,64 @@
   color: var(--app-secondary-foreground);
   max-height: 320px;
   overflow: auto;
+}
+
+/* ---- Generic tool (ToolSearch, CronCreate, MCP tools, etc.) ---- */
+.generic-tool-server {
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  background: rgba(255, 255, 255, 0.07);
+  border-radius: 3px;
+  padding: 1px 5px;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.generic-tool-params {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.generic-tool-param-key {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--app-secondary-foreground);
+  margin-bottom: 3px;
+}
+.generic-tool-param-value {
+  font-size: 12px;
+  color: var(--app-foreground);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+.generic-tool-param-json {
+  margin: 0;
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--app-secondary-foreground);
+}
+.generic-tool-result {
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: var(--app-secondary-foreground);
+  max-height: 240px;
+  overflow: auto;
+}
+.generic-tool-result.with-border {
+  margin-top: var(--app-spacing-medium);
+  padding-top: var(--app-spacing-medium);
+  border-top: 1px solid var(--app-tool-border);
+}
+.generic-tool-result.error {
+  color: #ff7a7a;
 }
 
 /* ---- Attention ---- */

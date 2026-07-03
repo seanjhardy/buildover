@@ -30,6 +30,8 @@ import { fileApi } from "../lib/api.js";
 interface Props {
   chatId: string;
   onSend: (text: string, attachments: Attachment[]) => void;
+  /** Long-press the send button: enqueue the message in a paused queue. */
+  onQueuePaused?: (text: string, attachments: Attachment[]) => void;
   onInterrupt: () => void;
   onDraftChange?: (text: string) => void;
   disabled: boolean;
@@ -47,6 +49,10 @@ interface Props {
   onModelChange: (model: string) => void;
   availableModels: { id: string; label: string }[];
 }
+
+// Hold the send button this long (ms) to enqueue into a paused queue instead
+// of sending immediately.
+const LONG_PRESS_MS = 400;
 
 const MAX_TEXT_BYTES = 256 * 1024;
 const MAX_IMAGE_BYTES = 4 * 1024 * 1024;
@@ -209,6 +215,7 @@ export function Composer(props: Props) {
   const {
     chatId,
     onSend,
+    onQueuePaused,
     onInterrupt,
     onDraftChange,
     disabled,
@@ -429,6 +436,57 @@ export function Composer(props: Props) {
     setAttachments([]);
     clearDraft();
   };
+
+  // Enqueue the current message into a paused queue instead of sending. Used by
+  // the long-press gesture on the send button. Returns true if it consumed the
+  // message so the click handler can skip the normal submit.
+  const queuePausedSubmit = (): boolean => {
+    if (!onQueuePaused) return false;
+    const trimmed = text.trim();
+    if (!trimmed && attachments.length === 0) return false;
+    if (disabled) return false;
+    onQueuePaused(trimmed, attachments);
+    setText("");
+    setAttachments([]);
+    clearDraft();
+    return true;
+  };
+
+  // ---- Long-press-to-queue on the send button ----
+  // A press held for LONG_PRESS_MS enqueues into a paused queue; a normal click
+  // sends. `longPressFired` guards the click that fires after pointerup so the
+  // message isn't both queued and sent.
+  const longPressTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const longPressFired = useRef(false);
+
+  const cancelLongPress = () => {
+    if (longPressTimer.current) {
+      clearTimeout(longPressTimer.current);
+      longPressTimer.current = null;
+    }
+  };
+
+  const startLongPress = () => {
+    if (!onQueuePaused) return;
+    longPressFired.current = false;
+    cancelLongPress();
+    longPressTimer.current = setTimeout(() => {
+      longPressTimer.current = null;
+      if (queuePausedSubmit()) longPressFired.current = true;
+    }, LONG_PRESS_MS);
+  };
+
+  const handleSendClick = () => {
+    cancelLongPress();
+    if (longPressFired.current) {
+      // The long-press already queued the message; swallow the trailing click.
+      longPressFired.current = false;
+      return;
+    }
+    submit();
+  };
+
+  useEffect(() => cancelLongPress, []);
 
   // Replace the @<query> token with the selected file path.
   const selectAtFile = (filePath: string) => {
@@ -1056,8 +1114,19 @@ export function Composer(props: Props) {
               return (
                 <button
                   className={hasContent ? "send-btn" : "send-btn stop"}
-                  onClick={hasContent ? submit : onInterrupt}
-                  title={hasContent ? "Queue — runs after the current turn" : "Stop"}
+                  onClick={hasContent ? handleSendClick : onInterrupt}
+                  onPointerDown={hasContent ? startLongPress : undefined}
+                  onPointerUp={hasContent ? cancelLongPress : undefined}
+                  onPointerLeave={hasContent ? cancelLongPress : undefined}
+                  onPointerCancel={hasContent ? cancelLongPress : undefined}
+                  onContextMenu={hasContent ? (e) => e.preventDefault() : undefined}
+                  title={
+                    hasContent
+                      ? onQueuePaused
+                        ? "Queue — runs after the current turn (hold to pause)"
+                        : "Queue — runs after the current turn"
+                      : "Stop"
+                  }
                 >
                   {hasContent ? <ArrowUp size={16} /> : <Square size={12} />}
                 </button>
@@ -1066,9 +1135,14 @@ export function Composer(props: Props) {
           ) : (
             <button
               className="send-btn"
-              onClick={submit}
+              onClick={handleSendClick}
+              onPointerDown={startLongPress}
+              onPointerUp={cancelLongPress}
+              onPointerLeave={cancelLongPress}
+              onPointerCancel={cancelLongPress}
+              onContextMenu={(e) => e.preventDefault()}
               disabled={disabled || (text.trim() === "" && attachments.length === 0)}
-              title="Send"
+              title={onQueuePaused ? "Send (hold to queue paused)" : "Send"}
             >
               <ArrowUp size={16} />
             </button>

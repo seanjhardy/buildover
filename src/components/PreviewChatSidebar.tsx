@@ -18,6 +18,8 @@ interface PreviewChatSidebarProps {
   onCreateChat: () => void;
   onToggleFinished: (chatId: string, finished: boolean) => void;
   onDeleteChat: (chatId: string) => void;
+  onToggleStar?: (chatId: string, starred: boolean) => void;
+  onRename?: (chatId: string, title: string) => void;
   chatDrafts: Record<string, string>;
   repoPath: string;
   onClosePreview: () => void;
@@ -47,6 +49,8 @@ export function PreviewChatSidebar({
   onCreateChat,
   onToggleFinished,
   onDeleteChat,
+  onToggleStar,
+  onRename,
   chatDrafts,
   repoPath,
   onClosePreview,
@@ -181,6 +185,8 @@ export function PreviewChatSidebar({
                       onSelect={handleSelectChat}
                       onToggleFinished={onToggleFinished}
                       onDelete={onDeleteChat}
+                      onToggleStar={onToggleStar}
+                      onRename={onRename}
                       chatDrafts={chatDrafts}
                     />
                   </div>

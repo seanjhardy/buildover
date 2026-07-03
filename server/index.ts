@@ -22,6 +22,7 @@ import {
   recoverStaleChatsForRepo,
   recoverStaleChatsForRepoWithIds,
   setModel,
+  setStarred,
   setTitle,
   setUserFinished,
   ensureCoordinatorChat,
@@ -642,6 +643,11 @@ app.patch("/api/chats/:chatId", async (req, res) => {
     }
     if (typeof req.body?.model === "string" && req.body.model.trim()) {
       record = (await setModel(repoPath, req.params.chatId, req.body.model.trim())) ?? record;
+    }
+    if (typeof req.body?.starred === "boolean") {
+      record =
+        (await setStarred(repoPath, req.params.chatId, req.body.starred)) ??
+        record;
     }
     res.json({ chat: record });
   } catch (err) {
@@ -1356,22 +1362,32 @@ app.get("/api/file/serve", async (req, res) => {
 });
 
 // ---- File list ----
-const FILE_LIST_EXCLUDES = new Set([
+// The tree only hides dirs that are huge and never worth browsing. Build
+// output (dist/build/out/…) is shown so it renders in the sidebar.
+const TREE_EXCLUDES = new Set(["node_modules", ".git"]);
+// Search additionally skips build output to keep results free of generated/
+// minified files.
+const SEARCH_EXCLUDES = new Set([
   "node_modules", ".git", "dist", "build", "out",
   ".next", ".cache", "coverage", ".turbo", ".swc",
 ]);
 const FILE_LIST_MAX = 5000;
 
-async function walkDir(root: string, current: string, results: string[]): Promise<void> {
+async function walkDir(
+  root: string,
+  current: string,
+  results: string[],
+  excludes: Set<string> = TREE_EXCLUDES,
+): Promise<void> {
   if (results.length >= FILE_LIST_MAX) return;
   let entries;
   try { entries = await readdir(current, { withFileTypes: true }); } catch { return; }
   for (const entry of entries) {
     if (results.length >= FILE_LIST_MAX) return;
-    if (FILE_LIST_EXCLUDES.has(entry.name)) continue;
+    if (excludes.has(entry.name)) continue;
     const full = join(current, entry.name);
     if (entry.isDirectory()) {
-      await walkDir(root, full, results);
+      await walkDir(root, full, results, excludes);
     } else if (entry.isFile()) {
       results.push(relative(root, full));
     }
@@ -1433,9 +1449,9 @@ app.get("/api/file/search", async (req, res) => {
       excludeExts.split(",").map((e) => e.trim().replace(/^\./, "").toLowerCase()).filter(Boolean),
     );
 
-    // Reuse the existing walkDir which already skips node_modules/.git/dist/…
+    // Reuse the existing walkDir, but also skip build output for search.
     const allFiles: string[] = [];
-    await walkDir(root, root, allFiles);
+    await walkDir(root, root, allFiles, SEARCH_EXCLUDES);
 
     const results: SearchFileResult[] = [];
     let total   = 0;   // matches in this page
