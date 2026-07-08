@@ -153,6 +153,11 @@ export const api = {
       (r) => r.repo,
     ),
 
+  cloneRepo: (url: string, parentDir: string) =>
+    send<{ repo: RepoInfo }>("POST", `/api/repos/clone`, { url, parentDir }).then(
+      (r) => r.repo,
+    ),
+
   removeRecent: (path: string) =>
     send<{ ok: boolean }>("DELETE", `/api/repos/recents`, { path }),
 

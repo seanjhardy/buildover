@@ -243,6 +243,8 @@ export interface ChatRecord {
   /** User turns deferred because Claude usage is exhausted. The user message
    *  is already persisted in events; these entries are the runnable work queue. */
   queuedTurns?: QueuedChatTurn[];
+  /** When true, queued turns stay visible but will not auto-drain. */
+  queuePaused?: boolean;
   /** Most recent context window usage — updated on every turn, used to
    *  re-populate the context ring when replaying/loading a chat. */
   lastContextUsage?: ContextUsage;
@@ -370,8 +372,14 @@ export type ClientMessage =
             updatedPermissions?: unknown[];
           }
         | { behavior: "deny"; message: string; interrupt?: boolean };
-    }
+      }
   | { type: "interrupt"; chatId: string }
+  | {
+      // Pauses or resumes the chat's queued-turn drain.
+      type: "set_queue_paused";
+      chatId: string;
+      paused: boolean;
+    }
   | {
       // Updates the permissionMode of an in-flight turn. The server applies
       // this dynamically so toggling bypass mid-turn takes effect on the

@@ -22,6 +22,7 @@ import {
   recoverStaleChatsForRepo,
   recoverStaleChatsForRepoWithIds,
   setModel,
+  setQueuePaused,
   setStarred,
   setTitle,
   setUserFinished,
@@ -83,6 +84,7 @@ import {
   gitCommitDiffStat,
   gitCommitFileDiff,
   gitGetWorkingDiff,
+  cloneRepo,
 } from "./git.js";
 import { generateCommitMessage } from "./title.js";
 import {
@@ -536,6 +538,21 @@ app.post("/api/repos/open", async (req, res) => {
   try {
     const path = String(req.body?.path ?? "");
     const meta = await ensureRepo(path);
+    await touchRecent(meta);
+    res.json({ repo: meta });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/repos/clone", async (req, res) => {
+  try {
+    const url = String(req.body?.url ?? "");
+    const parentDir = String(req.body?.parentDir ?? "");
+    const dest = await cloneRepo(url, parentDir);
+    const meta = await ensureRepo(dest);
     await touchRecent(meta);
     res.json({ repo: meta });
   } catch (err) {
@@ -1966,6 +1983,22 @@ wss.on("connection", (ws: WebSocket) => {
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
           session.interrupt();
+          break;
+        }
+        case "set_queue_paused": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const record = await setQueuePaused(
+            sub.repoPath,
+            msg.chatId,
+            msg.paused,
+          );
+          if (!record) break;
+          const session = getSession(sub.repoPath, msg.chatId);
+          await session.pushStatusForRecord(record);
+          if (!msg.paused && record.queuedTurns?.length) {
+            void scheduleQueuedTurnsForRepo(sub.repoPath).catch(() => {});
+          }
           break;
         }
         case "set_permission_mode": {

@@ -21,6 +21,13 @@ import type {
 // already communicates it, and the server auto-retries without user action.
 const SERVER_RESTART_ERROR_MSG = "Turn was interrupted by a server restart.";
 
+// User-initiated stops surface as an SDK error ("Claude Code process aborted by
+// user"). These aren't real failures, so we never render them — including for
+// chats persisted before the server-side suppression landed (retroactive fix).
+function isAbortErrorMessage(message: string): boolean {
+  return /aborted by user/i.test(message);
+}
+
 // ---------------------------------------------------------------------------
 // Client-side turn cache
 // ---------------------------------------------------------------------------
@@ -97,6 +104,8 @@ export type ChatTurn =
       /** Absent === genuine user input; "subagent"/"system" === injected. */
       origin?: MessageOrigin;
       originLabel?: string;
+      /** ISO timestamp of when the user sent this message (persisted or live). */
+      ts?: string;
     }
   | { kind: "assistant"; id: string; content: ContentBlock[] }
   | { kind: "tool_results"; id: string; content: ContentBlock[] }
@@ -395,11 +404,11 @@ export function useAgent(
     // render as interruptible — keeping the UI responsive during reconciliation.
     const cached = chatCache.get(chatId);
     startTransition(() => {
-      if (cached) {
-        setTurns(cached.turns);
-        setSessionId(cached.sessionId);
-        setTools(cached.tools);
-        setMcpServers(cached.mcpServers);
+    if (cached) {
+      setTurns(cached.turns);
+      setSessionId(cached.sessionId);
+      setTools(cached.tools);
+      setMcpServers(cached.mcpServers);
         setCwd(cached.cwd);
         setStatus(cached.status);
         setChatPermissionMode(cached.chatPermissionMode);
@@ -458,6 +467,7 @@ export function useAgent(
         return next;
       });
     };
+
     const cachedSetSessionId: React.Dispatch<
       React.SetStateAction<string | undefined>
     > = (action) => {
@@ -641,6 +651,7 @@ export function useAgent(
         setBranchInfo: cachedSetBranchInfo,
         setSlashCommands: cachedSetSlashCommands,
         setQueuedTurns,
+        setQueuePaused,
         requestToToolUseId: requestToToolUseIdRef.current,
       });
     };
@@ -731,17 +742,29 @@ export function useAgent(
     agentSocket.send({ type: "interrupt", chatId: id });
   }, []);
 
-  const toggleQueuePaused = useCallback(() => {
-    setQueuePaused((p) => !p);
+  const setQueuePausedAndSync = useCallback((paused: boolean) => {
+    setQueuePaused(paused);
+    const id = chatIdRef.current;
+    if (id) {
+      agentSocket.send({
+        type: "set_queue_paused",
+        chatId: id,
+        paused,
+      });
+    }
   }, []);
+
+  const toggleQueuePaused = useCallback(() => {
+    setQueuePausedAndSync(!queuePaused);
+  }, [queuePaused, setQueuePausedAndSync]);
 
   // Add a message to the queue and pause it, regardless of whether the agent
   // is currently streaming. Used by the composer's long-press-to-queue gesture
   // so the message is held until the user resumes the queue.
   const enqueuePaused = useCallback((text: string, opts: SendOptions) => {
-    setQueuePaused(true);
+    setQueuePausedAndSync(true);
     setLocalQueue((q) => [...q, { id: newQueueId(), text, opts }]);
-  }, []);
+  }, [setQueuePausedAndSync]);
 
   const removeQueued = useCallback((id: string) => {
     setLocalQueue((q) => q.filter((m) => m.id !== id));
@@ -892,6 +915,7 @@ interface Setters {
   setBranchInfo: (info: Map<string, BranchInfo>) => void;
   setSlashCommands: React.Dispatch<React.SetStateAction<string[]>>;
   setQueuedTurns: React.Dispatch<React.SetStateAction<QueuedChatTurn[]>>;
+  setQueuePaused: React.Dispatch<React.SetStateAction<boolean>>;
   // Map of permission requestId -> tool_use block ID, used to apply
   // permission_response updatedInput back to the originating tool_use block.
   requestToToolUseId: Map<string, string>;
@@ -961,6 +985,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
           attachments: event.attachments,
           origin: event.origin,
           originLabel: event.originLabel,
+          ts: new Date().toISOString(),
         },
       ]);
       break;
@@ -1097,7 +1122,11 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
     case "error":
       // Server-restart interruptions are silently suppressed from the turn list
       // — the retry banner in the chat pane already communicates this clearly.
-      if (event.message !== SERVER_RESTART_ERROR_MSG) {
+      // User-initiated aborts are likewise not real errors.
+      if (
+        event.message !== SERVER_RESTART_ERROR_MSG &&
+        !isAbortErrorMessage(event.message)
+      ) {
         s.setTurns((prev) => [
           ...prev,
           {
@@ -1284,6 +1313,9 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
 
   s.setTurns(turns);
   s.setQueuedTurns(record.queuedTurns ?? []);
+  if (record.queuePaused !== undefined) {
+    s.setQueuePaused(record.queuePaused);
+  }
   if (record.sessionId) s.setSessionId(record.sessionId);
   // Restore the last known context usage from the persisted record, but only
   // if we don't already have a live value that is higher. A chat_replay can
@@ -1331,6 +1363,7 @@ function chatEventToTurn(ev: ChatEvent): ChatTurn | null {
         attachments: ev.attachments,
         origin: ev.origin ?? legacy?.origin,
         originLabel: ev.originLabel ?? legacy?.originLabel,
+        ts: ev.ts,
       };
     }
     case "assistant":
@@ -1360,8 +1393,10 @@ function chatEventToTurn(ev: ChatEvent): ChatTurn | null {
       };
     }
     case "error":
-      // Suppress the server-restart sentinel — the retry banner handles it.
-      if (ev.message === SERVER_RESTART_ERROR_MSG) return null;
+      // Suppress the server-restart sentinel — the retry banner handles it —
+      // and user-initiated aborts persisted before the server-side fix landed.
+      if (ev.message === SERVER_RESTART_ERROR_MSG || isAbortErrorMessage(ev.message))
+        return null;
       return {
         kind: "assistant",
         id: `e-${ev.ts}`,

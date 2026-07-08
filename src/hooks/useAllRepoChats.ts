@@ -98,19 +98,19 @@ export function useAllRepoChats(
       for (const repoPath of currentPaths) {
         try {
           const list = await api.listChats(repoPath);
-          const knownIds = new Set(
-            (chatsByRepoRef.current[repoPath] ?? []).map((c) => c.id),
-          );
-          const freshChats = list.filter((c) => !knownIds.has(c.id));
-          if (freshChats.length > 0) {
-            setChatsByRepo((prev) => ({
-              ...prev,
-              [repoPath]: [...(prev[repoPath] ?? []), ...freshChats],
-            }));
-            // Subscribe immediately using the fresh list — the ref won't have
-            // these IDs yet since setChatsByRepo is async.
-            subscribeChats(repoPath, freshChats);
-          }
+          // Dedup against the *current* state inside the updater, not the ref:
+          // the ref lags an uncommitted setChatsByRepo, so basing the merge on
+          // it can re-append ids already present in `prev` and duplicate rows.
+          setChatsByRepo((prev) => {
+            const existing = prev[repoPath] ?? [];
+            const knownIds = new Set(existing.map((c) => c.id));
+            const freshChats = list.filter((c) => !knownIds.has(c.id));
+            if (freshChats.length === 0) return prev;
+            return { ...prev, [repoPath]: [...existing, ...freshChats] };
+          });
+          // subscribeChats skips ids already subscribed, so passing the full
+          // list is safe and catches any that slipped through earlier ticks.
+          subscribeChats(repoPath, list);
         } catch {
           // Network error — skip this tick.
         }

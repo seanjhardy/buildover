@@ -34,6 +34,31 @@
   box-sizing: border-box;
 }
 
+/* Hairline separator carrying a friendly timestamp centred in the rule. */
+.timestamp-divider {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 12px;
+  user-select: none;
+  pointer-events: none;
+}
+.timestamp-divider::before,
+.timestamp-divider::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--app-tool-border) 55%, transparent);
+}
+.timestamp-divider-label {
+  flex: 0 0 auto;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  color: color-mix(in srgb, var(--app-secondary-foreground) 65%, transparent);
+}
+
 .message-list-empty {
   display: flex;
   flex-direction: column;
@@ -872,7 +897,7 @@
   background: var(--app-claude-orange);
   border: 1px solid var(--app-claude-orange);
   padding: 3px 10px;
-  border-radius: 9999px;
+  border-radius: var(--corner-radius-small);
   font-size: 11px;
   font-weight: 500;
   color: #fff;

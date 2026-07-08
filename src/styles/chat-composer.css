@@ -251,9 +251,9 @@
 
 /* ---- Message queue ----
    A rounded card that sits directly above the composer and holds messages the
-   user typed while the agent was mid-turn. Distinct from the usage-limit
-   .queued-turns-banner. When present it tucks flush against the composer (see
-   the .message-queue + .composer rule) so the two read as one docked unit. */
+   user typed while the agent was mid-turn, plus any usage-limited queued
+   turns. When present it tucks flush against the composer (see the
+   .message-queue + .composer rule) so the two read as one docked unit. */
 /* Plain block wrapper (NOT flex): the composer uses `margin: … auto`, and as a
    flex item that cross-axis auto margin overrides stretch and collapses it to
    content width. Block layout lets both children fill the column as before. */
@@ -362,6 +362,28 @@
   color: var(--app-primary-foreground);
 }
 
+.message-queue-note {
+  padding: 0 2px 2px;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  line-height: 1.4;
+}
+
+.message-queue-usage-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.message-queue-section-header {
+  padding: 0 2px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--app-secondary-foreground);
+}
+
 /* One continuous rounded block: items are connected with hairline dividers
    rather than separated into individual pills. */
 .message-queue-list {
@@ -372,6 +394,10 @@
   overflow: hidden;
   background: rgba(0, 0, 0, 0.24);
   border: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.message-queue-list--usage {
+  background: rgba(0, 0, 0, 0.18);
 }
 
 .message-queue-item {
@@ -460,6 +486,29 @@
 }
 .message-queue-action.remove:hover {
   color: var(--app-error);
+}
+
+.message-queue-item--readonly {
+  cursor: default;
+}
+.message-queue-item--readonly:hover {
+  background: transparent;
+}
+.message-queue-item--readonly .message-queue-item-actions {
+  display: none;
+}
+
+.message-queue-badge {
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--app-claude-orange);
+  background: rgba(217, 119, 87, 0.14);
+  border-radius: 999px;
+  padding: 2px 7px;
+  line-height: 1.4;
+  flex-shrink: 0;
 }
 
 /* ---- Mic / Whisper button ---- */
@@ -1027,42 +1076,6 @@
 .usage-row-meta {
   color: var(--app-secondary-foreground);
   font-variant-numeric: tabular-nums;
-}
-
-/* ---- Queued turns banner ---- */
-.queued-turns-banner {
-  display: flex;
-  align-items: flex-start;
-  gap: var(--app-spacing-medium);
-  padding: var(--app-spacing-medium);
-  margin: var(--app-spacing-medium) 0;
-  background: var(--app-warning-background, rgba(251, 191, 36, 0.1));
-  border: 1px solid var(--app-warning, #fbbf24);
-  border-radius: var(--corner-radius-medium);
-  font-size: 12px;
-}
-
-.queued-turns-icon {
-  font-size: 18px;
-  line-height: 1;
-  flex-shrink: 0;
-}
-
-.queued-turns-content {
-  flex: 1;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.queued-turns-title {
-  font-weight: 600;
-  color: var(--app-primary-foreground);
-}
-
-.queued-turns-subtitle {
-  color: var(--app-secondary-foreground);
-  line-height: 1.4;
 }
 
 /* ---- Header right cluster (model + session + connection) ---- */

@@ -9,10 +9,12 @@ import {
   SendHorizontal,
   X,
 } from "lucide-react";
+import type { QueuedChatTurn } from "../types.js";
 import type { LocalQueuedMessage } from "../hooks/useAgent.js";
 
 interface Props {
   queue: LocalQueuedMessage[];
+  usageQueuedTurns: QueuedChatTurn[];
   paused: boolean;
   onTogglePause: () => void;
   onRemove: (id: string) => void;
@@ -25,8 +27,24 @@ function preview(text: string): string {
   return firstLine || "(empty message)";
 }
 
+function formatTimeUntil(iso: string | null): string {
+  if (!iso) return "when usage resets";
+  const now = Date.now();
+  const target = new Date(iso).getTime();
+  const ms = target - now;
+  if (ms <= 0) return "soon";
+  const totalMin = Math.floor(ms / 60000);
+  const days = Math.floor(totalMin / (60 * 24));
+  const hours = Math.floor((totalMin % (60 * 24)) / 60);
+  const mins = totalMin % 60;
+  if (days > 0) return `in ${days}d ${hours}h`;
+  if (hours > 0) return `in ${hours}h ${mins}m`;
+  return `in ${mins}m`;
+}
+
 export function MessageQueue({
   queue,
+  usageQueuedTurns,
   paused,
   onTogglePause,
   onRemove,
@@ -37,13 +55,22 @@ export function MessageQueue({
   const [dragIndex, setDragIndex] = useState<number | null>(null);
   const [dropIndex, setDropIndex] = useState<number | null>(null);
 
-  if (queue.length === 0) return null;
+  if (queue.length === 0 && usageQueuedTurns.length === 0) return null;
+
+  const usageCount = usageQueuedTurns.length;
+  const usageLead = usageQueuedTurns[0] ?? null;
+  const usageResetNote =
+    usageLead && usageCount > 0
+      ? `${usageLead.reason} ${usageCount === 1 ? "1 message is" : `${usageCount} messages are`} queued ${paused ? "and will stay queued until you resume the queue." : `and will send automatically ${formatTimeUntil(usageLead.runAfter)}, unless you pause the queue.`}`
+      : null;
+
+  const totalCount = queue.length + usageQueuedTurns.length;
 
   return (
     <div className={`message-queue${paused ? " paused" : ""}`}>
       <div className="message-queue-header">
         <span className="message-queue-title">Queue</span>
-        <span className="message-queue-count">{queue.length}</span>
+        <span className="message-queue-count">{totalCount}</span>
         {paused && <span className="message-queue-status">Paused</span>}
         <div className="message-queue-actions">
           <button
@@ -68,75 +95,115 @@ export function MessageQueue({
       </div>
 
       {!collapsed && (
-        <ul className="message-queue-list">
-          {queue.map((msg, i) => {
-            const attachmentCount = msg.opts.attachments?.length ?? 0;
-            return (
-              <li
-                key={msg.id}
-                className={`message-queue-item${dragIndex === i ? " dragging" : ""}${
-                  dropIndex === i && dragIndex !== i ? " drop-target" : ""
-                }`}
-                draggable
-                onDragStart={(e) => {
-                  setDragIndex(i);
-                  e.dataTransfer.effectAllowed = "move";
-                }}
-                onDragOver={(e) => {
-                  e.preventDefault();
-                  e.dataTransfer.dropEffect = "move";
-                  if (dropIndex !== i) setDropIndex(i);
-                }}
-                onDrop={(e) => {
-                  e.preventDefault();
-                  if (dragIndex !== null && dragIndex !== i) {
-                    onReorder(dragIndex, i);
-                  }
-                  setDragIndex(null);
-                  setDropIndex(null);
-                }}
-                onDragEnd={() => {
-                  setDragIndex(null);
-                  setDropIndex(null);
-                }}
-              >
-                <span className="message-queue-grip" aria-hidden="true">
-                  <GripVertical size={14} />
-                </span>
-                {attachmentCount > 0 && (
-                  <span
-                    className="message-queue-attachments"
-                    title={`${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
+        <>
+          {usageResetNote && (
+            <div className="message-queue-note">{usageResetNote}</div>
+          )}
+
+          {queue.length > 0 && (
+            <ul className="message-queue-list">
+              {queue.map((msg, i) => {
+                const attachmentCount = msg.opts.attachments?.length ?? 0;
+                return (
+                  <li
+                    key={msg.id}
+                    className={`message-queue-item${dragIndex === i ? " dragging" : ""}${
+                      dropIndex === i && dragIndex !== i ? " drop-target" : ""
+                    }`}
+                    draggable
+                    onDragStart={(e) => {
+                      setDragIndex(i);
+                      e.dataTransfer.effectAllowed = "move";
+                    }}
+                    onDragOver={(e) => {
+                      e.preventDefault();
+                      e.dataTransfer.dropEffect = "move";
+                      if (dropIndex !== i) setDropIndex(i);
+                    }}
+                    onDrop={(e) => {
+                      e.preventDefault();
+                      if (dragIndex !== null && dragIndex !== i) {
+                        onReorder(dragIndex, i);
+                      }
+                      setDragIndex(null);
+                      setDropIndex(null);
+                    }}
+                    onDragEnd={() => {
+                      setDragIndex(null);
+                      setDropIndex(null);
+                    }}
                   >
-                    <Paperclip size={12} />
-                    {attachmentCount}
-                  </span>
-                )}
-                <span className="message-queue-text">{preview(msg.text)}</span>
-                <div className="message-queue-item-actions">
-                  <button
-                    type="button"
-                    className="message-queue-action fast"
-                    onClick={() => onFastTrack(msg.id)}
-                    title="Send now (stops the current turn)"
-                    aria-label="Send now"
-                  >
-                    <SendHorizontal size={14} />
-                  </button>
-                  <button
-                    type="button"
-                    className="message-queue-action remove"
-                    onClick={() => onRemove(msg.id)}
-                    title="Remove from queue"
-                    aria-label="Remove from queue"
-                  >
-                    <X size={14} />
-                  </button>
-                </div>
-              </li>
-            );
-          })}
-        </ul>
+                    <span className="message-queue-grip" aria-hidden="true">
+                      <GripVertical size={14} />
+                    </span>
+                    {attachmentCount > 0 && (
+                      <span
+                        className="message-queue-attachments"
+                        title={`${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
+                      >
+                        <Paperclip size={12} />
+                        {attachmentCount}
+                      </span>
+                    )}
+                    <span className="message-queue-text">{preview(msg.text)}</span>
+                    <div className="message-queue-item-actions">
+                      <button
+                        type="button"
+                        className="message-queue-action fast"
+                        onClick={() => onFastTrack(msg.id)}
+                        title="Send now (stops the current turn)"
+                        aria-label="Send now"
+                      >
+                        <SendHorizontal size={14} />
+                      </button>
+                      <button
+                        type="button"
+                        className="message-queue-action remove"
+                        onClick={() => onRemove(msg.id)}
+                        title="Remove from queue"
+                        aria-label="Remove from queue"
+                      >
+                        <X size={14} />
+                      </button>
+                    </div>
+                  </li>
+                );
+              })}
+            </ul>
+          )}
+
+          {usageQueuedTurns.length > 0 && (
+            <div className="message-queue-usage-section">
+              <div className="message-queue-section-header">
+                Queued because usage is limited
+              </div>
+              <ul className="message-queue-list message-queue-list--usage">
+                {usageQueuedTurns.map((turn) => {
+                  const attachmentCount = turn.attachments?.length ?? 0;
+                  return (
+                    <li
+                      key={turn.id}
+                      className="message-queue-item message-queue-item--readonly"
+                      title={turn.reason}
+                    >
+                      <span className="message-queue-badge">Usage</span>
+                      {attachmentCount > 0 && (
+                        <span
+                          className="message-queue-attachments"
+                          title={`${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
+                        >
+                          <Paperclip size={12} />
+                          {attachmentCount}
+                        </span>
+                      )}
+                      <span className="message-queue-text">{preview(turn.text)}</span>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+        </>
       )}
     </div>
   );

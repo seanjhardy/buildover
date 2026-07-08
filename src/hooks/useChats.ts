@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { api } from "../lib/api.js";
 import { agentSocket } from "../lib/agentSocket.js";
 import type {
@@ -22,6 +22,7 @@ export interface UseChatsReturn {
   setUserFinished: (chatId: string, finished: boolean) => Promise<void>;
   rename: (chatId: string, title: string) => Promise<void>;
   setStarred: (chatId: string, starred: boolean) => Promise<void>;
+  setChatModel: (chatId: string, model: string) => Promise<void>;
   deleteChat: (chatId: string) => Promise<void>;
 }
 
@@ -250,6 +251,20 @@ export function useChats(
     [repoPath],
   );
 
+  const setChatModel = useCallback(
+    async (chatId: string, model: string) => {
+      if (!repoPath) return;
+      // Optimistic update so switching away and back shows the new model immediately.
+      setChats((prev) =>
+        prev.map((c) => (c.id === chatId ? { ...c, model: model as Model } : c)),
+      );
+      await api.patchChat(repoPath, chatId, { model }).catch(() => {
+        void reload();
+      });
+    },
+    [repoPath, reload],
+  );
+
   const deleteChat = useCallback(
     async (chatId: string) => {
       if (!repoPath) return;
@@ -262,8 +277,24 @@ export function useChats(
     [repoPath],
   );
 
+  // The sidebar renders this list keyed by chat id, so any duplicate id shows
+  // up as a repeated row. Dupes can slip in when an optimistic/prefetched seed
+  // races the reload (or when a prefetched list itself contains dupes), so
+  // collapse to one entry per id here as a hard invariant. Live updates map
+  // identically across every copy, so keeping the first occurrence is safe.
+  const dedupedChats = useMemo(() => {
+    const seen = new Set<string>();
+    const out: ChatSummary[] = [];
+    for (const c of chats) {
+      if (seen.has(c.id)) continue;
+      seen.add(c.id);
+      out.push(c);
+    }
+    return out.length === chats.length ? chats : out;
+  }, [chats]);
+
   return {
-    chats,
+    chats: dedupedChats,
     loading,
     error,
     reload,
@@ -271,6 +302,7 @@ export function useChats(
     setUserFinished,
     rename,
     setStarred,
+    setChatModel,
     deleteChat,
   };
 }

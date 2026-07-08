@@ -328,6 +328,42 @@
   color: var(--app-error);
   padding: 6px 8px;
 }
+.open-repo-clone {
+  display: flex;
+  align-items: stretch;
+  gap: 4px;
+}
+.open-repo-clone-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--app-input-background);
+  color: var(--app-primary-foreground);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  padding: 8px 12px;
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+}
+.open-repo-clone-input:focus {
+  outline: none;
+  border-color: var(--app-claude-orange);
+}
+.open-repo-clone-submit {
+  flex: 0 0 auto;
+  background: transparent;
+  color: var(--app-claude-orange);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  padding: 8px 12px;
+  font-size: 12px;
+}
+.open-repo-clone-submit:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  border-color: var(--app-claude-orange);
+}
+.open-repo-clone-submit:disabled {
+  opacity: 0.6;
+}
 
 /* ---- Workspace split ---- */
 .workspace {

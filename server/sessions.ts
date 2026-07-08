@@ -114,12 +114,14 @@ export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void
   for (const chat of chats) {
     if (chat.status !== "queued") continue;
     const record = await readChat(repoPath, chat.id).catch(() => null);
+    if (record?.queuePaused) continue;
     const next = record?.queuedTurns?.[0];
     if (next) scheduleQueuedTurnDrain(repoPath, chat.id, next.runAfter);
   }
 }
 
 const CODEX_FALLBACK_MODEL = "codex-mini-latest";
+const USAGE_LIMIT_CONTINUE_PROMPT = "Please continue.";
 
 async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void> {
   const session = getSession(repoPath, chatId);
@@ -127,6 +129,9 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
     scheduleQueuedTurnDrain(repoPath, chatId, new Date(Date.now() + 5_000).toISOString());
     return;
   }
+
+  const record = await readChat(repoPath, chatId);
+  if (!record || record.queuePaused) return;
 
   const usageBlock = await getUsageLimitBlock();
   if (usageBlock) {
@@ -151,7 +156,6 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
       return;
     }
     // Neither Claude nor Codex is available — wait and retry.
-    const record = await readChat(repoPath, chatId);
     await session.pushStatusForRecord(record);
     scheduleQueuedTurnDrain(repoPath, chatId, usageBlock.resetsAt);
     return;
@@ -396,7 +400,7 @@ class AgentSession {
         };
     const queuedTurn: QueuedChatTurn = {
       id: makeQueuedTurnId(),
-      text: args.text,
+      text: USAGE_LIMIT_CONTINUE_PROMPT,
       model: args.model,
       permissionMode: args.permissionMode,
       attachments: args.attachments,
@@ -430,7 +434,9 @@ class AgentSession {
       }
     }
     await this.pushStatusFor(updated);
-    scheduleQueuedTurnDrain(this.repoPath, this.chatId, usageBlock.resetsAt);
+    if (!updated?.queuePaused) {
+      scheduleQueuedTurnDrain(this.repoPath, this.chatId, usageBlock.resetsAt);
+    }
   }
 
   // Decides whether a mid-turn failure was caused by the usage/session limit

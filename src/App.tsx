@@ -34,7 +34,6 @@ import { PlanViewer } from "./components/PlanViewer.js";
 import { UsageBar } from "./components/UsageBar.js";
 import { CaffeineButton } from "./components/CaffeineButton.js";
 import { NotificationButton } from "./components/NotificationButton.js";
-import { QueuedTurnsBanner } from "./components/QueuedTurnsBanner.js";
 import { MessageQueue } from "./components/MessageQueue.js";
 import { useAgent } from "./hooks/useAgent.js";
 import { useAllRepoChats } from "./hooks/useAllRepoChats.js";
@@ -156,13 +155,14 @@ export default function App() {
   // Reset selected PR when the active repo changes so we don't try to load a
   // PR number from a previous repo against the new one.
   useEffect(() => { setActivePrNumber(null); setActivePr(null); setCreatingPr(false); }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
-  // Sync model to the active chat's stored model when switching chats.
+  // Sync model to the active chat's stored model when switching chats or when
+  // the chat list loads asynchronously after activeChatId is already set.
   useEffect(() => {
     const chat = activeChatId != null
       ? chats.chats.find((c) => c.id === activeChatId)
       : null;
     if (chat?.model) setModel(chat.model);
-  }, [activeChatId]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [activeChatId, chats.chats]); // eslint-disable-line react-hooks/exhaustive-deps
   // Once the coordinator chat is confirmed loaded, validate the active chat ID.
   // If activeChatId is stale (e.g. chats were wiped since last session, or the
   // repo path was reused for a new project) or null (first visit to this repo),
@@ -466,11 +466,11 @@ export default function App() {
   // one drain owner and a message can never be dispatched twice.
 
   const handleModelChange = useCallback(async (newModel: string) => {
-    setModel(newModel);
-    if (activeChatId && activeRepo) {
-      await api.patchChat(activeRepo.path, activeChatId, { model: newModel }).catch(() => {});
+    setModel(newModel as Model);
+    if (activeChatId) {
+      await chats.setChatModel(activeChatId, newModel);
     }
-  }, [activeChatId, activeRepo]);
+  }, [activeChatId, chats.setChatModel]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const handleCreateChat = useCallback(() => {
     if (!activeRepo) return;
@@ -1238,7 +1238,6 @@ Important rules for commands:
                               onRevert={agent.revertToCheckpoint}
                               chatId={activeChatId ?? undefined}
                             />
-                            <QueuedTurnsBanner queuedTurns={agent.queuedTurns} />
                             {agent.pendingAttention && (
                               <AttentionPrompt
                                 pending={agent.pendingAttention}
@@ -1254,6 +1253,7 @@ Important rules for commands:
                             <div className="composer-dock" style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
                               <MessageQueue
                                 queue={agent.localQueue}
+                                usageQueuedTurns={agent.queuedTurns}
                                 paused={agent.queuePaused}
                                 onTogglePause={agent.toggleQueuePaused}
                                 onRemove={agent.removeQueued}

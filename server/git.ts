@@ -1,7 +1,8 @@
 import { execFile } from "node:child_process";
-import { readFile } from "node:fs/promises";
+import { readdir, readFile, rm, stat } from "node:fs/promises";
+import { homedir } from "node:os";
 import { promisify } from "node:util";
-import { join } from "node:path";
+import { isAbsolute, join } from "node:path";
 
 const execFileAsync = promisify(execFile);
 
@@ -508,4 +509,105 @@ export async function gitFileDiff(
   } catch { /* ignore */ }
 
   return { addedLines: [], removedGroups: [] };
+}
+
+/**
+ * Derive the target directory name from a git remote URL. Handles the common
+ * forms: `https://github.com/org/repo(.git)`, `git@github.com:org/repo(.git)`,
+ * and SSH-alias URLs like `worldover:org/repo(.git)`.
+ */
+export function repoNameFromUrl(url: string): string {
+  const cleaned = url
+    .trim()
+    .replace(/\/+$/, "")
+    .replace(/\.git$/i, "");
+  const seg = cleaned.split(/[/:]/).filter(Boolean).pop() ?? "";
+  return seg || "repo";
+}
+
+/**
+ * Rewrite an `https://host/owner/repo(.git)` URL to its scp-like SSH form
+ * `git@host:owner/repo.git` so that SSH keys are used for authentication.
+ * URLs that are already SSH/scp-like (or an ssh-config host alias) are returned
+ * unchanged.
+ */
+function toSshCloneUrl(url: string): string {
+  const m = url.match(/^https?:\/\/([^/]+)\/(.+?)(?:\.git)?\/?$/i);
+  if (!m) return url;
+  return `git@${m[1]}:${m[2]}.git`;
+}
+
+/**
+ * List private SSH key files under `~/.ssh` — identified as any file that has a
+ * matching `.pub` sibling. Used to try each of the user's keys in turn when
+ * cloning, so multi-account setups work without hardcoding which key belongs to
+ * which host/org.
+ */
+async function listSshPrivateKeys(): Promise<string[]> {
+  const sshDir = join(homedir(), ".ssh");
+  const entries = await readdir(sshDir).catch(() => [] as string[]);
+  const names = new Set(entries);
+  return entries
+    .filter((e) => e.endsWith(".pub"))
+    .map((e) => e.slice(0, -4))
+    .filter((name) => names.has(name))
+    .map((name) => join(sshDir, name));
+}
+
+/**
+ * Clone a git repository into `parentDir`, using the repo name derived from the
+ * URL as the destination folder. Returns the absolute destination path.
+ *
+ * For SSH clones we try each of the user's SSH keys in sequence (forcing a
+ * single identity per attempt via `IdentitiesOnly=yes`) until one succeeds.
+ * This makes multi-account setups work when the user pastes a normal GitHub URL
+ * — GitHub authenticates as whichever account a key belongs to, so a key
+ * lacking repo access fails and we move on to the next key.
+ *
+ * `BatchMode=yes` / `GIT_TERMINAL_PROMPT=0` ensure a key without valid access
+ * fails fast instead of hanging on an interactive credential prompt.
+ */
+export async function cloneRepo(url: string, parentDir: string): Promise<string> {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) throw new Error("A repository URL is required");
+  if (!parentDir || !isAbsolute(parentDir)) {
+    throw new Error("A destination folder is required");
+  }
+  const parent = await stat(parentDir).catch(() => null);
+  if (!parent || !parent.isDirectory()) {
+    throw new Error(`Not a directory: ${parentDir}`);
+  }
+
+  const dest = join(parentDir, repoNameFromUrl(trimmedUrl));
+  const existing = await stat(dest).catch(() => null);
+  if (existing) {
+    throw new Error(`Destination already exists: ${dest}`);
+  }
+
+  const cloneUrl = toSshCloneUrl(trimmedUrl);
+  const isSsh = !/^https?:\/\//i.test(cloneUrl);
+  // For SSH clones, try each key in turn; otherwise a single plain attempt.
+  const keys = isSsh ? await listSshPrivateKeys() : [];
+  const attempts: (string | null)[] = keys.length > 0 ? keys : [null];
+
+  let lastError: unknown;
+  for (const key of attempts) {
+    const env: NodeJS.ProcessEnv = {
+      ...process.env,
+      GIT_TERMINAL_PROMPT: "0",
+    };
+    if (key) {
+      env.GIT_SSH_COMMAND = `ssh -o IdentitiesOnly=yes -o BatchMode=yes -i "${key}"`;
+    }
+    try {
+      await execFileAsync("git", ["clone", cloneUrl, dest], { env });
+      return dest;
+    } catch (err) {
+      lastError = err;
+      // git may leave a partial destination behind on failure; clear it so the
+      // next key's attempt starts clean.
+      await rm(dest, { recursive: true, force: true }).catch(() => {});
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
 }

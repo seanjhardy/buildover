@@ -6,6 +6,7 @@ import { AssistantMessage } from "./AssistantMessage.js";
 import { ToolGroup } from "./ToolGroup.js";
 import { UserMessage } from "./UserMessage.js";
 import { SystemMessage } from "./SystemMessage.js";
+import { TimestampDivider } from "./TimestampDivider.js";
 
 // Runs of 3+ consecutive tool calls (across consecutive assistant turns) are
 // collapsed under a single "N tools called" header.
@@ -349,6 +350,7 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
       }
       return (
         <div key={item.id} data-turn-id={item.id} data-turn-kind="user">
+          <TimestampDivider ts={item.ts} />
           <UserMessage
             text={item.text}
             attachments={item.attachments}

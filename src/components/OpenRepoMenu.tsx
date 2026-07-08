@@ -19,6 +19,7 @@ export function OpenRepoMenu({
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [cloneUrl, setCloneUrl] = useState("");
   const [coords, setCoords] = useState<{ top: number; left: number } | null>(
     null,
   );
@@ -42,6 +43,8 @@ export function OpenRepoMenu({
   useEffect(() => {
     if (!open) {
       setCoords(null);
+      setCloneUrl("");
+      setError(null);
       return;
     }
     const update = () => {
@@ -87,6 +90,27 @@ export function OpenRepoMenu({
     }
   };
 
+  const handleClone = async () => {
+    const url = cloneUrl.trim();
+    if (!url) {
+      setError("Enter a repository URL first");
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    try {
+      const parentDir = await api.pickFolder();
+      if (!parentDir) return; // user cancelled the folder picker
+      const repo = await api.cloneRepo(url, parentDir);
+      await onOpen(repo.path);
+      setOpen(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const filteredRecents = recents.filter((r) => !openPaths.includes(r.path));
 
   const popover =
@@ -106,6 +130,27 @@ export function OpenRepoMenu({
             >
               Browse for folder…
             </button>
+            <div className="open-repo-clone">
+              <input
+                className="open-repo-clone-input"
+                type="text"
+                placeholder="Clone from URL (git@github.com:org/repo.git)"
+                value={cloneUrl}
+                onChange={(e) => setCloneUrl(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !busy) void handleClone();
+                }}
+                disabled={busy}
+              />
+              <button
+                type="button"
+                className="open-repo-clone-submit"
+                onClick={handleClone}
+                disabled={busy || !cloneUrl.trim()}
+              >
+                {busy ? "Cloning…" : "Clone"}
+              </button>
+            </div>
             {filteredRecents.length > 0 && (
               <div className="open-repo-section-label">Recent</div>
             )}

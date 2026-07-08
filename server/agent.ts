@@ -406,7 +406,13 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
   } catch (err) {
     // AbortErrors are intentional interruptions (user clicked stop, or force-forwarded
     // a queued message). Don't emit them as visible error events in the chat.
+    // The SDK reports a user-initiated stop as a plain Error with the message
+    // "Claude Code process aborted by user" (not an AbortError), so also treat
+    // that message — and any error thrown while our controller is aborted — as an abort.
+    const errMessage = err instanceof Error ? err.message : String(err);
     const isAbort =
+      abortController?.signal.aborted === true ||
+      /aborted by user/i.test(errMessage) ||
       (err instanceof Error && err.name === "AbortError") ||
       (typeof DOMException !== "undefined" &&
         err instanceof DOMException &&
@@ -415,7 +421,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       console.error("[agent] runAgentTurn error:", err);
       emit({
         type: "error",
-        message: err instanceof Error ? err.message : String(err),
+        message: errMessage,
       });
     }
   } finally {
