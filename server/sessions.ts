@@ -1,6 +1,17 @@
 import { runAgentTurn, type RawAgentEvent } from "./agent.js";
-import { runOpenAIAgentTurn, isOpenAIModel } from "./openaiAgent.js";
-import { isCodexAvailable } from "./codexUsage.js";
+import { runOpenAIAgentTurn } from "./openaiAgent.js";
+import { runCursorAgentTurn } from "./cursorAgent.js";
+import {
+  getCodexUsageLimitBlock,
+  isCodexAvailable,
+} from "./codexUsage.js";
+import { isCursorAvailable, getCursorUsageLimitBlock } from "./cursorUsage.js";
+import {
+  getModelProvider,
+  isClaudeModel,
+  isCursorModel,
+  toCursorModelId,
+} from "./modelProvider.js";
 import { makeCoordinationMcp } from "./coordinationTools.js";
 import { coordinatorPrompt, subagentPrompt } from "./prompts.js";
 import {
@@ -93,6 +104,15 @@ function delayUntil(runAfter: string | null): number {
   return Math.min(Math.max(0, target - Date.now()) + 2_000, MAX_TIMER_MS);
 }
 
+export function cancelQueuedTurnDrain(repoPath: string, chatId: string): void {
+  const key = queueTimerKey(repoPath, chatId);
+  const existing = queueTimers.get(key);
+  if (existing) {
+    clearTimeout(existing);
+    queueTimers.delete(key);
+  }
+}
+
 export function scheduleQueuedTurnDrain(
   repoPath: string,
   chatId: string,
@@ -120,8 +140,36 @@ export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void
   }
 }
 
-const CODEX_FALLBACK_MODEL = "codex-mini-latest";
+const CODEX_FALLBACK_MODEL = "gpt-5.6-luna";
+const CURSOR_FALLBACK_MODEL = toCursorModelId("composer-2.5");
+/** Claude mid-turn resume when the same Claude session will pick the work back up. */
 const USAGE_LIMIT_CONTINUE_PROMPT = "Please continue.";
+/** Used when we switch providers after Claude hits a limit mid-turn. */
+const CROSS_PROVIDER_CONTINUE_PROMPT =
+  "The previous turn was interrupted because the Claude usage limit was reached. Continue the work from where it left off, using the conversation so far as context.";
+
+/** When Claude is exhausted, prefer Cursor subscription, then Codex. */
+async function resolveClaudeUsageFallback(
+  model: string,
+): Promise<string | null> {
+  if (!isClaudeModel(model)) return null;
+  if (await isCursorAvailable()) {
+    const cursorBlock = await getCursorUsageLimitBlock();
+    if (!cursorBlock) return CURSOR_FALLBACK_MODEL;
+  }
+  if (await isCodexAvailable()) return CODEX_FALLBACK_MODEL;
+  return null;
+}
+
+async function getProviderUsageLimitBlock(
+  model: string | undefined,
+): Promise<UsageLimitBlock | null> {
+  if (!model) return null;
+  const provider = getModelProvider(model);
+  if (provider === "cursor") return getCursorUsageLimitBlock();
+  if (provider === "openai") return getCodexUsageLimitBlock();
+  return getUsageLimitBlock(model);
+}
 
 async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void> {
   const session = getSession(repoPath, chatId);
@@ -133,29 +181,37 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
   const record = await readChat(repoPath, chatId);
   if (!record || record.queuePaused) return;
 
-  const usageBlock = await getUsageLimitBlock();
+  const nextModel = record.queuedTurns?.[0]?.model;
+  const usageBlock = await getProviderUsageLimitBlock(nextModel);
   if (usageBlock) {
-    // Claude is exhausted — try running the queued turn via Codex instead.
+    // Claude is exhausted — try running the queued turn via Cursor / Codex.
     const shifted = await shiftQueuedChatTurn(repoPath, chatId);
-    if (shifted && !isOpenAIModel(shifted.turn.model) && await isCodexAvailable()) {
-      console.log(`[usage-queue] Claude blocked, falling back to ${CODEX_FALLBACK_MODEL} for ${chatId}`);
-      await session.pushStatusForRecord(shifted.record);
-      void session
-        .runTurn({
-          text: shifted.turn.text,
-          model: CODEX_FALLBACK_MODEL,
-          permissionMode: shifted.turn.permissionMode,
-          attachments: shifted.turn.attachments,
-          isRetry: true,
-          origin: shifted.turn.origin,
-          originLabel: shifted.turn.originLabel,
-        })
-        .catch((err) => {
-          console.warn(`[usage-queue] Codex fallback failed for ${chatId}:`, err instanceof Error ? err.message : err);
-        });
-      return;
+    if (shifted && isClaudeModel(shifted.turn.model)) {
+      const fallback = await resolveClaudeUsageFallback(shifted.turn.model);
+      if (fallback) {
+        console.log(`[usage-queue] Claude blocked, falling back to ${fallback} for ${chatId}`);
+        await session.pushStatusForRecord(shifted.record);
+        const fallbackText =
+          shifted.turn.text === USAGE_LIMIT_CONTINUE_PROMPT
+            ? CROSS_PROVIDER_CONTINUE_PROMPT
+            : shifted.turn.text;
+        void session
+          .runTurn({
+            text: fallbackText,
+            model: fallback,
+            permissionMode: shifted.turn.permissionMode,
+            attachments: shifted.turn.attachments,
+            isRetry: true,
+            origin: shifted.turn.origin,
+            originLabel: shifted.turn.originLabel,
+          })
+          .catch((err) => {
+            console.warn(`[usage-queue] fallback failed for ${chatId}:`, err instanceof Error ? err.message : err);
+          });
+        return;
+      }
     }
-    // Neither Claude nor Codex is available — wait and retry.
+    // No fallback available — wait and retry.
     await session.pushStatusForRecord(record);
     scheduleQueuedTurnDrain(repoPath, chatId, usageBlock.resetsAt);
     return;
@@ -398,9 +454,13 @@ class AgentSession {
           origin: args.origin,
           originLabel: args.originLabel,
         };
+    // Fresh user messages that never started should re-run with the original
+    // prompt once capacity returns. Mid-turn retries (isRetry) already had the
+    // user message applied to the provider session, so a short continue prompt
+    // is enough for Claude resume.
     const queuedTurn: QueuedChatTurn = {
       id: makeQueuedTurnId(),
-      text: USAGE_LIMIT_CONTINUE_PROMPT,
+      text: args.isRetry ? USAGE_LIMIT_CONTINUE_PROMPT : args.text,
       model: args.model,
       permissionMode: args.permissionMode,
       attachments: args.attachments,
@@ -453,8 +513,9 @@ class AgentSession {
   //      known or capacity returns.
   private async usageBlockForFailure(
     errorMessage: string,
+    model: string,
   ): Promise<UsageLimitBlock | null> {
-    const block = await getUsageLimitBlock().catch(() => null);
+    const block = await getProviderUsageLimitBlock(model).catch(() => null);
     if (block) return block;
     if (/rate.?limit|429|usage limit|quota|exceeded your/i.test(errorMessage)) {
       return {
@@ -479,8 +540,26 @@ class AgentSession {
     // user-visible message to resume, so they always surface the error.
     const usageBlock = args.silent
       ? null
-      : await this.usageBlockForFailure(message);
+      : await this.usageBlockForFailure(message, args.model);
     if (usageBlock) {
+      // Prefer falling back to Cursor/Codex immediately instead of parking a
+      // "Please continue." queue entry while another provider still has quota.
+      if (isClaudeModel(args.model)) {
+        const fallback = await resolveClaudeUsageFallback(args.model);
+        if (fallback) {
+          console.log(
+            `[session] Claude hit usage mid-turn — falling back to ${fallback}`,
+          );
+          // pendingUserTurns drains in finally once this.running clears.
+          this.pendingUserTurns.unshift({
+            ...args,
+            text: CROSS_PROVIDER_CONTINUE_PROMPT,
+            model: fallback,
+            isRetry: true,
+          });
+          return true;
+        }
+      }
       // isRetry: the user message is already persisted (echoed at turn start),
       // so the queued turn must not double-persist or re-echo it.
       await this.queueForUsageLimit({ ...args, isRetry: true }, usageBlock);
@@ -706,18 +785,33 @@ class AgentSession {
     }
 
     // Check usage limit before starting a new turn. When Claude is exhausted
-    // we first try to fall back to Codex (if the selected model is a Claude
-    // model and Codex is available). Only queue when both are unavailable.
+    // we first try Cursor (subscription), then Codex. Only queue when none
+    // of the fallbacks are available. Cursor-selected models check Cursor
+    // limits instead of Claude's.
     if (!args.silent) {
-      const usageBlock = await getUsageLimitBlock();
-      if (usageBlock && !isOpenAIModel(args.model)) {
-        const codexReady = await isCodexAvailable();
-        if (codexReady) {
-          console.log(`[session] Claude blocked — falling back to ${CODEX_FALLBACK_MODEL}`);
-          args = { ...args, model: CODEX_FALLBACK_MODEL };
-        } else {
-          await this.queueForUsageLimit(args, usageBlock);
+      if (isCursorModel(args.model)) {
+        const cursorBlock = await getCursorUsageLimitBlock();
+        if (cursorBlock) {
+          await this.queueForUsageLimit(args, cursorBlock);
           return;
+        }
+      } else if (getModelProvider(args.model) === "openai") {
+        const codexBlock = await getCodexUsageLimitBlock();
+        if (codexBlock) {
+          await this.queueForUsageLimit(args, codexBlock);
+          return;
+        }
+      } else if (isClaudeModel(args.model)) {
+        const usageBlock = await getUsageLimitBlock(args.model);
+        if (usageBlock) {
+          const fallback = await resolveClaudeUsageFallback(args.model);
+          if (fallback) {
+            console.log(`[session] Claude blocked — falling back to ${fallback}`);
+            args = { ...args, model: fallback };
+          } else {
+            await this.queueForUsageLimit(args, usageBlock);
+            return;
+          }
         }
       }
     }
@@ -885,44 +979,72 @@ class AgentSession {
 
     try {
       // Route to the correct runner based on the model provider.
-      if (isOpenAIModel(args.model)) {
+      const provider = getModelProvider(args.model);
+      if (provider === "cursor") {
+        await runCursorAgentTurn({
+          prompt: args.text,
+          model: args.model,
+          cwd: execCwd,
+          permissionMode: args.permissionMode,
+          cursorSessionId: record.providerSessions?.cursor,
+          conversationHistory: record.events,
+          emit,
+          abortController: this.abort,
+        });
+      } else if (provider === "openai") {
         await runOpenAIAgentTurn({
           prompt: args.text,
           model: args.model,
           cwd: execCwd,
           permissionMode: args.permissionMode,
-          getPermissionMode: () => this.currentPermissionMode,
+          codexSessionId: record.providerSessions?.openai,
           attachments: args.attachments,
           conversationHistory: record.events,
           emit,
-          requestPermission: (req) =>
-            new Promise((resolve) => {
-              const requestId = `pr-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-              this.pendingPermissions.set(requestId, {
-                requestId,
-                toolName: req.toolName,
-                input: req.input,
-                suggestions: req.suggestions ?? [],
-                resolve,
-              });
-              const ev: AgentEvent = {
-                type: "permission_request",
-                chatId: this.chatId,
-                requestId,
-                toolName: req.toolName,
-                input: req.input,
-                suggestions: req.suggestions,
-              };
-              this.broadcast(ev);
-              void this.persistAgentEvent(ev);
-            }),
           abortController: this.abort,
         });
       } else {
+      // Prefer the Claude-specific session id so a prior Cursor turn cannot
+      // poison Claude SDK resume.
+      const claudeSessionId =
+        record.providerSessions?.claude ??
+        (record.sessionId &&
+        !record.sessionId.startsWith("openai-") &&
+        record.providerSessions?.cursor !== record.sessionId
+          ? record.sessionId
+          : undefined);
+      // When switching to Claude with no prior Claude session, inject a text
+      // history preamble so the model sees earlier Cursor/OpenAI turns.
+      let claudePrompt = args.text;
+      if (
+        !claudeSessionId &&
+        record.events.some((e) => e.type === "user_message" || e.type === "assistant")
+      ) {
+        const lines: string[] = [];
+        for (const ev of record.events) {
+          if (ev.type === "user_message") lines.push(`User: ${ev.text}`);
+          else if (ev.type === "assistant") {
+            const t = ev.content
+              .filter((b): b is { type: "text"; text: string } => b.type === "text")
+              .map((b) => b.text)
+              .join("");
+            if (t.trim()) lines.push(`Assistant: ${t}`);
+          }
+        }
+        if (lines.length) {
+          let body = lines.join("\n\n");
+          if (body.length > 12_000) body = body.slice(-12_000);
+          claudePrompt =
+            "Previous conversation in this Buildover chat (for context; continue naturally):\n\n" +
+            body +
+            "\n\n---\n\n" +
+            args.text;
+        }
+      }
       await runAgentTurn({
-        prompt: args.text,
+        prompt: claudePrompt,
         model: args.model,
-        sessionId: record.sessionId,
+        sessionId: claudeSessionId,
         // One-shot marker set by fork / branch-switch / revert: resume the
         // session only up to this SDK message uuid so the model never sees
         // the edited-away / reverted history.
@@ -931,6 +1053,7 @@ class AgentSession {
         permissionMode: args.permissionMode,
         getPermissionMode: () => this.currentPermissionMode,
         attachments: args.attachments,
+        context1m: record.context1m,
         ...coordination,
         emit,
         requestCompact: (reason) => {

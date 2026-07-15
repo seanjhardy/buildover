@@ -1,5 +1,6 @@
 import React, { startTransition, useCallback, useEffect, useRef, useState } from "react";
 import { agentSocket, type Connection } from "../lib/agentSocket.js";
+import { api } from "../lib/api.js";
 import type {
   AgentEvent,
   Attachment,
@@ -219,6 +220,7 @@ interface UseAgentReturn {
   pendingPermission: PendingPermission | undefined;
   pendingAttention: PendingAttention | undefined;
   chatPermissionMode: PermissionMode | undefined;
+  chatContext1m: boolean | undefined;
   contextUsage: ContextUsage | null;
   branchInfo: Map<string, BranchInfo>;
   slashCommands: string[];
@@ -231,6 +233,8 @@ interface UseAgentReturn {
   /** Queue a message in a paused state (long-press send). */
   enqueuePaused: (text: string, opts: SendOptions) => void;
   removeQueued: (id: string) => void;
+  /** Remove a server-side usage-queued turn by id. */
+  removeUsageQueuedTurn: (id: string) => void;
   /** Move a queued message to the front and send it immediately, interrupting
    *  the in-flight turn if one is running. */
   fastTrackQueued: (id: string) => void;
@@ -272,6 +276,7 @@ export function useAgent(
     useState<PendingAttention | undefined>();
   const [chatPermissionMode, setChatPermissionMode] =
     useState<PermissionMode | undefined>();
+  const [chatContext1m, setChatContext1m] = useState<boolean | undefined>();
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
@@ -392,6 +397,7 @@ export function useAgent(
       setPendingPermission(undefined);
       setPendingAttention(undefined);
       setChatPermissionMode(undefined);
+      setChatContext1m(undefined);
       setContextUsage(null);
       setBranchInfo(new Map());
       setSlashCommands([]);
@@ -428,6 +434,7 @@ export function useAgent(
         setStatus(null);
         setPendingPermission(undefined);
         setChatPermissionMode(undefined);
+        setChatContext1m(undefined);
         setContextUsage(null);
         setBranchInfo(new Map());
         setSlashCommands([]);
@@ -535,6 +542,16 @@ export function useAgent(
             ? (action as (p: PermissionMode | undefined) => PermissionMode | undefined)(prev)
             : action;
         updateCache({ chatPermissionMode: next });
+        return next;
+      });
+    };
+
+    const cachedSetChatContext1m: React.Dispatch<React.SetStateAction<boolean | undefined>> = (action) => {
+      setChatContext1m((prev) => {
+        const next =
+          typeof action === "function"
+            ? (action as (p: boolean | undefined) => boolean | undefined)(prev)
+            : action;
         return next;
       });
     };
@@ -647,6 +664,7 @@ export function useAgent(
         setPendingPermission,
         setPendingAttention,
         setChatPermissionMode: cachedSetChatPermissionMode,
+        setChatContext1m: cachedSetChatContext1m,
         setContextUsage: cachedSetContextUsage,
         setBranchInfo: cachedSetBranchInfo,
         setSlashCommands: cachedSetSlashCommands,
@@ -770,6 +788,23 @@ export function useAgent(
     setLocalQueue((q) => q.filter((m) => m.id !== id));
   }, []);
 
+  const removeUsageQueuedTurn = useCallback((id: string) => {
+    if (!repoPath || !chatId) return;
+    // Capture the turn before removing so we can restore it on failure.
+    let removed: QueuedChatTurn | undefined;
+    setQueuedTurns((q) => {
+      removed = q.find((t) => t.id === id);
+      return q.filter((t) => t.id !== id);
+    });
+    api.removeQueuedTurn(repoPath, chatId, id).catch(() => {
+      // Restore the turn if the server call failed.
+      if (removed) {
+        const restored = removed;
+        setQueuedTurns((q) => q.some((t) => t.id === id) ? q : [...q, restored]);
+      }
+    });
+  }, [repoPath, chatId]);
+
   const reorderQueue = useCallback((fromIndex: number, toIndex: number) => {
     setLocalQueue((q) => {
       if (
@@ -872,6 +907,7 @@ export function useAgent(
     pendingPermission,
     pendingAttention,
     chatPermissionMode,
+    chatContext1m,
     contextUsage,
     branchInfo,
     slashCommands,
@@ -881,6 +917,7 @@ export function useAgent(
     toggleQueuePaused,
     enqueuePaused,
     removeQueued,
+    removeUsageQueuedTurn,
     fastTrackQueued,
     reorderQueue,
     send,
@@ -911,6 +948,7 @@ interface Setters {
   setChatPermissionMode: React.Dispatch<
     React.SetStateAction<PermissionMode | undefined>
   >;
+  setChatContext1m: React.Dispatch<React.SetStateAction<boolean | undefined>>;
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
   setBranchInfo: (info: Map<string, BranchInfo>) => void;
   setSlashCommands: React.Dispatch<React.SetStateAction<string[]>>;
@@ -961,6 +999,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       s.setIsStreaming(!hasPendingAttention && event.record.status === "running");
       // Expose this chat's saved permission mode so App.tsx can sync its UI.
       s.setChatPermissionMode(event.record.permissionMode);
+      s.setChatContext1m(event.record.context1m);
       // Compute branch navigation metadata from the replayed record.
       s.setBranchInfo(computeBranchInfo(event.record));
       break;

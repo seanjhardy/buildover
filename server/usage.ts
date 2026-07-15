@@ -86,18 +86,26 @@ function blockedBucket(
 }
 
 /**
- * Checks if usage has reached 100% in any bucket.
+ * Checks if usage has reached 100% in any bucket relevant to the given model.
+ * Model-specific buckets (sevenDaySonnet, sevenDayOpus) are only checked when
+ * the active model matches — this avoids false positives where an unused bucket
+ * type happens to report 100% for a plan that doesn't include that model.
  * Returns reset metadata when execution should be deferred, null otherwise.
  */
-export async function getUsageLimitBlock(): Promise<UsageLimitBlock | null> {
+export async function getUsageLimitBlock(model?: string): Promise<UsageLimitBlock | null> {
   try {
     const usage = await fetchUsage();
+    const modelLower = (model ?? "").toLowerCase();
+    const isSonnet = modelLower.includes("sonnet");
+    const isOpus = modelLower.includes("opus");
 
     const blocks = [
       blockedBucket("5-hour bucket", usage.fiveHour),
       blockedBucket("7-day bucket", usage.sevenDay),
-      blockedBucket("7-day Sonnet bucket", usage.sevenDaySonnet),
-      blockedBucket("7-day Opus bucket", usage.sevenDayOpus),
+      // Only check model-specific sub-buckets when the active model matches,
+      // so an unrelated full bucket doesn't block the wrong model family.
+      isSonnet ? blockedBucket("7-day Sonnet bucket", usage.sevenDaySonnet) : null,
+      isOpus ? blockedBucket("7-day Opus bucket", usage.sevenDayOpus) : null,
       usage.extraUsage &&
       usage.extraUsage.utilization !== null &&
       usage.extraUsage.utilization >= 100

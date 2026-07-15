@@ -182,22 +182,75 @@ export const api = {
   patchChat: (
     repoPath: string,
     chatId: string,
-    body: { userMarkedFinished?: boolean; title?: string; model?: string; starred?: boolean },
+    body: { userMarkedFinished?: boolean; title?: string; model?: string; starred?: boolean; context1m?: boolean },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
       repoPath,
       ...body,
     }).then((r) => r.chat),
 
-  getModels: () =>
-    getJson<{ models: { id: string; label: string; contextWindow?: number }[] }>("/api/models").then(
-      (r) => r.models,
-    ),
+  getModels: async () => {
+    type ApiModel = {
+      id: string;
+      label: string;
+      contextWindow?: number;
+      provider?: "claude" | "cursor" | "openai";
+    };
+
+    // Fetch Codex independently even when /models/all exists. This keeps the
+    // picker compatible with a backend that predates Codex being added to the
+    // combined endpoint (common during a dev-server hot reload).
+    const [combined, codex] = await Promise.all([
+      getJson<{ models: ApiModel[] }>("/api/models/all")
+        .then((response) => response.models)
+        .catch(async () => {
+          const [claude, cursor] = await Promise.all([
+            getJson<{ models: ApiModel[] }>("/api/models")
+              .then((response) =>
+                response.models.map((item) => ({
+                  ...item,
+                  provider: item.provider ?? ("claude" as const),
+                })),
+              )
+              .catch(() => []),
+            getJson<{ models: ApiModel[] }>("/api/cursor/models")
+              .then((response) => response.models)
+              .catch(() => []),
+          ]);
+          return [...claude, ...cursor];
+        }),
+      getJson<{ models: ApiModel[] }>("/api/codex/models")
+        .then((response) =>
+          response.models.map((item) => ({
+            ...item,
+            provider: "openai" as const,
+          })),
+        )
+        .catch(() => []),
+    ]);
+
+    return Array.from(
+      new Map([...combined, ...codex].map((item) => [item.id, item])).values(),
+    );
+  },
+
+  getCursorUsage: () => getJson<import("../hooks/useUsage.js").CursorUsage>("/api/cursor/usage"),
+
+  getClaudeUsage: () => getJson<import("../hooks/useUsage.js").Usage>("/api/usage"),
+
+  getCodexUsage: () =>
+    getJson<import("../hooks/useUsage.js").CodexUsage>("/api/codex/usage"),
 
   deleteChat: (repoPath: string, chatId: string) =>
     send<{ ok: boolean }>(
       "DELETE",
       `/api/chats/${chatId}?repoPath=${encodeURIComponent(repoPath)}`,
+    ),
+
+  removeQueuedTurn: (repoPath: string, chatId: string, turnId: string) =>
+    send<{ ok: boolean }>(
+      "DELETE",
+      `/api/chats/${chatId}/queued-turns/${turnId}?repoPath=${encodeURIComponent(repoPath)}`,
     ),
 
   // ── Plans (coordinator ticket board) ─────────────────────────────────────

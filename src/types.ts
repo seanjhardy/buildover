@@ -2,16 +2,27 @@
 
 export type Model = string;
 
+export type ModelProvider = "claude" | "cursor" | "openai";
+
 /** Fallback model list used before the /api/models response arrives. */
-export const MODELS: { id: string; label: string }[] = [
-  { id: "claude-opus-4-8", label: "Claude Opus 4.8" },
-  { id: "claude-opus-4-7", label: "Claude Opus 4.7" },
-  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6" },
-  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5" },
-  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5" },
+export const MODELS: { id: string; label: string; provider?: ModelProvider }[] = [
+  { id: "claude-opus-4-8", label: "Claude Opus 4.8", provider: "claude" },
+  { id: "claude-opus-4-7", label: "Claude Opus 4.7", provider: "claude" },
+  { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "claude" },
+  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "claude" },
+  { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "claude" },
 ];
 
 export const DEFAULT_MODEL: Model = "claude-opus-4-8";
+
+/** Cursor model ids are stored as `cursor:<nativeId>`. */
+export const CURSOR_MODEL_PREFIX = "cursor:";
+
+export function getModelProvider(model: string): ModelProvider {
+  if (model.startsWith(CURSOR_MODEL_PREFIX)) return "cursor";
+  if (model.startsWith("claude-")) return "claude";
+  return "openai";
+}
 
 /**
  * Subagents always run on Haiku 4.5 — fast and cheap, suited to the focused,
@@ -229,6 +240,14 @@ export interface ChatRecord {
   status: ChatStatus;
   userMarkedFinished: boolean;
   sessionId?: string;
+  /** Per-provider session ids so switching Claude ↔ Cursor mid-chat does not
+   *  overwrite the other provider's resume handle. `sessionId` remains the
+   *  most recently active session (for UI / legacy callers). */
+  providerSessions?: {
+    claude?: string;
+    cursor?: string;
+    openai?: string;
+  };
   /** One-shot marker set by fork / branch-switch / revert. When present, the
    *  next agent turn resumes `sessionId` only up to and including this SDK
    *  message UUID (forking the SDK session at that point) so the model never
@@ -265,6 +284,8 @@ export interface ChatRecord {
   worktreePath?: string;
   /** Branch checked out in `worktreePath` (e.g. `subagent/<chatId>`). */
   worktreeBranch?: string;
+  /** When true, enables the 1M token context window beta for Claude models. */
+  context1m?: boolean;
 }
 
 export interface QueuedChatTurn {
@@ -374,6 +395,12 @@ export type ClientMessage =
         | { behavior: "deny"; message: string; interrupt?: boolean };
       }
   | { type: "interrupt"; chatId: string }
+  | {
+      // Application-level heartbeat. The server replies with a { type: "pong" }
+      // frame. Used by the client to detect a silently-dead socket (e.g. after
+      // the laptop sleeps or wifi drops) and trigger a reconnect.
+      type: "ping";
+    }
   | {
       // Pauses or resumes the chat's queued-turn drain.
       type: "set_queue_paused";

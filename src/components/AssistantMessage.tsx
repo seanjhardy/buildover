@@ -106,6 +106,9 @@ function AssistantMessageInner({ content, toolResults, cwd }: Props) {
           );
         }
         if (block.type === "thinking") {
+          // Older chats (and redacted-thinking edge cases) can carry an empty
+          // thinking string — don't render a dropdown that expands to nothing.
+          if (!block.thinking.trim()) return null;
           return <ThinkingBlock key={row.key} thinking={block.thinking} />;
         }
         if (block.type === "tool_use") {

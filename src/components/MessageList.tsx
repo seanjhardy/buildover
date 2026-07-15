@@ -242,9 +242,15 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
     return () => el.removeEventListener("scroll", onScroll);
   }, []);
 
-  // Watch virtua's inner wrapper for height changes caused by streaming content
-  // growing (text flowing, code blocks expanding, etc.) and keep the view
-  // pinned to the bottom whenever the user was already there.
+  // Keep the view pinned to the bottom (when the user was already there) on any
+  // height change that affects what's visible:
+  //   - the inner wrapper growing from streaming content (text flowing, code
+  //     blocks expanding, etc.), and
+  //   - the scroll container itself shrinking because the composer grew (its
+  //     textarea auto-resizes as the user types a long message). The inner
+  //     content height doesn't change in that case, so observing only the inner
+  //     wrapper would miss it and let the newest messages slip behind the
+  //     composer — the chat appears to "jump" and hide its own bottom.
   // Direct el.scrollTop = el.scrollHeight bypasses virtua's stale item-size
   // cache, which scrollToIndex(last, {align:"end"}) would use and undershoot.
   useEffect(() => {
@@ -257,6 +263,7 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
     });
     const inner = el.firstElementChild;
     if (inner) ro.observe(inner);
+    ro.observe(el);
     return () => ro.disconnect();
   }, []);
 

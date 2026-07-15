@@ -5,6 +5,14 @@ export type Connection = "connecting" | "connected" | "error" | "closed";
 
 const WS_URL = wsUrl("/agent");
 
+// How often to send an application-level ping while the socket is idle, and how
+// long to wait for any reply before deciding the pipe is dead. A WebSocket whose
+// TCP connection dies while the laptop sleeps or wifi drops frequently stays in
+// the OPEN readyState — no close/error event ever fires — so this heartbeat is
+// the only reliable way for the client to notice and reconnect.
+const HEARTBEAT_INTERVAL_MS = 15000;
+const PONG_TIMEOUT_MS = 8000;
+
 type ConnectionListener = (c: Connection) => void;
 type EventListener = (event: AgentEvent) => void;
 type ReconnectListener = () => void;
@@ -27,9 +35,14 @@ class AgentSocket {
   private outbox: ClientMessage[] = [];
   private retryTimer: ReturnType<typeof setTimeout> | null = null;
   private retryDelayMs = 500;
+  // Heartbeat: a repeating ping while OPEN, plus a one-shot timer that fires if
+  // no reply (pong or any other traffic) arrives — meaning the pipe is dead.
+  private heartbeatTimer: ReturnType<typeof setInterval> | null = null;
+  private pongTimer: ReturnType<typeof setTimeout> | null = null;
 
   constructor() {
     this.connect();
+    this.registerLivenessListeners();
   }
 
   private setConnection(c: Connection): void {
@@ -39,6 +52,7 @@ class AgentSocket {
   }
 
   private connect(): void {
+    this.stopHeartbeat();
     this.setConnection("connecting");
     const ws = new WebSocket(WS_URL);
     this.ws = ws;
@@ -48,6 +62,7 @@ class AgentSocket {
       this.hasConnectedBefore = true;
       this.setConnection("connected");
       this.retryDelayMs = 500;
+      this.startHeartbeat();
       // Re-subscribe to anything that has a listener.
       for (const chatId of this.eventListeners.keys()) {
         const sub = this.activeSubscriptions.get(chatId);
@@ -77,12 +92,21 @@ class AgentSocket {
     });
     ws.addEventListener("message", (ev) => {
       if (this.ws !== ws) return;
-      let event: AgentEvent;
+      // Any inbound frame is proof the pipe is alive — cancel the pending
+      // liveness timeout regardless of the message's contents.
+      if (this.pongTimer) {
+        clearTimeout(this.pongTimer);
+        this.pongTimer = null;
+      }
+      let parsed: AgentEvent | { type: "pong" };
       try {
-        event = JSON.parse(ev.data) as AgentEvent;
+        parsed = JSON.parse(ev.data) as AgentEvent | { type: "pong" };
       } catch {
         return;
       }
+      // Connection-level pong: consumed here, never routed to chat listeners.
+      if (parsed.type === "pong") return;
+      const event = parsed;
       const listeners = this.eventListeners.get((event as { chatId: string }).chatId);
       if (!listeners) return;
       for (const fn of listeners) {
@@ -103,6 +127,73 @@ class AgentSocket {
       this.retryDelayMs = Math.min(this.retryDelayMs * 2, 8000);
       this.connect();
     }, delay);
+  }
+
+  private startHeartbeat(): void {
+    this.stopHeartbeat();
+    this.heartbeatTimer = setInterval(() => this.sendPing(), HEARTBEAT_INTERVAL_MS);
+  }
+
+  private stopHeartbeat(): void {
+    if (this.heartbeatTimer) {
+      clearInterval(this.heartbeatTimer);
+      this.heartbeatTimer = null;
+    }
+    if (this.pongTimer) {
+      clearTimeout(this.pongTimer);
+      this.pongTimer = null;
+    }
+  }
+
+  /** Probe the socket. Sends a ping and arms a timeout; if no frame of any kind
+   *  arrives before it fires, the connection is dead and we tear it down and
+   *  reconnect. The message handler clears pongTimer on any inbound traffic. */
+  private sendPing(): void {
+    const ws = this.ws;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return;
+    if (this.pongTimer) return; // a probe is already in flight
+    try {
+      ws.send(JSON.stringify({ type: "ping" }));
+    } catch {
+      this.reconnectNow();
+      return;
+    }
+    this.pongTimer = setTimeout(() => {
+      this.pongTimer = null;
+      this.reconnectNow();
+    }, PONG_TIMEOUT_MS);
+  }
+
+  /** Reconnect proactively when the machine wakes or the network returns. On a
+   *  fresh OPEN socket that silently died during sleep, readyState still reads
+   *  OPEN, so we can't trust it — probe with a ping and let the timeout catch a
+   *  dead pipe. When the socket is already closed/closing, reconnect now rather
+   *  than waiting out the backoff timer. */
+  private checkConnectionHealth(): void {
+    const ws = this.ws;
+    if (
+      !ws ||
+      ws.readyState === WebSocket.CLOSED ||
+      ws.readyState === WebSocket.CLOSING
+    ) {
+      this.reconnectNow();
+      return;
+    }
+    if (ws.readyState === WebSocket.CONNECTING) return; // let it finish
+    this.sendPing();
+  }
+
+  private registerLivenessListeners(): void {
+    if (typeof window === "undefined") return;
+    const check = () => this.checkConnectionHealth();
+    window.addEventListener("online", check);
+    window.addEventListener("focus", check);
+    window.addEventListener("pageshow", check);
+    if (typeof document !== "undefined") {
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") check();
+      });
+    }
   }
 
   // Tracks the most recent subscription parameters per chatId so we can
@@ -142,6 +233,7 @@ class AgentSocket {
       clearTimeout(this.retryTimer);
       this.retryTimer = null;
     }
+    this.retryDelayMs = 500;
     if (this.ws) {
       this.ws.close();
     }

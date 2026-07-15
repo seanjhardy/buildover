@@ -47,7 +47,12 @@ interface Props {
   /** Hide the permissions/mode pill (e.g. in compact embedded contexts) */
   hideModePill?: boolean;
   onModelChange: (model: string) => void;
-  availableModels: { id: string; label: string }[];
+  availableModels: { id: string; label: string; provider?: "claude" | "cursor" | "openai" }[];
+  /** Called when the model picker opens — used to recover from a stale empty list. */
+  onRefreshModels?: () => void;
+  /** When true, the 1M context window beta is enabled for Claude models. */
+  context1m?: boolean;
+  onContext1mChange?: (enabled: boolean) => void;
 }
 
 // Hold the send button this long (ms) to enqueue into a paused queue instead
@@ -76,24 +81,24 @@ const MODE_META: Record<
 > = {
   default: {
     label: "Ask before edits",
-    description: "Claude will ask for approval before making each edit",
+    description: "The agent will ask for approval before making each edit",
     icon: <MessageCircleQuestion size={13} />,
   },
   acceptEdits: {
     label: "Edit automatically",
-    description: "Claude will edit your selected text or the whole file",
+    description: "The agent can edit files automatically",
     icon: <Hammer size={13} />,
   },
   plan: {
     label: "Plan mode",
     description:
-      "Claude will explore the code and present a plan before editing",
+      "The agent will explore the code and present a plan before editing",
     icon: <ClipboardList size={13} />,
   },
   bypassPermissions: {
     label: "Bypass permissions",
     description:
-      "Claude will not ask for approval before running potentially dangerous commands",
+      "The agent will not ask before running potentially dangerous commands",
     icon: <ShieldOff size={13} />,
   },
 };
@@ -129,7 +134,7 @@ const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   {
     key: "plan",
     label: "Plan mode",
-    description: "Claude will explore code and present a plan",
+    description: "The agent will explore code and present a plan",
     icon: <ClipboardList size={13} />,
     action: { type: "permission", mode: "plan" },
     group: "modes",
@@ -137,7 +142,7 @@ const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   {
     key: "auto",
     label: "Edit automatically",
-    description: "Claude will edit without asking for approval",
+    description: "The agent will edit without asking for approval",
     icon: <Hammer size={13} />,
     action: { type: "permission", mode: "acceptEdits" },
     group: "modes",
@@ -145,7 +150,7 @@ const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   {
     key: "ask",
     label: "Ask before edits",
-    description: "Claude will ask for approval before each edit",
+    description: "The agent will ask for approval before each edit",
     icon: <MessageCircleQuestion size={13} />,
     action: { type: "permission", mode: "default" },
     group: "modes",
@@ -153,7 +158,7 @@ const BUILTIN_SLASH_COMMANDS: SlashCommand[] = [
   {
     key: "yolo",
     label: "Bypass permissions",
-    description: "Claude will not ask before running commands",
+    description: "The agent will not ask before running commands",
     icon: <ShieldOff size={13} />,
     action: { type: "permission", mode: "bypassPermissions" },
     group: "modes",
@@ -225,7 +230,10 @@ export function Composer(props: Props) {
     onPermissionModeChange,
     onModelChange,
     availableModels,
+    onRefreshModels,
     onToggleMcp,
+    context1m = false,
+    onContext1mChange,
     contextUsage,
     repoPath,
     sdkSlashCommands = [],
@@ -377,8 +385,19 @@ export function Composer(props: Props) {
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
+    // Measuring content height requires collapsing the textarea to "auto",
+    // which momentarily shrinks the whole composer. Because the message list is
+    // a flex sibling, that transient shrink lets the browser clamp the list's
+    // scrollTop to the briefly-taller viewport — and it isn't restored when the
+    // composer springs back, so on long drafts the newest messages end up
+    // hidden behind the composer (the chat "snaps" up on every keystroke).
+    // Freeze the composer's outer height across the measurement so the sibling
+    // viewport never changes.
+    const box = el.closest<HTMLElement>(".composer");
+    if (box) box.style.height = `${box.offsetHeight}px`;
     el.style.height = "auto";
     el.style.height = `${el.scrollHeight}px`;
+    if (box) box.style.height = "";
   }, [text]);
 
   // Lazy-load file list the first time the @ popup opens.
@@ -783,10 +802,10 @@ export function Composer(props: Props) {
             disabled
               ? "Connecting…"
               : isStreaming
-                ? "Message Claude (Enter sends — runs after this turn)"
+                ? "Message agent (Enter sends — runs after this turn)"
                 : permissionMode === "plan"
-                  ? "Describe what you want Claude to plan…"
-                  : "Message Claude (@ for files, / for commands)"
+                  ? "Describe what you want the agent to plan…"
+                  : "Message agent (@ for files, / for commands)"
           }
           value={text}
           onChange={(e) => {
@@ -1004,7 +1023,11 @@ export function Composer(props: Props) {
               onClick={() => {
                 if (isStreaming) return;
                 setModelTooltipOpen(false);
-                setModelPopupOpen((v) => !v);
+                setModelPopupOpen((v) => {
+                  const next = !v;
+                  if (next) onRefreshModels?.();
+                  return next;
+                });
               }}
               onMouseEnter={() => setModelTooltipOpen(true)}
               onMouseLeave={() => setModelTooltipOpen(false)}
@@ -1015,7 +1038,20 @@ export function Composer(props: Props) {
               aria-label="Switch model"
             >
               <span className="model-pill-label">
-                {availableModels.find((m) => m.id === model)?.label ?? model}
+                {(model.startsWith("cursor:") ||
+                  availableModels.find((m) => m.id === model)?.provider === "cursor") && (
+                  <svg
+                    width="12"
+                    height="12"
+                    viewBox="0 0 24 24"
+                    fill="currentColor"
+                    aria-hidden="true"
+                    className="model-provider-icon"
+                  >
+                    <path d="M4 4l16 8-16 8V4zm3.2 5.2v5.6L13.4 12 7.2 9.2z" />
+                  </svg>
+                )}
+                {availableModels.find((m) => m.id === model)?.label ?? model.replace(/^cursor:/, "")}
               </span>
               <Bot size={14} className="model-pill-bot-icon" aria-hidden="true" />
             </button>
@@ -1041,26 +1077,127 @@ export function Composer(props: Props) {
             {modelPopupOpen && (
               <div className="model-popup" role="listbox">
                 <div className="model-popup-head">Model</div>
-                {[...availableModels]
-                  .sort((a, b) => a.label.localeCompare(b.label))
-                  .map((m) => {
-                    const active = m.id === model;
+                {onContext1mChange && (() => {
+                  const providerOf = (m: { id: string; provider?: string }) =>
+                    m.provider ??
+                    (m.id.startsWith("cursor:")
+                      ? "cursor"
+                      : m.id.startsWith("claude-")
+                        ? "claude"
+                        : "openai");
+                  const isClaudeModel = providerOf(
+                    availableModels.find((m) => m.id === model) ?? { id: model },
+                  ) === "claude";
+                  if (!isClaudeModel) return null;
+                  return (
+                    <button
+                      className={`model-popup-item context1m-toggle${context1m ? " active" : ""}`}
+                      onClick={() => {
+                        onContext1mChange(!context1m);
+                        setModelPopupOpen(false);
+                      }}
+                      title="Enable 1M token context window (Sonnet 4/4.5 beta)"
+                    >
+                      <span className="context1m-label">1M context window</span>
+                      <span className={`context1m-badge${context1m ? " on" : ""}`}>
+                        {context1m ? "ON" : "OFF"}
+                      </span>
+                    </button>
+                  );
+                })()}
+                {(() => {
+                  const models = Array.isArray(availableModels) ? availableModels : [];
+                  const providerOf = (m: { id: string; provider?: string }) =>
+                    m.provider ??
+                    (m.id.startsWith("cursor:")
+                      ? "cursor"
+                      : m.id.startsWith("claude-")
+                        ? "claude"
+                        : "openai");
+
+                  const groups = (["claude", "cursor", "openai"] as const)
+                    .map((provider) => ({
+                      provider,
+                      items: models
+                        .filter((m) => providerOf(m) === provider)
+                        .sort((a, b) => a.label.localeCompare(b.label)),
+                    }))
+                    .filter((g) => g.items.length > 0);
+
+                  // Flat fallback if grouping somehow yields nothing but we have models.
+                  const renderItems =
+                    groups.length > 0
+                      ? groups
+                      : models.length > 0
+                        ? [
+                            {
+                              provider: "claude" as const,
+                              items: [...models].sort((a, b) =>
+                                a.label.localeCompare(b.label),
+                              ),
+                            },
+                          ]
+                        : [];
+
+                  if (renderItems.length === 0) {
                     return (
-                      <button
-                        key={m.id}
-                        role="option"
-                        aria-selected={active}
-                        className={`model-popup-item${active ? " active" : ""}`}
-                        onClick={() => {
-                          onModelChange(m.id);
-                          setModelPopupOpen(false);
-                        }}
-                      >
-                        <span className="model-popup-label">{m.label}</span>
-                        {active && <span className="model-popup-check">✓</span>}
-                      </button>
+                      <div className="model-popup-empty">
+                        No models loaded. Click again to retry.
+                      </div>
                     );
-                  })}
+                  }
+
+                  return renderItems.map(({ provider, items }) => (
+                    <div key={provider} className="model-popup-group">
+                      <div className="model-popup-group-label">
+                        {provider === "cursor" ? (
+                          <>
+                            <svg width="11" height="11" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                              <path d="M4 4l16 8-16 8V4zm3.2 5.2v5.6L13.4 12 7.2 9.2z" />
+                            </svg>
+                            Cursor
+                          </>
+                        ) : provider === "openai" ? (
+                          "OpenAI / Codex"
+                        ) : (
+                          "Claude"
+                        )}
+                      </div>
+                      {items.map((m) => {
+                        const active = m.id === model;
+                        return (
+                          <button
+                            key={m.id}
+                            role="option"
+                            aria-selected={active}
+                            className={`model-popup-item${active ? " active" : ""}`}
+                            onClick={() => {
+                              onModelChange(m.id);
+                              setModelPopupOpen(false);
+                            }}
+                          >
+                            <span className="model-popup-label">
+                              {providerOf(m) === "cursor" && (
+                                <svg
+                                  width="12"
+                                  height="12"
+                                  viewBox="0 0 24 24"
+                                  fill="currentColor"
+                                  aria-hidden="true"
+                                  className="model-provider-icon"
+                                >
+                                  <path d="M4 4l16 8-16 8V4zm3.2 5.2v5.6L13.4 12 7.2 9.2z" />
+                                </svg>
+                              )}
+                              {m.label}
+                            </span>
+                            {active && <span className="model-popup-check">✓</span>}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ));
+                })()}
               </div>
             )}
           </div>

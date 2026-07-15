@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { MessageSquare, Plus, X } from "lucide-react";
 import { MessageList, type JumpBarHandle } from "./MessageList.js";
 import { Composer } from "./Composer.js";
+import { MessageQueue } from "./MessageQueue.js";
 import { AttentionPrompt, PermissionPrompt } from "./PermissionPrompt.js";
 import { ChatSidebarItem } from "./ChatSidebarItem.js";
 import { GROUP_ORDER, GROUP_LABEL, ChatItemsByRecency } from "./ChatSidebar.js";
@@ -31,7 +32,8 @@ interface PreviewChatSidebarProps {
   permissionMode: PermissionMode;
   onPermissionModeChange: (m: PermissionMode) => void;
   onModelChange: (model: string) => void;
-  availableModels: { id: string; label: string }[];
+  availableModels: { id: string; label: string; provider?: "claude" | "cursor" | "openai" }[];
+  onRefreshModels?: () => void;
   onToggleMcp: () => void;
 }
 
@@ -61,6 +63,7 @@ export function PreviewChatSidebar({
   onPermissionModeChange,
   onModelChange,
   availableModels,
+  onRefreshModels,
   onToggleMcp,
 }: PreviewChatSidebarProps) {
   const [showChatList, setShowChatList] = useState(false);
@@ -259,15 +262,28 @@ export function PreviewChatSidebar({
 
       {/* Composer */}
       <div className="preview-chat-composer">
+        <MessageQueue
+          queue={agent.localQueue}
+          usageQueuedTurns={agent.queuedTurns}
+          paused={agent.queuePaused}
+          onTogglePause={agent.toggleQueuePaused}
+          onRemove={agent.removeQueued}
+          onRemoveUsageTurn={agent.removeUsageQueuedTurn}
+          onFastTrack={agent.fastTrackQueued}
+          onReorder={agent.reorderQueue}
+        />
         <Composer
           key={activeChatId ?? "none"}
           chatId={activeChatId ?? ""}
           onSend={(text: string, attachments: Attachment[]) =>
             agent.send(text, { model, permissionMode, attachments })
           }
+          onQueuePaused={(text: string, attachments: Attachment[]) =>
+            agent.enqueuePaused(text, { model, permissionMode, attachments })
+          }
           onInterrupt={agent.interrupt}
           onDraftChange={onDraftChange}
-          disabled={agent.isStreaming || agent.connection !== "connected"}
+          disabled={agent.connection !== "connected"}
           isStreaming={agent.isStreaming}
           model={model}
           permissionMode={permissionMode}
@@ -277,6 +293,7 @@ export function PreviewChatSidebar({
           }}
           onModelChange={onModelChange}
           availableModels={availableModels}
+          onRefreshModels={onRefreshModels}
           onToggleMcp={onToggleMcp}
           contextUsage={agent.contextUsage}
           repoPath={repoPath}

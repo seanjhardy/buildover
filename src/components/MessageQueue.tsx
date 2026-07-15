@@ -18,6 +18,7 @@ interface Props {
   paused: boolean;
   onTogglePause: () => void;
   onRemove: (id: string) => void;
+  onRemoveUsageTurn: (id: string) => void;
   onFastTrack: (id: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
 }
@@ -48,6 +49,7 @@ export function MessageQueue({
   paused,
   onTogglePause,
   onRemove,
+  onRemoveUsageTurn,
   onFastTrack,
   onReorder,
 }: Props) {
@@ -183,7 +185,7 @@ export function MessageQueue({
                   return (
                     <li
                       key={turn.id}
-                      className="message-queue-item message-queue-item--readonly"
+                      className="message-queue-item"
                       title={turn.reason}
                     >
                       <span className="message-queue-badge">Usage</span>
@@ -197,6 +199,17 @@ export function MessageQueue({
                         </span>
                       )}
                       <span className="message-queue-text">{preview(turn.text)}</span>
+                      <div className="message-queue-item-actions">
+                        <button
+                          type="button"
+                          className="message-queue-action remove"
+                          onClick={() => onRemoveUsageTurn(turn.id)}
+                          title="Remove from queue"
+                          aria-label="Remove from queue"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
                     </li>
                   );
                 })}

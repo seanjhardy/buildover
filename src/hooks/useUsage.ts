@@ -3,6 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 export interface UsageBucket {
   utilization: number;
   resetsAt: string | null;
+  label?: string;
+  windowSeconds?: number;
 }
 
 export interface Usage {
@@ -22,10 +24,57 @@ export interface Usage {
   fetchedAt: string;
 }
 
+export interface CursorUsage {
+  total: UsageBucket | null;
+  auto: UsageBucket | null;
+  api: UsageBucket | null;
+  planUsage?: {
+    totalSpendCents: number;
+    includedSpendCents: number;
+    bonusSpendCents: number;
+    limitCents: number;
+  };
+  membershipType?: string;
+  displayMessage?: string;
+  autoMessage?: string;
+  apiMessage?: string;
+  billingCycleStart?: string;
+  billingCycleEnd?: string;
+  fetchedAt: string;
+}
+
+export interface CodexUsage {
+  connected: boolean;
+  authMode: "chatgpt" | "api-key" | "none";
+  planType?: string;
+  primary: UsageBucket | null;
+  secondary: UsageBucket | null;
+  codeReviewPrimary: UsageBucket | null;
+  codeReviewSecondary: UsageBucket | null;
+  additional: Array<{
+    id: string;
+    label: string;
+    primary: UsageBucket | null;
+    secondary: UsageBucket | null;
+  }>;
+  credits: {
+    hasCredits: boolean;
+    unlimited: boolean;
+    balance: string | null;
+  } | null;
+  resetCreditsAvailable?: number;
+  quotaExceeded: boolean;
+  error?: string;
+  note?: string;
+  fetchedAt: string;
+}
+
 const POLL_MS = 30 * 60 * 1000;
 
 export function useUsage() {
   const [usage, setUsage] = useState<Usage | null>(null);
+  const [cursorUsage, setCursorUsage] = useState<CursorUsage | null>(null);
+  const [codexUsage, setCodexUsage] = useState<CodexUsage | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inflight = useRef<AbortController | null>(null);
@@ -36,14 +85,57 @@ export function useUsage() {
     inflight.current = ctrl;
     setLoading(true);
     try {
-      const res = await fetch("/api/usage", { signal: ctrl.signal });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({ error: res.statusText }));
-        throw new Error(body.error || `HTTP ${res.status}`);
+      const [claudeRes, cursorRes, codexRes] = await Promise.all([
+        fetch("/api/usage", { signal: ctrl.signal }),
+        fetch("/api/cursor/usage", { signal: ctrl.signal }),
+        fetch("/api/codex/usage", { signal: ctrl.signal }),
+      ]);
+
+      let nextError: string | null = null;
+
+      if (claudeRes.ok) {
+        setUsage((await claudeRes.json()) as Usage);
+      } else {
+        const body = await claudeRes.json().catch(() => ({ error: claudeRes.statusText }));
+        nextError = body.error || `Claude usage HTTP ${claudeRes.status}`;
       }
-      const data = (await res.json()) as Usage;
-      setUsage(data);
-      setError(null);
+
+      if (cursorRes.ok) {
+        setCursorUsage((await cursorRes.json()) as CursorUsage);
+      } else if (cursorRes.status !== 404) {
+        const raw = await cursorRes.text().catch(() => "");
+        let message = cursorRes.statusText || `Cursor usage HTTP ${cursorRes.status}`;
+        try {
+          const parsed = JSON.parse(raw) as { error?: string };
+          if (parsed.error) message = parsed.error;
+        } catch {
+          if (raw.trim()) {
+            message = raw.replace(/<[^>]+>/g, " ").trim().slice(0, 160);
+          }
+        }
+        nextError = nextError ? `${nextError}; ${message}` : message;
+      } else {
+        setCursorUsage(null);
+      }
+
+      if (codexRes.ok) {
+        setCodexUsage((await codexRes.json()) as CodexUsage);
+      } else if (codexRes.status !== 404) {
+        const body = await codexRes.json().catch(() => ({
+          error: codexRes.statusText || `Codex usage HTTP ${codexRes.status}`,
+        }));
+        const message = body.error || `Codex usage HTTP ${codexRes.status}`;
+        nextError = nextError ? `${nextError}; ${message}` : message;
+      } else {
+        setCodexUsage(null);
+      }
+
+      // Only surface a global error when every provider failed.
+      if (!claudeRes.ok && !cursorRes.ok && !codexRes.ok) {
+        setError(nextError ?? "usage unavailable");
+      } else {
+        setError(null);
+      }
     } catch (err) {
       if ((err as Error).name === "AbortError") return;
       setError((err as Error).message);
@@ -64,5 +156,12 @@ export function useUsage() {
     };
   }, [fetchOnce]);
 
-  return { usage, error, loading, refresh: fetchOnce };
+  return {
+    usage,
+    cursorUsage,
+    codexUsage,
+    error,
+    loading,
+    refresh: fetchOnce,
+  };
 }

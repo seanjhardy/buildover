@@ -21,6 +21,7 @@ import {
   readChat,
   recoverStaleChatsForRepo,
   recoverStaleChatsForRepoWithIds,
+  setContext1m,
   setModel,
   setQueuePaused,
   setStarred,
@@ -30,6 +31,7 @@ import {
   CoordinatorDeleteError,
   withComputedStatus,
   toSummary,
+  removeQueuedChatTurn,
 } from "./chats.js";
 import {
   listTickets,
@@ -47,6 +49,7 @@ import {
   touchRecent,
 } from "./repos.js";
 import {
+  cancelQueuedTurnDrain,
   dropSession,
   getSession,
   scheduleQueuedTurnsForRepo,
@@ -55,14 +58,18 @@ import {
 import { getOrchestrator } from "./orchestrator.js";
 import { classifySegment } from "./segmenter.js";
 import { fetchUsage } from "./usage.js";
+import { fetchCursorUsage } from "./cursorUsage.js";
+import { fetchCursorModels } from "./cursorModels.js";
+import { clearCursorCredsCache } from "./cursorAuth.js";
 import {
   getCaffeineStatus,
   addCaffeineHour,
   stopCaffeine,
   setCaffeineDisplay,
 } from "./caffeinate.js";
-import { fetchCodexStatus } from "./codexUsage.js";
-import { readCodexCreds, clearCodexCredsCache } from "./codexAuth.js";
+import { fetchCodexUsage } from "./codexUsage.js";
+import { fetchCodexModels } from "./codexModels.js";
+import { clearCodexCredsCache } from "./codexAuth.js";
 import {
   getGitStatus,
   gitCheckout,
@@ -225,6 +232,11 @@ const MANAGED_ENV_VARS = [
   "GROQ_WHISPER_MODEL",
   // OpenAI / Codex API key — used for Codex model execution and usage display.
   "OPENAI_API_KEY",
+  "CODEX_PATH",
+  // Optional Cursor API key / auth token override (IDE session is used by default).
+  "CURSOR_API_KEY",
+  "CURSOR_AUTH_TOKEN",
+  "CURSOR_AGENT_PATH",
   // US-VPN toggle config (remote proxy VM reached over SSH).
   "VPN_SSH_HOST",
   "VPN_SSH_USER",
@@ -266,12 +278,33 @@ app.post("/api/env/set", async (req, res) => {
   // If the OpenAI key changed, flush the credential cache so the next request
   // picks up the new value instead of the 60-second cached one.
   if (key === "OPENAI_API_KEY") clearCodexCredsCache();
+  if (key === "CURSOR_API_KEY" || key === "CURSOR_AUTH_TOKEN") clearCursorCredsCache();
   res.json({ ok: true });
 });
 
 app.get("/api/usage", async (_req, res) => {
   try {
     res.json(await fetchUsage());
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/cursor/usage", async (_req, res) => {
+  try {
+    res.json(await fetchCursorUsage());
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/cursor/models", async (_req, res) => {
+  try {
+    res.json(await fetchCursorModels());
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
@@ -324,7 +357,12 @@ app.get("/api/models", async (_req, res) => {
         if (m.id.includes("opus") || m.id.includes("sonnet")) {
           contextWindow = 1_000_000;
         }
-        return { id: m.id, label: m.display_name, contextWindow };
+        return {
+          id: m.id,
+          label: m.display_name,
+          contextWindow,
+          provider: "claude" as const,
+        };
       });
     res.json({ models });
   } catch (err) {
@@ -334,69 +372,81 @@ app.get("/api/models", async (_req, res) => {
   }
 });
 
+// Combined model list: Claude + Cursor + OpenAI Codex.
+app.get("/api/models/all", async (_req, res) => {
+  const [claudeSettled, cursorSettled, codexSettled] = await Promise.allSettled([
+    (async () => {
+      const creds = await readCreds();
+      const resp = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+        headers: {
+          Authorization: `Bearer ${creds.accessToken}`,
+          "anthropic-version": "2023-06-01",
+        },
+      });
+      if (!resp.ok) throw new Error(await resp.text().catch(() => resp.statusText));
+      const data = (await resp.json()) as {
+        data: { id: string; display_name: string }[];
+      };
+      return (data.data ?? [])
+        .filter((m) => m.id.startsWith("claude-"))
+        .map((m) => ({
+          id: m.id,
+          label: m.display_name,
+          contextWindow:
+            m.id.includes("opus") || m.id.includes("sonnet") ? 1_000_000 : 200_000,
+          provider: "claude" as const,
+        }));
+    })(),
+    fetchCursorModels(),
+    fetchCodexModels(),
+  ]);
+
+  const models: {
+    id: string;
+    label: string;
+    contextWindow?: number;
+    provider: "claude" | "cursor" | "openai";
+  }[] = [];
+
+  if (claudeSettled.status === "fulfilled") {
+    models.push(...claudeSettled.value);
+  }
+  if (cursorSettled.status === "fulfilled") {
+    models.push(...cursorSettled.value.models);
+  }
+  if (codexSettled.status === "fulfilled") {
+    models.push(...codexSettled.value.models);
+  }
+
+  res.json({
+    models,
+    claudeError:
+      claudeSettled.status === "rejected"
+        ? String(claudeSettled.reason?.message ?? claudeSettled.reason)
+        : undefined,
+    cursorError:
+      cursorSettled.status === "rejected"
+        ? String(cursorSettled.reason?.message ?? cursorSettled.reason)
+        : undefined,
+    codexError:
+      codexSettled.status === "rejected"
+        ? String(codexSettled.reason?.message ?? codexSettled.reason)
+        : undefined,
+  });
+});
+
 // ---- Codex (OpenAI) usage status ----
 app.get("/api/codex/usage", async (_req, res) => {
   try {
-    res.json(await fetchCodexStatus());
+    res.json(await fetchCodexUsage());
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
 // ---- Codex (OpenAI) model list ----
-// Codex models that are always available as a fallback even without a live key.
-const CODEX_FALLBACK_MODELS = [
-  { id: "codex-mini-latest",  label: "Codex Mini",    contextWindow: 200_000 },
-  { id: "o4-mini",            label: "o4-mini",        contextWindow: 200_000 },
-  { id: "o3",                 label: "o3",             contextWindow: 200_000 },
-  { id: "gpt-4o",             label: "GPT-4o",         contextWindow: 128_000 },
-  { id: "gpt-4o-mini",        label: "GPT-4o Mini",    contextWindow: 128_000 },
-];
-
 app.get("/api/codex/models", async (_req, res) => {
-  try {
-    const creds = await readCodexCreds();
-    const resp = await fetch("https://api.openai.com/v1/models", {
-      headers: { Authorization: `Bearer ${creds.apiKey}` },
-    });
-    if (!resp.ok) {
-      // Return the curated fallback list so the picker always has something.
-      return res.json({ models: CODEX_FALLBACK_MODELS, fallback: true });
-    }
-    const data = (await resp.json()) as { data: { id: string; created: number }[] };
-    // Keep only models that make sense for chat / coding tasks.
-    const KEEP = /^(o[1-9]|gpt-4|codex)/i;
-    const SKIP = /realtime|audio|embed|whisper|dall-e|tts|babbage|davinci/i;
-    const seen = new Set<string>();
-    const models = (data.data ?? [])
-      .filter((m) => KEEP.test(m.id) && !SKIP.test(m.id))
-      .sort((a, b) => b.created - a.created)
-      .reduce<{ id: string; label: string; contextWindow: number }[]>((acc, m) => {
-        if (seen.has(m.id)) return acc;
-        seen.add(m.id);
-        let contextWindow = 128_000;
-        if (m.id.startsWith("o3") || m.id.startsWith("o4")) contextWindow = 200_000;
-        // Make a readable label from the model id.
-        const label = m.id
-          .replace(/-latest$/, " (latest)")
-          .replace(/-(\d{4}-\d{2}-\d{2})$/, " ($1)")
-          .replace(/^codex-mini/, "Codex Mini")
-          .replace(/^gpt-4o-mini/, "GPT-4o Mini")
-          .replace(/^gpt-4o/, "GPT-4o")
-          .replace(/^gpt-4\.1-mini/, "GPT-4.1 Mini")
-          .replace(/^gpt-4\.1/, "GPT-4.1")
-          .replace(/^o4-mini/, "o4-mini")
-          .replace(/^o3-mini/, "o3-mini")
-          .replace(/^o3/, "o3")
-          .replace(/^o1-mini/, "o1-mini")
-          .replace(/^o1/, "o1");
-        acc.push({ id: m.id, label, contextWindow });
-        return acc;
-      }, []);
-    res.json({ models: models.length ? models : CODEX_FALLBACK_MODELS, fallback: false });
-  } catch {
-    res.json({ models: CODEX_FALLBACK_MODELS, fallback: true });
-  }
+  res.json(await fetchCodexModels());
 });
 
 // ---- Agent list ----
@@ -666,6 +716,11 @@ app.patch("/api/chats/:chatId", async (req, res) => {
         (await setStarred(repoPath, req.params.chatId, req.body.starred)) ??
         record;
     }
+    if (typeof req.body?.context1m === "boolean") {
+      record =
+        (await setContext1m(repoPath, req.params.chatId, req.body.context1m)) ??
+        record;
+    }
     res.json({ chat: record });
   } catch (err) {
     res.status(400).json({
@@ -694,6 +749,23 @@ app.delete("/api/chats/:chatId", async (req, res) => {
     res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
     });
+  }
+});
+
+app.delete("/api/chats/:chatId/queued-turns/:turnId", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const record = await removeQueuedChatTurn(repoPath, req.params.chatId, req.params.turnId);
+    if (!record) return res.status(404).json({ error: "Not found" });
+    // Cancel the drain timer if the queue is now empty so there are no ghost firings.
+    if (!record.queuedTurns?.length) {
+      cancelQueuedTurnDrain(repoPath, req.params.chatId);
+    }
+    const session = tryGetSession(repoPath, req.params.chatId);
+    await session?.pushStatusForRecord(record);
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
 });
 
@@ -1930,6 +2002,10 @@ wss.on("connection", (ws: WebSocket) => {
 
     try {
       switch (msg.type) {
+        case "ping":
+          // Heartbeat probe — reply so the client knows the pipe is alive.
+          if (ws.readyState === ws.OPEN) ws.send(JSON.stringify({ type: "pong" }));
+          break;
         case "subscribe":
           await subscribe(msg.repoPath, msg.chatId, msg.withReplay !== false);
           break;

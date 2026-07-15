@@ -119,17 +119,33 @@ export default function App() {
   const selfUpdate = useSelfUpdate();
 
   const [model, setModel] = useState<Model>(DEFAULT_MODEL);
-  const [availableModels, setAvailableModels] = useState<{ id: string; label: string }[]>(MODELS);
+  const [availableModels, setAvailableModels] = useState<
+    { id: string; label: string; provider?: "claude" | "cursor" | "openai" }[]
+  >(MODELS);
+  const loadModels = useCallback(() => {
+    api
+      .getModels()
+      .then((models) => {
+        // Never wipe a good list with an empty response (e.g. mid-restart).
+        if (Array.isArray(models) && models.length > 0) {
+          setAvailableModels(models);
+          const latestOpus = models.find(
+            (m) => (m.provider ?? "claude") === "claude" && m.id.includes("opus"),
+          );
+          if (latestOpus && !activeChatId) {
+            setModel((prev) =>
+              prev === DEFAULT_MODEL || !models.some((m) => m.id === prev)
+                ? latestOpus.id
+                : prev,
+            );
+          }
+        }
+      })
+      .catch(() => { /* keep current / fallback list */ });
+  }, [activeChatId]);
   useEffect(() => {
-    api.getModels().then((models) => {
-      setAvailableModels(models);
-      // Dynamically select the best (latest) Opus model as default
-      const latestOpus = models.find(m => m.id.includes("opus"));
-      if (latestOpus && !activeChatId) {
-        setModel(latestOpus.id);
-      }
-    }).catch(() => { /* keep fallback */ });
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+    loadModels();
+  }, [loadModels]);
   const [permissionMode, setPermissionMode] = useState<PermissionMode>(() => {
     try {
       const stored = localStorage.getItem(PERMISSION_MODE_STORAGE_KEY);
@@ -440,6 +456,18 @@ export default function App() {
       setPermissionMode(agent.chatPermissionMode);
     }
   }, [agent.chatPermissionMode]);
+
+  const [context1m, setContext1m] = useState(false);
+  useEffect(() => {
+    setContext1m(agent.chatContext1m ?? false);
+  }, [agent.chatContext1m]);
+
+  const handleContext1mChange = useCallback(async (enabled: boolean) => {
+    setContext1m(enabled);
+    if (activeChatId && activeRepo) {
+      await api.patchChat(activeRepo.path, activeChatId, { context1m: enabled });
+    }
+  }, [activeChatId, activeRepo]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Message queue ──────────────────────────────────────────────────────────
 
@@ -947,6 +975,7 @@ Important rules for commands:
                   }}
                   onModelChange={handleModelChange}
                   availableModels={availableModels}
+                  onRefreshModels={loadModels}
                   onToggleMcp={() => setMcpOpen((v) => !v)}
                 />
               ) : (
@@ -1257,6 +1286,7 @@ Important rules for commands:
                                 paused={agent.queuePaused}
                                 onTogglePause={agent.toggleQueuePaused}
                                 onRemove={agent.removeQueued}
+                                onRemoveUsageTurn={agent.removeUsageQueuedTurn}
                                 onFastTrack={agent.fastTrackQueued}
                                 onReorder={agent.reorderQueue}
                               />
@@ -1292,10 +1322,13 @@ Important rules for commands:
                                 }}
                                 onModelChange={handleModelChange}
                                 availableModels={availableModels}
+                                onRefreshModels={loadModels}
                                 onToggleMcp={() => setMcpOpen((v) => !v)}
                                 contextUsage={agent.contextUsage}
                                 repoPath={activeRepo?.path}
                                 sdkSlashCommands={agent.slashCommands}
+                                context1m={context1m}
+                                onContext1mChange={handleContext1mChange}
                               />
                             </div>
                           </div>

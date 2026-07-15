@@ -96,6 +96,8 @@ interface RunArgs {
   // Extra instructions appended to the default Claude Code system prompt.
   // Used by coordinator/subagent chats to describe their role and workflow.
   systemPromptAppend?: string;
+  // When true, enables the 1M token context window beta for Claude models.
+  context1m?: boolean;
   // Additional in-process MCP servers for this turn (e.g. the
   // "buildover-agents" coordination toolset for coordinator/subagent chats).
   extraMcpServers?: Record<string, McpSdkServerConfigWithInstance>;
@@ -236,6 +238,14 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       permissionMode,
       canUseTool,
       includePartialMessages: false,
+      // Adaptive-thinking models (Opus 4.8+) default to `display: 'omitted'`,
+      // which returns thinking blocks with an empty `thinking` string (only a
+      // signature for multi-turn continuity). That surfaced as an empty
+      // "Thinking" dropdown in the UI. Request `summarized` so the thinking
+      // content is actually included. Harmless on older/non-adaptive models —
+      // they return their thinking either way.
+      thinking: { type: "adaptive", display: "summarized" },
+      ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
       // The claude_code preset exposes the harness's native TaskCreate/
       // TaskUpdate/TaskList tools and periodically nudges the model to use
       // them for progress tracking. We render progress from our own TodoWrite
@@ -335,12 +345,14 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
               }
             | undefined;
           if (iterUsage) {
-            // Determine context window size based on model family
+            // Determine context window size based on model family and context1m flag.
             // Models can have date suffixes (e.g., claude-sonnet-4-5-20250929)
             let contextWindowSize = 200_000; // default for haiku
             const modelLower = args.model.toLowerCase();
-            if (modelLower.includes("opus") || modelLower.includes("sonnet")) {
+            if (modelLower.includes("opus")) {
               contextWindowSize = 1_000_000;
+            } else if (modelLower.includes("sonnet")) {
+              contextWindowSize = args.context1m ? 1_000_000 : 200_000;
             }
             const inputTokens = iterUsage.input_tokens ?? 0;
             const outputTokens = iterUsage.output_tokens ?? 0;
