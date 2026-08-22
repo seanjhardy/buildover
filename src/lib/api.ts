@@ -1,6 +1,11 @@
 import type {
+  AppPrefs,
   ChatRecord,
   ChatSummary,
+  CreateProjectRequest,
+  CreateProjectResult,
+  GitHubAccountInfo,
+  GitHubRepoInfo,
   Model,
   PermissionMode,
   PlanTicket,
@@ -9,6 +14,7 @@ import type {
   RepoInfo,
   SearchResult,
   SearchIndexStatus,
+  TemplateInfo,
 } from "../types.js";
 import { httpBase } from "./serverOrigin.js";
 
@@ -45,6 +51,33 @@ function getApiBase(): string {
   return httpBase();
 }
 
+/**
+ * Turns a failed response into a message worth showing a user. Express answers
+ * unmatched routes with an HTML error page, which is noise rather than
+ * information, so it is replaced with the reason it actually happens.
+ */
+async function httpError(res: Response): Promise<Error> {
+  const text = (await res.text().catch(() => "")).trim();
+
+  try {
+    const parsed = JSON.parse(text) as { error?: unknown };
+    if (typeof parsed.error === "string" && parsed.error.trim()) {
+      return new Error(parsed.error.trim());
+    }
+  } catch {
+    // Not JSON — fall through to the generic handling below.
+  }
+
+  if (res.status === 404) {
+    return new Error(
+      "This version of the buildover server doesn't know that request. Restart the app to pick up the latest build.",
+    );
+  }
+
+  const body = text.startsWith("<") ? "" : text.slice(0, 300);
+  return new Error(body || res.statusText || `Request failed (${res.status})`);
+}
+
 async function getJson<T>(path: string): Promise<T> {
   const url = getApiBase() + path;
   const ttl = _getTtl(path);
@@ -61,10 +94,7 @@ async function getJson<T>(path: string): Promise<T> {
 
   const promise = fetch(url)
     .then(async (res) => {
-      if (!res.ok) {
-        const text = await res.text().catch(() => "");
-        throw new Error(`${res.status}: ${text || res.statusText}`);
-      }
+      if (!res.ok) throw await httpError(res);
       const data = (await res.json()) as T;
       if (ttl > 0) {
         _responseCache.set(url, { data, expiresAt: Date.now() + ttl });
@@ -87,10 +117,7 @@ async function send<T>(
     headers: body ? { "Content-Type": "application/json" } : undefined,
     body: body ? JSON.stringify(body) : undefined,
   });
-  if (!res.ok) {
-    const text = await res.text().catch(() => "");
-    throw new Error(`${res.status}: ${text || res.statusText}`);
-  }
+  if (!res.ok) throw await httpError(res);
   // Invalidate related GET caches after any mutation so the next poll
   // fetches fresh data rather than serving a stale cached response.
   if (path.startsWith('/api/git/')) invalidateApiCache('/api/git/');
@@ -160,6 +187,58 @@ export const api = {
 
   removeRecent: (path: string) =>
     send<{ ok: boolean }>("DELETE", `/api/repos/recents`, { path }),
+
+  listTemplates: () =>
+    getJson<{ templates: TemplateInfo[] }>(`/api/templates`).then(
+      (r) => r.templates,
+    ),
+
+  addTemplate: (path: string, name?: string, description?: string) =>
+    send<{ template: TemplateInfo }>("POST", `/api/templates`, {
+      path,
+      ...(name ? { name } : {}),
+      ...(description ? { description } : {}),
+    }).then((r) => r.template),
+
+  updateTemplate: (
+    id: string,
+    patch: { name?: string; description?: string },
+  ) =>
+    send<{ ok: boolean }>(
+      "PATCH",
+      `/api/templates/${encodeURIComponent(id)}`,
+      patch,
+    ),
+
+  removeTemplate: (id: string) =>
+    send<{ ok: boolean }>(
+      "DELETE",
+      `/api/templates/${encodeURIComponent(id)}`,
+    ),
+
+  createProject: (req: CreateProjectRequest) =>
+    send<CreateProjectResult>("POST", `/api/templates/create-project`, req),
+
+  listGitHubAccounts: () =>
+    getJson<{ accounts: GitHubAccountInfo[] }>(`/api/github/accounts`).then(
+      (r) => r.accounts,
+    ),
+
+  listGitHubOwners: (account: string) =>
+    getJson<{ owners: string[] }>(
+      `/api/github/owners?account=${encodeURIComponent(account)}`,
+    ).then((r) => r.owners),
+
+  /**
+   * `cached` means the server answered from disk without contacting GitHub, so
+   * the list may be stale and is worth re-requesting with `refresh`.
+   */
+  listGitHubRepos: (account: string, refresh = false) =>
+    getJson<{ repos: GitHubRepoInfo[]; cached: boolean }>(
+      `/api/github/repos?account=${encodeURIComponent(account)}${refresh ? "&refresh=1" : ""}`,
+    ),
+
+  getPrefs: () => getJson<{ prefs: AppPrefs }>(`/api/prefs`).then((r) => r.prefs),
 
   listChats: (repoPath: string) =>
     getJson<{ chats: ChatSummary[] }>(
@@ -422,6 +501,7 @@ export interface CommitDiffFile {
 
 export interface FileSearchLineMatch { line: number; text: string }
 export interface FileSearchResult { relPath: string; lines: FileSearchLineMatch[] }
+export interface DirEntry { name: string; kind: "dir" | "file" }
 
 export const fileApi = {
   readFile: (filePath: string) =>
@@ -433,6 +513,11 @@ export const fileApi = {
     getJson<{ files: string[] }>(
       `/api/file/list?path=${encodeURIComponent(repoPath)}`,
     ).then((r) => r.files),
+
+  listDir: (dirPath: string) =>
+    getJson<{ entries: DirEntry[] }>(
+      `/api/file/dir?path=${encodeURIComponent(dirPath)}`,
+    ).then((r) => r.entries),
 
   writeFile: (filePath: string, content: string) =>
     send<{ ok: boolean }>('POST', '/api/file/write', { path: filePath, content }),

@@ -3,10 +3,9 @@
   flex: 1;
   min-height: 0; /* Required for flex children to scroll instead of overflow */
   overflow-y: auto;
-  /* Virtualizer manages its own inner layout (position:relative + absolute
-     children), so we can't use flex/gap here. Padding and item spacing are
-     applied via .message-list > div (the Virtualizer wrapper) and per-item
-     margin instead. */
+  /* Buildover owns bottom pinning. Native anchoring can otherwise move the
+     viewport in the opposite direction while message heights are changing. */
+  overflow-anchor: none;
 }
 
 .message-list--empty {
@@ -15,23 +14,58 @@
   overflow: hidden;
 }
 
-/* Virtualizer renders a single position:relative wrapper as a direct child.
-   Give it the same padding the old flex column had. */
-.message-list > div {
-  padding: var(--app-spacing-xlarge);
+.message-list--hydrating {
+  display: grid;
+  place-items: center;
+  overflow: hidden;
 }
 
-/* Each virtualised item slot is position:absolute (set inline by virtua), so
-   margin-bottom has no effect on stacking. Instead, give the slot's *content*
-   a padding-bottom so the measured height includes the inter-turn gap. */
-.message-list > div > div > .message,
-.message-list > div > div > [data-turn-kind="user"],
-.message-list > div > div > .result-line,
-.message-list > div > div > .thinking-pulse,
-.message-list > div > div > .tool-group {
-  padding-bottom: 20px;
+.message-list-hydrating-indicator {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+}
+
+.message-list-hydrating-indicator span {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--app-secondary-foreground);
+  opacity: 0.3;
+  animation: pulse 1.2s ease-in-out infinite;
+}
+
+.message-list-hydrating-indicator span:nth-child(2) {
+  animation-delay: 0.15s;
+}
+
+.message-list-hydrating-indicator span:nth-child(3) {
+  animation-delay: 0.3s;
+}
+
+.message-list-content {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+  padding: calc(var(--app-spacing-xlarge) + 40px) var(--app-spacing-xlarge)
+    var(--app-spacing-xlarge);
+}
+
+.message-list-content > .message,
+.message-list-content > [data-turn-kind],
+.message-list-content > .result-line,
+.message-list-content > .thinking-pulse,
+.message-list-content > .tool-group {
   width: 100%;
   box-sizing: border-box;
+}
+
+.message-history-sentinel {
+  width: 100%;
+  height: 1px;
+  flex: 0 0 1px;
+  pointer-events: none;
 }
 
 /* Hairline separator carrying a friendly timestamp centred in the rule. */

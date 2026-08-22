@@ -176,6 +176,10 @@ export async function runOpenAIAgentTurn(
   let lastAgentText = "";
   let assistantCounter = 0;
   let toolTurns = 0;
+  // A resumed Codex thread keeps the same session id across every turn. Row
+  // ids based on sessionId + a counter therefore collided on each resume and
+  // made React reuse unrelated messages. Include a per-run nonce.
+  const runNonce = `${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
   const startedItems = new Set<string>();
 
   const emitAssistant = (content: ContentBlock[]) => {
@@ -183,7 +187,7 @@ export async function runOpenAIAgentTurn(
     assistantCounter++;
     args.emit({
       type: "assistant",
-      uuid: `${sessionId ?? "codex"}-a-${assistantCounter}`,
+      uuid: `${sessionId ?? "codex"}-run-${runNonce}-a-${assistantCounter}`,
       sessionId: sessionId ?? "codex-pending",
       content,
     });
@@ -223,7 +227,7 @@ export async function runOpenAIAgentTurn(
     const id = item.id ?? `codex-tool-${Date.now()}-${toolTurns}`;
     args.emit({
       type: "user_tool_results",
-      uuid: `${sessionId ?? "codex"}-tr-${id}`,
+      uuid: `${sessionId ?? "codex"}-run-${runNonce}-tr-${id}`,
       sessionId: sessionId ?? "codex-pending",
       content: [
         {

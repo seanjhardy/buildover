@@ -601,6 +601,27 @@
   pointer-events: none;
 }
 
+/* Placeholder rows inside a folder: loading, empty, or a read error */
+.files-tree-note {
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding-right: 8px;
+  font-size: 11px;
+  font-style: italic;
+  color: var(--app-secondary-foreground);
+  opacity: 0.7;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.files-tree-note--error {
+  color: var(--app-error);
+  font-style: normal;
+  opacity: 1;
+}
+
 /* File rows — icon aligns with folder icon (same ICON_LEFT offset in JS) */
 .files-tree-file {
   display: flex;

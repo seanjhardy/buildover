@@ -57,6 +57,7 @@ import type { FileEntry } from "./hooks/useFilesChanged.js";
 import {
   DEFAULT_MODEL,
   MODELS,
+  getModelProvider,
   type Model,
   type OrchestratorNav,
   type PermissionMode,
@@ -128,7 +129,21 @@ export default function App() {
       .then((models) => {
         // Never wipe a good list with an empty response (e.g. mid-restart).
         if (Array.isArray(models) && models.length > 0) {
-          setAvailableModels(models);
+          // A partial response (e.g. Claude's list failed but Cursor/Codex
+          // succeeded) must not wipe an entire provider from the picker. Keep
+          // previously-loaded models for any provider absent from this response.
+          setAvailableModels((prev) => {
+            const provider = (m: { id: string; provider?: string }) =>
+              (m.provider as "claude" | "cursor" | "openai" | undefined) ??
+              getModelProvider(m.id);
+            const freshProviders = new Set(models.map(provider));
+            const preserved = prev.filter((m) => !freshProviders.has(provider(m)));
+            return Array.from(
+              new Map(
+                [...models, ...preserved].map((m) => [m.id, m]),
+              ).values(),
+            );
+          });
           const latestOpus = models.find(
             (m) => (m.provider ?? "claude") === "claude" && m.id.includes("opus"),
           );
@@ -373,7 +388,7 @@ export default function App() {
   // MessageList and MessageJumpBar both use it for scroll operations.
   const msgScrollRef = useRef<HTMLDivElement>(null);
   // jumpBarRef is written by MessageList and read by MessageJumpBar so the
-  // jump bar can use the VirtualizerHandle API instead of DOM queries.
+  // jump bar can navigate and track the rendered user-message elements.
   const jumpBarRef = useRef<JumpBarHandle | null>(null);
   const chatPaneRef = useRef<HTMLElement>(null);
   const rightRailRef = useRef<HTMLDivElement>(null);
@@ -1256,6 +1271,7 @@ Important rules for commands:
                             <MessageList
                               turns={agent.turns}
                               isStreaming={agent.isStreaming}
+                              historyReady={agent.historyReady}
                               cwd={agent.cwd ?? activeRepo.path}
                               scrollRef={msgScrollRef}
                               jumpBarRef={jumpBarRef}

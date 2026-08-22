@@ -39,11 +39,9 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
   // scroll-listener effect (e.g. when userItems changes due to branch switch).
   const updateRef = useRef<(() => void) | null>(null);
 
-  // Attach a scroll listener to the virtualizer's scroll container.
-  // The listener reads all position data from the VirtualizerHandle API
-  // (scrollOffset, viewportSize, getItemOffset, getItemSize) rather than
-  // querying the DOM, so it works correctly regardless of which items are
-  // currently rendered in the virtual window.
+  // Attach a scroll listener to the message container and use actual DOM
+  // positions for the mounted window. Dots still represent the full transcript;
+  // unloaded rows are simply omitted from position measurement.
   useEffect(() => {
     // Poll for the container: jumpBarRef.current is populated by MessageList's
     // useEffect which runs after our own, so we retry with rAF until it's set.
@@ -52,11 +50,6 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
     const attach = () => {
       const handle = jumpBarRef.current;
       if (!handle) {
-        rafId = requestAnimationFrame(attach);
-        return;
-      }
-      const v = handle.virtualizerRef.current;
-      if (!v) {
         rafId = requestAnimationFrame(attach);
         return;
       }
@@ -69,10 +62,12 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
       const update = () => {
         const jb = jumpBarRef.current;
         if (!jb) return;
-        const virt = jb.virtualizerRef.current;
-        if (!virt) return;
         const { userItems } = jb;
-        if (userItems.length === 0) return;
+        if (userItems.length === 0) {
+          setUserMsgs([]);
+          setActiveIdx(0);
+          return;
+        }
 
         // Sync userMsgs for rendering (only triggers re-render when turns change)
         setUserMsgs((prev) => {
@@ -86,44 +81,54 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
           return next;
         });
 
-        // scrollOffset = pixels scrolled from the top of the virtual list
-        // viewportSize = visible height of the scroll container
-        const scrollOffset = virt.scrollOffset;
-        const viewportSize = virt.viewportSize;
-        const viewportMid  = scrollOffset + viewportSize / 2;
-
-        // For each user message, get the offset of its top edge and compute
-        // its centre (top + half its size) in scroll-space.
-        const msgCentres = userItems.map(({ itemIndex }) => {
-          const top  = virt.getItemOffset(itemIndex);
-          const size = virt.getItemSize(itemIndex);
-          return top + size / 2;
+        const viewportMid = el.scrollTop + el.clientHeight / 2;
+        const containerTop = el.getBoundingClientRect().top;
+        const elements = new Map(
+          Array.from(el.querySelectorAll<HTMLElement>('[data-turn-kind="user"][data-turn-id]'))
+            .map((node) => [node.dataset.turnId ?? "", node] as const),
+        );
+        const positioned = userItems.flatMap(({ id }, index) => {
+          const rect = elements.get(id)?.getBoundingClientRect();
+          return rect
+            ? [{
+                index,
+                centre:
+                  rect.top - containerTop + el.scrollTop + rect.height / 2,
+              }]
+            : [];
         });
+        if (positioned.length === 0) return;
 
         // ── Snap: find the dot whose message centre is closest to viewport mid ──
-        let closest = 0;
+        let closest = positioned[0].index;
         let minDist = Infinity;
-        msgCentres.forEach((cy, i) => {
-          const d = Math.abs(cy - viewportMid);
-          if (d < minDist) { minDist = d; closest = i; }
+        positioned.forEach(({ centre, index }) => {
+          const d = Math.abs(centre - viewportMid);
+          if (d < minDist) { minDist = d; closest = index; }
         });
         setActiveIdx(closest);
 
         // ── Continuous: interpolate a fractional "dot index" ──────────────
-        const n = msgCentres.length;
+        const n = userItems.length;
         let floatIdx: number;
+        const first = positioned[0];
+        const last = positioned[positioned.length - 1];
 
-        if (viewportMid <= msgCentres[0]) {
-          floatIdx = 0;
-        } else if (viewportMid >= msgCentres[n - 1]) {
-          floatIdx = n - 1;
+        if (viewportMid <= first.centre) {
+          floatIdx = first.index;
+        } else if (viewportMid >= last.centre) {
+          floatIdx = last.index;
         } else {
-          floatIdx = n - 1;
-          for (let i = 0; i < n - 1; i++) {
-            const a = msgCentres[i];
-            const b = msgCentres[i + 1];
-            if (viewportMid >= a && viewportMid <= b) {
-              floatIdx = i + (viewportMid - a) / (b - a);
+          floatIdx = last.index;
+          for (let i = 0; i < positioned.length - 1; i++) {
+            const a = positioned[i];
+            const b = positioned[i + 1];
+            if (viewportMid >= a.centre && viewportMid <= b.centre) {
+              const span = b.centre - a.centre;
+              const progress = span > 0
+                ? (viewportMid - a.centre) / span
+                : 0;
+              floatIdx = a.index + progress * (b.index - a.index);
               break;
             }
           }
@@ -189,11 +194,26 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
 
 
   const jumpTo = useCallback(
-    (id: string, itemIndex: number) => {
-      const v = jumpBarRef.current?.virtualizerRef.current;
-      if (v) {
-        v.scrollToIndex(itemIndex, { align: "center" });
+    (id: string) => {
+      const handle = jumpBarRef.current;
+      if (handle?.scrollToMessage) {
+        handle.scrollToMessage(id);
+        return;
       }
+      const el = jumpBarRef.current?.containerRef.current;
+      if (!el) return;
+      const target = Array.from(
+        el.querySelectorAll<HTMLElement>('[data-turn-kind="user"][data-turn-id]'),
+      ).find((node) => node.dataset.turnId === id);
+      if (!target) return;
+      jumpBarRef.current?.setPinned?.(false);
+      const containerTop = el.getBoundingClientRect().top;
+      const targetRect = target.getBoundingClientRect();
+      const targetCenter = targetRect.top - containerTop + el.scrollTop + targetRect.height / 2;
+      el.scrollTo({
+        top: targetCenter - el.clientHeight / 2,
+        behavior: "smooth",
+      });
     },
     [jumpBarRef],
   );
@@ -206,7 +226,7 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
           ? Math.max(0, activeIdx - 1)
           : Math.min(userItems.length - 1, activeIdx + 1);
       const msg = userItems[next];
-      if (msg) jumpTo(msg.id, msg.itemIndex);
+      if (msg) jumpTo(msg.id);
     },
     [jumpBarRef, activeIdx, jumpTo],
   );
@@ -308,7 +328,6 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
             const cy        = PAD_V + idx * gap;
             const isActive  = idx === activeIdx;
             const isHovered = idx === hoveredIdx;
-            const itemIndex = jumpBarRef.current?.userItems[idx]?.itemIndex ?? 0;
             return (
               <circle
                 key={msg.id}
@@ -319,7 +338,7 @@ export function MessageJumpBar({ jumpBarRef }: Props) {
                 stroke={isActive ? "rgba(217,119,87,0.35)" : "none"}
                 strokeWidth={isActive ? 3 : 0}
                 style={{ cursor: "pointer", transition: "r 120ms ease, fill 120ms ease" }}
-                onClick={() => jumpTo(msg.id, itemIndex)}
+                onClick={() => jumpTo(msg.id)}
                 onMouseEnter={() => handleDotEnter(idx)}
                 onMouseLeave={() => setHoveredIdx(null)}
                 aria-label={`Jump to message ${idx + 1}`}

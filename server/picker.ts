@@ -22,9 +22,11 @@ POSIX path of chosen
     if (!path) return null;
     // osascript returns POSIX paths with a trailing slash for folders.
     return path.replace(/\/$/, "");
-  } catch (err: any) {
-    // User cancellation surfaces as exit 1 with "User canceled" in stderr.
-    if (err?.stderr?.includes?.("User canceled")) return null;
+  } catch (err) {
+    // Cancelling surfaces as AppleScript error -128. Match the code rather than
+    // the message, which is localised ("canceled" vs "cancelled").
+    const stderr = String((err as { stderr?: unknown })?.stderr ?? "");
+    if (stderr.includes("-128")) return null;
     throw err;
   }
 }

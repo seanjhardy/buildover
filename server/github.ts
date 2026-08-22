@@ -1,4 +1,7 @@
 import { execFile } from 'node:child_process';
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
@@ -63,6 +66,200 @@ export interface GitHubComment {
   author: string;
   body: string;
   createdAt: string;
+}
+
+export interface GitHubAccount {
+  login: string;
+  host: string;
+  active: boolean;
+}
+
+export interface GitHubRepoSummary {
+  nameWithOwner: string;
+  owner: string;
+  description: string;
+  isPrivate: boolean;
+  isFork: boolean;
+  pushedAt: string;
+  sshUrl: string;
+}
+
+/**
+ * Lists the accounts `gh` is logged into, by parsing `gh auth status` — gh has
+ * no JSON output for this subcommand, and hosts.yml omits which account is
+ * active per host, so text parsing is the only complete source.
+ *
+ * Expected shape:
+ *   github.com
+ *     ✓ Logged in to github.com account octocat (keyring)
+ *     - Active account: true
+ */
+export async function listGitHubAccounts(): Promise<GitHubAccount[]> {
+  let stdout = '';
+  try {
+    ({ stdout } = await execFileAsync('gh', ['auth', 'status']));
+  } catch (err) {
+    // Exit code 1 means "not logged in anywhere"; gh still writes its report to
+    // stdout, so parse whatever is there rather than throwing.
+    stdout = String((err as { stdout?: unknown })?.stdout ?? '');
+    if (!stdout.trim()) return [];
+  }
+
+  const accounts: GitHubAccount[] = [];
+  for (const line of stdout.split('\n')) {
+    const match = /Logged in to (\S+) account (\S+)/.exec(line);
+    if (match) {
+      accounts.push({ host: match[1], login: match[2], active: false });
+      continue;
+    }
+    // "Active account: true" belongs to the most recently listed account.
+    if (/Active account:\s*true/.test(line) && accounts.length > 0) {
+      accounts[accounts.length - 1].active = true;
+    }
+  }
+  return accounts;
+}
+
+/**
+ * Builds the env for running gh as a specific account.
+ *
+ * We resolve that account's token and pass it via GH_TOKEN instead of calling
+ * `gh auth switch`, because switching mutates the user's global gh config and
+ * would change which account their other terminals act as.
+ */
+async function accountEnv(
+  account: string | undefined,
+  host = 'github.com',
+): Promise<NodeJS.ProcessEnv> {
+  if (!account) return { ...process.env };
+  const { stdout } = await execFileAsync('gh', [
+    'auth', 'token', '--hostname', host, '--user', account,
+  ]);
+  const token = stdout.trim();
+  if (!token) throw new Error(`Could not read a token for GitHub account "${account}"`);
+  return { ...process.env, GH_TOKEN: token, GH_HOST: host };
+}
+
+/**
+ * Owners the given account may create a repo under: the account itself, plus
+ * every org it belongs to.
+ */
+export async function listGitHubOwners(account: string): Promise<string[]> {
+  const env = await accountEnv(account);
+  const { stdout } = await execFileAsync(
+    'gh', ['api', 'user/orgs', '--paginate', '--jq', '.[].login'],
+    { env },
+  ).catch(() => ({ stdout: '' }));
+  const orgs = stdout.split('\n').map((s) => s.trim()).filter(Boolean);
+  return [account, ...orgs.filter((o) => o !== account)];
+}
+
+/**
+ * Every repository the account can see — its own namespace plus every org it
+ * belongs to — newest-pushed first.
+ *
+ * One REST call covers all owners, which is both simpler and faster than a
+ * `gh repo list` per owner. `--paginate` is deliberately omitted: it always
+ * spends an extra round trip confirming there is no next page, which roughly
+ * doubles wall time. 100 repos is well past what this picker needs.
+ */
+async function fetchGitHubRepos(account: string): Promise<GitHubRepoSummary[]> {
+  const env = await accountEnv(account);
+  const { stdout } = await execFileAsync(
+    'gh',
+    [
+      'api',
+      'user/repos?affiliation=owner,collaborator,organization_member&sort=pushed&per_page=100',
+    ],
+    { env, maxBuffer: 32 * 1024 * 1024 },
+  );
+
+  const raw = JSON.parse(stdout) as Array<Record<string, unknown>>;
+  return raw.map((r) => {
+    const nameWithOwner = String(r.full_name ?? '');
+    return {
+      nameWithOwner,
+      owner:
+        String((r.owner as { login?: unknown } | undefined)?.login ?? '') ||
+        nameWithOwner.split('/')[0],
+      description: r.description ? String(r.description) : '',
+      isPrivate: Boolean(r.private),
+      isFork: Boolean(r.fork),
+      pushedAt: r.pushed_at ? String(r.pushed_at) : '',
+      sshUrl: String(r.ssh_url ?? ''),
+    };
+  });
+}
+
+const CACHE_PATH = join(homedir(), '.buildover', 'repo-cache.json');
+
+type RepoCache = Record<string, GitHubRepoSummary[]>;
+
+async function readRepoCache(): Promise<RepoCache> {
+  try {
+    return JSON.parse(await readFile(CACHE_PATH, 'utf8')) as RepoCache;
+  } catch {
+    return {};
+  }
+}
+
+async function writeRepoCache(account: string, repos: GitHubRepoSummary[]): Promise<void> {
+  const next = { ...(await readRepoCache()), [account]: repos };
+  await mkdir(join(homedir(), '.buildover'), { recursive: true });
+  await writeFile(CACHE_PATH, JSON.stringify(next), 'utf8');
+}
+
+/**
+ * The account's repositories, served from disk when possible so the picker can
+ * paint immediately. `cached` tells the caller the list may be stale and is
+ * worth re-requesting with `refresh`; the cache never expires on its own,
+ * because a stale list shown instantly beats a fresh list shown in a second.
+ */
+export async function listGitHubRepos(
+  account: string,
+  opts: { refresh?: boolean } = {},
+): Promise<{ repos: GitHubRepoSummary[]; cached: boolean }> {
+  if (!opts.refresh) {
+    const cached = (await readRepoCache())[account];
+    if (cached?.length) return { repos: cached, cached: true };
+  }
+
+  const repos = (await fetchGitHubRepos(account)).sort((a, b) =>
+    b.pushedAt.localeCompare(a.pushedAt),
+  );
+  await writeRepoCache(account, repos);
+  return { repos, cached: false };
+}
+
+/**
+ * Creates an empty remote repository and returns its clone URL. Deliberately
+ * does not use `--source`/`--push`: we add the remote and push separately so a
+ * push failure (common with multi-account SSH setups) is reported distinctly
+ * from the repo itself failing to be created.
+ */
+export async function createGitHubRepo(opts: {
+  account: string;
+  owner: string;
+  name: string;
+  visibility: 'private' | 'public' | 'internal';
+  description?: string;
+}): Promise<string> {
+  const env = await accountEnv(opts.account);
+  const args = [
+    'repo', 'create', `${opts.owner}/${opts.name}`,
+    `--${opts.visibility}`,
+  ];
+  if (opts.description?.trim()) args.push('--description', opts.description.trim());
+
+  await execFileAsync('gh', args, { env });
+
+  const { stdout } = await execFileAsync(
+    'gh', ['repo', 'view', `${opts.owner}/${opts.name}`, '--json', 'sshUrl', '--jq', '.sshUrl'],
+    { env },
+  );
+  const sshUrl = stdout.trim();
+  if (!sshUrl) throw new Error('Repository was created but its clone URL could not be read');
+  return sshUrl;
 }
 
 /** Returns true when gh can't find a GitHub counterpart for the local repo. */

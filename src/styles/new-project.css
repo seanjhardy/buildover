@@ -1,0 +1,1131 @@
+/* ---- New project modal ----
+   The modal is a fixed size and its sections are always mounted (disabled ones
+   just dim) so toggling a switch never resizes the dialog or shifts controls. */
+
+.new-project-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  backdrop-filter: blur(2px);
+  z-index: 1100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+}
+
+.new-project-modal {
+  display: flex;
+  flex-direction: column;
+  width: 860px;
+  max-width: 100%;
+  height: 720px;
+  max-height: 100%;
+  background: var(--app-primary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 12px;
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.5);
+  overflow: hidden;
+}
+/* The home screen is a short chooser, so it sizes to its content instead of
+   leaving most of the fixed wizard height empty. */
+.new-project-modal.fit {
+  height: auto;
+}
+
+/* ---- Header ---- */
+.new-project-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  flex-shrink: 0;
+}
+.new-project-header-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-secondary-background);
+  color: var(--app-claude-orange);
+  flex-shrink: 0;
+}
+.new-project-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.new-project-title {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--app-primary-foreground);
+}
+.new-project-subtitle {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.2;
+  color: var(--app-secondary-foreground);
+}
+button.new-project-header-icon {
+  border: 0;
+  cursor: pointer;
+}
+button.new-project-header-icon:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.new-project-close {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.new-project-close:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* ---- Two-column body ---- */
+.new-project-body {
+  display: grid;
+  grid-template-columns: 260px 1fr;
+  flex: 1;
+  min-height: 0;
+}
+
+/* ---- Template sidebar ---- */
+/* min-width:0 on both grid children — grid items default to min-width:auto,
+   which lets long paths widen the column instead of truncating. */
+.new-project-sidebar {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  min-width: 0;
+  padding: 16px 12px;
+  gap: 10px;
+  background: var(--app-secondary-background);
+  border-right: 1px solid var(--app-primary-border-color);
+}
+.new-project-sidebar-title {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--app-secondary-foreground);
+  padding: 0 6px;
+  flex-shrink: 0;
+}
+.new-project-template-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  margin: 0 -4px;
+  padding: 0 4px;
+}
+.new-project-sidebar-empty {
+  margin: 0;
+  padding: 8px 6px;
+  font-size: 12px;
+  line-height: 1.5;
+  color: var(--app-secondary-foreground);
+}
+
+.new-project-template {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--corner-radius-medium);
+  background: transparent;
+  flex-shrink: 0;
+}
+.new-project-template:hover {
+  background: var(--app-list-hover-background);
+}
+.new-project-template.active {
+  background: color-mix(in srgb, var(--app-claude-orange) 13%, transparent);
+  border-color: var(--app-claude-orange);
+}
+.new-project-template.missing {
+  opacity: 0.45;
+}
+/* display:block, not flex — Chromium wraps flex button children in an anonymous
+   shrink-to-fit box, which stops text-overflow:ellipsis from ever triggering. */
+.new-project-template-pick {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  display: block;
+  padding: 9px 4px 9px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--app-primary-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.new-project-template.missing .new-project-template-pick {
+  cursor: not-allowed;
+}
+.new-project-template-name {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-template-path {
+  display: block;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-template-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  border: 0;
+  border-radius: var(--corner-radius-medium);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  opacity: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.new-project-template:hover .new-project-template-remove,
+.new-project-template-remove:focus-visible {
+  opacity: 1;
+}
+.new-project-template-remove:hover:not(:disabled) {
+  color: var(--app-error);
+}
+
+.new-project-add-template {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  height: 32px;
+  border: 1px dashed var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.new-project-add-template:hover:not(:disabled) {
+  border-color: var(--app-claude-orange);
+  color: var(--app-claude-orange);
+}
+
+/* ---- Form column ---- */
+.new-project-form {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 20px;
+  min-height: 0;
+  min-width: 0;
+  overflow-y: auto;
+}
+
+/* flex-shrink:0 throughout the scrolling column — without it the browser
+   compresses controls to fit instead of letting the column scroll. */
+.new-project-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+  flex-shrink: 0;
+}
+.new-project-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+.new-project-inline {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.new-project-inline .new-project-check {
+  flex-shrink: 0;
+}
+.new-project-inline .new-project-input {
+  flex: 1;
+  min-width: 0;
+}
+.new-project-label-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 15px;
+}
+.new-project-label {
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 15px;
+  color: var(--app-primary-foreground);
+}
+.new-project-label-note,
+.new-project-label-error {
+  font-size: 11px;
+  line-height: 15px;
+  color: var(--app-secondary-foreground);
+}
+.new-project-label-error {
+  color: var(--app-error);
+}
+
+/* Every text control shares one height so labels and rows line up. */
+.new-project-input {
+  height: 34px;
+  box-sizing: border-box;
+  width: 100%;
+  padding: 0 10px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  color: var(--app-input-foreground);
+  font: inherit;
+  font-size: 13px;
+}
+select.new-project-input {
+  cursor: pointer;
+  padding-right: 6px;
+}
+.new-project-input::placeholder {
+  color: var(--app-input-placeholder-foreground);
+}
+.new-project-input:focus {
+  outline: none;
+  border-color: var(--app-input-active-border);
+}
+.new-project-input.invalid {
+  border-color: var(--app-error);
+}
+.new-project-input:disabled {
+  cursor: not-allowed;
+}
+
+/* ---- Location picker ---- */
+.new-project-path {
+  display: flex;
+  align-items: center;
+  height: 34px;
+  padding-left: 10px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  overflow: hidden;
+}
+.new-project-path-value {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-family: var(--app-monospace-font-family);
+  color: var(--app-input-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-path-value.empty {
+  color: var(--app-input-placeholder-foreground);
+  font-family: inherit;
+  font-size: 13px;
+}
+.new-project-path-button {
+  height: 100%;
+  padding: 0 14px;
+  border: 0;
+  border-left: 1px solid var(--app-input-border);
+  background: var(--app-secondary-background);
+  color: var(--app-primary-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.new-project-path-button:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  color: var(--app-claude-orange);
+}
+
+/* ---- Sections ---- */
+.new-project-section {
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  overflow: hidden;
+  flex-shrink: 0;
+}
+.new-project-section-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  background: var(--app-secondary-background);
+}
+.new-project-section-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+}
+.new-project-section-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  line-height: 1.2;
+  color: var(--app-primary-foreground);
+}
+.new-project-section-sub {
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--app-secondary-foreground);
+}
+.new-project-section-body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 14px;
+  border-top: 1px solid var(--app-primary-border-color);
+  transition: opacity 120ms ease;
+}
+/* Disabled sections stay laid out so the dialog never reflows. */
+.new-project-section-body.disabled {
+  opacity: 0.4;
+}
+
+/* ---- Switch ---- */
+.new-project-switch {
+  position: relative;
+  width: 34px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.new-project-switch input {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  z-index: 1;
+}
+.new-project-switch input:disabled {
+  cursor: not-allowed;
+}
+.new-project-switch-track {
+  display: block;
+  width: 100%;
+  height: 100%;
+  box-sizing: border-box;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: 999px;
+  transition:
+    background 120ms ease,
+    border-color 120ms ease;
+}
+.new-project-switch-track::after {
+  content: "";
+  position: absolute;
+  top: 4px;
+  left: 4px;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: var(--app-secondary-foreground);
+  transition:
+    transform 120ms ease,
+    background 120ms ease;
+}
+.new-project-switch input:checked + .new-project-switch-track {
+  background: var(--app-claude-orange);
+  border-color: var(--app-claude-orange);
+}
+.new-project-switch input:checked + .new-project-switch-track::after {
+  transform: translateX(14px);
+  background: #fff;
+}
+.new-project-switch input:focus-visible + .new-project-switch-track {
+  outline: 2px solid var(--app-claude-orange);
+  outline-offset: 2px;
+}
+.new-project-switch input:disabled + .new-project-switch-track {
+  opacity: 0.4;
+}
+
+/* ---- Checkbox row ---- */
+.new-project-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--app-primary-foreground);
+  cursor: pointer;
+  user-select: none;
+}
+.new-project-check input {
+  width: 14px;
+  height: 14px;
+  margin: 0;
+  accent-color: var(--app-claude-orange);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.new-project-check input:disabled {
+  cursor: not-allowed;
+}
+
+/* ---- Segmented control ---- */
+.new-project-segment {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  align-self: flex-start;
+}
+.new-project-segment-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.new-project-segment-option:hover:not(:disabled):not(.active) {
+  color: var(--app-primary-foreground);
+}
+.new-project-segment-option.active {
+  background: var(--app-primary-background);
+  color: var(--app-primary-foreground);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.25);
+}
+.new-project-segment-option:disabled {
+  cursor: not-allowed;
+}
+
+/* ---- Result ---- */
+.new-project-result {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 20px;
+}
+.new-project-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.new-project-step {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  align-items: center;
+  row-gap: 3px;
+  column-gap: 8px;
+  font-size: 13px;
+  color: var(--app-primary-foreground);
+}
+.new-project-step-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: var(--app-secondary-background);
+  color: var(--app-success);
+}
+.new-project-step.failed .new-project-step-icon {
+  color: var(--app-error);
+}
+.new-project-step.failed .new-project-step-label {
+  color: var(--app-error);
+}
+.new-project-step-detail {
+  grid-column: 2;
+  font-size: 11.5px;
+  line-height: 1.5;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ---- Home screen ---- */
+.new-project-home {
+  display: flex;
+  flex-direction: column;
+  gap: 22px;
+  flex: 1;
+  min-height: 0;
+  padding: 24px;
+}
+.new-project-cards {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  flex-shrink: 0;
+}
+.new-project-card {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  min-width: 0;
+  padding: 18px 16px 16px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  background: var(--app-secondary-background);
+  color: var(--app-primary-foreground);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color 120ms ease,
+    background 120ms ease;
+}
+.new-project-card:hover:not(:disabled) {
+  border-color: var(--app-claude-orange);
+  background: var(--app-list-hover-background);
+}
+.new-project-card:hover:not(:disabled) .new-project-card-icon {
+  background: var(--app-claude-orange);
+  color: #fff;
+}
+.new-project-card:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.new-project-card-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 38px;
+  height: 38px;
+  margin-bottom: 10px;
+  border-radius: var(--corner-radius-large);
+  background: var(--app-input-background);
+  color: var(--app-claude-orange);
+  transition:
+    background 120ms ease,
+    color 120ms ease;
+}
+.new-project-card-title {
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.3;
+}
+.new-project-card-sub {
+  font-size: 11.5px;
+  line-height: 1.45;
+  color: var(--app-secondary-foreground);
+}
+
+.new-project-group-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--app-secondary-foreground);
+  flex-shrink: 0;
+}
+.new-project-empty {
+  margin: 0;
+  padding: 10px 2px;
+  font-size: 12px;
+  color: var(--app-secondary-foreground);
+}
+
+.new-project-recents {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+.new-project-recent-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  flex: 1;
+  min-height: 0;
+  max-height: 300px;
+  overflow-y: auto;
+  margin: 0 -6px;
+  padding: 0 6px;
+}
+.new-project-recent {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: var(--corner-radius-medium);
+  flex-shrink: 0;
+}
+.new-project-recent:hover {
+  background: var(--app-list-hover-background);
+}
+.new-project-recent-pick {
+  display: block;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  padding: 9px 4px 9px 10px;
+  border: 0;
+  background: transparent;
+  color: var(--app-primary-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+.new-project-recent-name {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-recent-path {
+  display: block;
+  font-size: 10.5px;
+  line-height: 1.35;
+  color: var(--app-secondary-foreground);
+  font-family: var(--app-monospace-font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-recent-forget {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  border: 0;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  opacity: 0;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.new-project-recent:hover .new-project-recent-forget,
+.new-project-recent-forget:focus-visible {
+  opacity: 1;
+}
+.new-project-recent-forget:hover:not(:disabled) {
+  color: var(--app-error);
+}
+
+/* ---- Clone-from-GitHub screen ---- */
+.new-project-github {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  flex: 1;
+  min-height: 0;
+  padding: 20px;
+}
+.new-project-gh-top {
+  display: flex;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.new-project-account-select {
+  width: 190px;
+  flex-shrink: 0;
+}
+.new-project-search {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  background: var(--app-input-background);
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-medium);
+  color: var(--app-secondary-foreground);
+  flex-shrink: 0;
+}
+.new-project-search:focus-within {
+  border-color: var(--app-input-active-border);
+}
+.new-project-search-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--app-input-foreground);
+  font: inherit;
+  font-size: 13px;
+}
+.new-project-search-input:focus {
+  outline: none;
+}
+.new-project-search-input::placeholder {
+  color: var(--app-input-placeholder-foreground);
+}
+
+.new-project-repo-area {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  min-height: 0;
+}
+.new-project-repo-list {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  /* No top padding: the first section header supplies its own, which keeps
+     `position: sticky; top: 0` landing flush against the scrollport. */
+  padding: 0 8px 8px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+}
+
+/* Direct children replace a section — they need the top padding the sticky
+   section headers would otherwise provide. */
+.new-project-repo-list > .new-project-repo {
+  margin-top: 8px;
+}
+.new-project-repo-list .new-project-empty {
+  padding: 14px 2px;
+}
+.new-project-empty.error {
+  color: var(--app-error);
+}
+
+.new-project-owner-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.new-project-owner-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  /* Bleeds into the list's side padding so scrolling rows pass behind it. */
+  margin: 0 -8px;
+  padding: 13px 8px 7px;
+  border: 0;
+  background: var(--app-primary-background);
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  text-align: left;
+  cursor: pointer;
+}
+.new-project-owner-header:hover:not(:disabled) {
+  color: var(--app-primary-foreground);
+}
+.new-project-owner-header:disabled {
+  cursor: default;
+}
+.new-project-owner-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-owner-count {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--app-input-background);
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+/* Jump rail — one node per owner section, mirroring the list order. The nodes
+   are deliberately unlabelled: owner initials collide often enough to mislead,
+   so the name lives in the tooltip instead. */
+.new-project-owner-rail {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  flex-shrink: 0;
+  padding: 4px 0;
+  /* Above the list so tooltips overlay it rather than slide behind the sticky
+     section headers. */
+  position: relative;
+  z-index: 2;
+}
+.new-project-rail-node {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  position: relative;
+  width: 16px;
+  height: 18px;
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  font-size: 0;
+  cursor: pointer;
+}
+.new-project-rail-node::before {
+  content: "";
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--app-input-border);
+  transition:
+    height 110ms ease,
+    background-color 110ms ease;
+}
+.new-project-rail-node:hover::before {
+  background: var(--app-secondary-foreground);
+}
+.new-project-rail-node.active::before {
+  height: 14px;
+  background: var(--app-claude-orange);
+}
+.new-project-rail-node::after {
+  content: attr(data-tip);
+  position: absolute;
+  right: calc(100% + 6px);
+  top: 50%;
+  transform: translateY(-50%);
+  padding: 4px 8px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  background: var(--app-primary-background);
+  color: var(--app-primary-foreground);
+  font-size: 11px;
+  font-weight: 500;
+  white-space: nowrap;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 90ms ease;
+}
+.new-project-rail-node:hover::after {
+  opacity: 1;
+}
+.new-project-repo {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  flex-shrink: 0;
+  padding: 9px 11px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-secondary-background);
+  color: var(--app-primary-foreground);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color 110ms ease,
+    border-color 110ms ease;
+}
+.new-project-repo:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  border-color: var(--app-input-border);
+}
+.new-project-repo.active {
+  background: color-mix(in srgb, var(--app-claude-orange) 13%, transparent);
+  border-color: var(--app-claude-orange);
+}
+.new-project-repo-top {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.new-project-repo-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 500;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.new-project-repo-badge {
+  flex-shrink: 0;
+  padding: 1px 7px;
+  border: 1px solid var(--app-input-border);
+  border-radius: 999px;
+  color: var(--app-secondary-foreground);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.new-project-repo-desc {
+  display: block;
+  margin-top: 3px;
+  font-size: 11px;
+  line-height: 1.4;
+  color: var(--app-secondary-foreground);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ---- Footer ---- */
+.new-project-footer {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 64px;
+  padding: 0 20px;
+  border-top: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  flex-shrink: 0;
+}
+.new-project-note {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  flex: 1;
+  min-width: 0;
+  font-size: 11.5px;
+  line-height: 1.4;
+  color: var(--app-secondary-foreground);
+}
+.new-project-note.error {
+  color: var(--app-error);
+}
+.new-project-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.new-project-cancel,
+.new-project-submit {
+  height: 34px;
+  padding: 0 16px;
+  border-radius: var(--corner-radius-medium);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+}
+.new-project-cancel {
+  border: 1px solid var(--app-primary-border-color);
+  background: transparent;
+  color: var(--app-primary-foreground);
+}
+.new-project-cancel:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+}
+.new-project-submit {
+  border: 1px solid var(--app-claude-orange);
+  background: var(--app-claude-orange);
+  color: #fff;
+  font-weight: 600;
+}
+.new-project-submit:hover:not(:disabled) {
+  opacity: 0.9;
+}
+.new-project-submit:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+@media (max-width: 760px) {
+  .new-project-overlay {
+    padding: 0;
+  }
+  .new-project-modal {
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+    border: 0;
+  }
+  .new-project-body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto 1fr;
+  }
+  .new-project-sidebar {
+    border-right: 0;
+    border-bottom: 1px solid var(--app-primary-border-color);
+    max-height: 190px;
+  }
+  .new-project-grid {
+    grid-template-columns: 1fr;
+  }
+  .new-project-inline {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .new-project-cards {
+    grid-template-columns: 1fr;
+  }
+  .new-project-card {
+    flex-direction: row;
+    align-items: center;
+    gap: 12px;
+    padding: 12px;
+  }
+  .new-project-card-icon {
+    margin-bottom: 0;
+  }
+  .new-project-card-sub {
+    display: none;
+  }
+}

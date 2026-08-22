@@ -1,38 +1,41 @@
-import { memo, useEffect, useMemo, useRef } from "react";
-import { Virtualizer, type VirtualizerHandle } from "virtua";
+import {
+  memo,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+} from "react";
 import type { BranchInfo, ChatTurn } from "../hooks/useAgent.js";
-import type { Attachment, ContentBlock } from "../types.js";
+import type { Attachment } from "../types.js";
 import { AssistantMessage } from "./AssistantMessage.js";
-import { ToolGroup } from "./ToolGroup.js";
 import { UserMessage } from "./UserMessage.js";
 import { SystemMessage } from "./SystemMessage.js";
 import { TimestampDivider } from "./TimestampDivider.js";
 
-// Runs of 3+ consecutive tool calls (across consecutive assistant turns) are
-// collapsed under a single "N tools called" header.
-const TOOL_GROUP_THRESHOLD = 3;
+// Allow only rounding noise when deciding that a deliberate downward scroll
+// has returned to the bottom.
+const BOTTOM_EPSILON = 2;
+const INITIAL_HISTORY_ITEMS = 60;
+const HISTORY_BATCH_SIZE = 60;
 
-// How many pixels from the bottom counts as "at the bottom". A small
-// threshold handles sub-pixel rounding and the streaming thinking pulse.
-const SCROLL_THRESHOLD = 120;
-
-// Data the MessageJumpBar needs to navigate without querying the DOM.
-// MessageList writes this on every render so the jump bar always has
-// up-to-date indices into the virtual list.
+// Data the MessageJumpBar needs to navigate the rendered message list.
 export interface JumpBarHandle {
-  virtualizerRef: React.RefObject<VirtualizerHandle | null>;
   containerRef: React.RefObject<HTMLDivElement | null>;
-  // One entry per user message, in order. itemIndex is the index into the
-  // Virtualizer's children array (accounting for the top-spacer at index 0).
-  userItems: { id: string; text: string; itemIndex: number }[];
+  userItems: { id: string; text: string }[];
   // Called by MessageList whenever userItems changes so the jump bar can
   // refresh its state even when no scroll event fires (e.g. branch switch).
   notifyUpdate?: () => void;
+  // Jump navigation is deliberate browsing, so it must opt out of bottom pinning.
+  setPinned?: (pinned: boolean) => void;
+  scrollToMessage?: (id: string) => void;
 }
 
 interface Props {
   turns: ChatTurn[];
   isStreaming: boolean;
+  historyReady?: boolean;
   cwd?: string;
   scrollRef?: React.RefObject<HTMLDivElement>;
   jumpBarRef?: React.RefObject<JumpBarHandle | null>;
@@ -47,121 +50,47 @@ interface Props {
   onRevert?: (checkpointId: string) => void;
 }
 
-// A single virtual row — either a real ChatTurn, the streaming indicator, or
-// a synthetic "tool group" that coalesces a run of tool-only assistant turns.
-type VirtualItem =
-  | ChatTurn
-  | { kind: "__streaming__" }
-  | {
-      kind: "__tool_group__";
-      id: string;
-      tools: Extract<ContentBlock, { type: "tool_use" }>[];
-    };
+type RenderedTurn = Exclude<ChatTurn, { kind: "tool_results" }>;
+type MessageItem = RenderedTurn | { kind: "__streaming__" };
 
-// Returns true if every block in the assistant turn's content is a tool_use.
-function isToolOnlyAssistant(turn: ChatTurn): turn is Extract<ChatTurn, { kind: "assistant" }> {
-  return (
-    turn.kind === "assistant" &&
-    turn.content.length > 0 &&
-    turn.content.every((b) => b.type === "tool_use")
-  );
-}
-
-// Walks the flat turns list and coalesces runs of consecutive tool-only
-// assistant turns (plus their interleaved invisible tool_results turns) into
-// a single tool-group virtual item when the run contains TOOL_GROUP_THRESHOLD
-// or more tool_use blocks. Smaller runs pass through unchanged.
-function buildVirtualItems(turns: ChatTurn[]): VirtualItem[] {
-  const out: VirtualItem[] = [];
-  let i = 0;
-  while (i < turns.length) {
-    const t = turns[i];
-    if (isToolOnlyAssistant(t)) {
-      // Greedily extend the run across consecutive tool-only assistant turns,
-      // tolerating interleaved tool_results turns (which are invisible anyway).
-      const tools: Extract<ContentBlock, { type: "tool_use" }>[] = [];
-      const consumed: ChatTurn[] = [];
-      let j = i;
-      while (j < turns.length) {
-        const tj = turns[j];
-        if (isToolOnlyAssistant(tj)) {
-          for (const b of tj.content) {
-            tools.push(b as Extract<ContentBlock, { type: "tool_use" }>);
-          }
-          consumed.push(tj);
-          j++;
-        } else if (tj.kind === "tool_results") {
-          consumed.push(tj);
-          j++;
-        } else {
-          break;
-        }
-      }
-      if (tools.length >= TOOL_GROUP_THRESHOLD) {
-        out.push({
-          kind: "__tool_group__",
-          id: `tg-${tools[0].id}`,
-          tools,
-        });
-      } else {
-        // Not enough tools to collapse — emit the consumed turns as-is.
-        for (const c of consumed) out.push(c);
-      }
-      i = j;
-      continue;
-    }
-    out.push(t);
-    i++;
-  }
-  return out;
-}
-
-function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chatId, branchInfo, onForkMessage, onSwitchBranch, onRevert }: Props) {
-  // The scroll container div. Also exposed via the external scrollRef so that
-  // MessageJumpBar (which listens for scroll events and queries DOM nodes in
-  // the container) continues to work after we add virtualisation.
+function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scrollRef, jumpBarRef, chatId, branchInfo, onForkMessage, onSwitchBranch, onRevert }: Props) {
+  // The scroll container div. Also exposed to the jump bar.
   const containerRef = useRef<HTMLDivElement>(null);
+  const historySentinelRef = useRef<HTMLDivElement>(null);
 
-  // VirtualizerHandle gives us programmatic scroll control.
-  const virtualizerRef = useRef<VirtualizerHandle>(null);
+  // This records user intent, not a scroll-position snapshot. Layout shifts and
+  // programmatic scrolls must never unpin a user who was following the output.
+  const isPinnedRef = useRef(true);
+  const previousChatIdRef = useRef<string | undefined>(undefined);
+  const pendingWindowScrollRef = useRef<
+    | { kind: "prepend"; scrollHeight: number; scrollTop: number }
+    | { kind: "jump"; messageId: string }
+    | null
+  >(null);
+  const [historyWindow, setHistoryWindow] = useState<{
+    chatId?: string;
+    start: number;
+    expanded: boolean;
+  }>({ chatId, start: 0, expanded: false });
 
-  // Track whether the user was at the bottom before the latest render.
-  const wasAtBottomRef = useRef(true);
-
-  // Set to true when the active chat changes so we scroll to the bottom once
-  // the first batch of turns arrives from the server or cache.
-  const scrollToChatBottomRef = useRef(false);
-
-  // Holds the timeout ID for the chat-switch fallback DOM scroll. Stored in a
-  // ref (not a local effect variable) so React re-renders between now and the
-  // timeout firing (e.g. more turns arriving) don't cancel it via effect cleanup.
-  const chatScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  // Incremental tool_use_id → result map — kept as a stable ref object so
-  // AssistantMessage's arePropsEqual bails cheaply for unchanged messages.
-  const toolResultsRef = useRef<Record<string, { content: string; isError: boolean }>>({});
-  const prevTurnsLenRef = useRef(0);
-
-  // Walk only newly-appended turns to find tool_results entries.
-  const currentLen = turns.length;
-  if (currentLen !== prevTurnsLenRef.current) {
-    const startIdx = Math.max(0, prevTurnsLenRef.current - 1);
-    for (let i = startIdx; i < currentLen; i++) {
-      const turn = turns[i];
+  // Keep tool results immutable. AssistantMessage is memoized and compares the
+  // result entries it uses; mutating one shared map made old and new props point
+  // at the same values, so completed tools could remain stuck in a loading state.
+  const toolResults = useMemo(() => {
+    const result: Record<string, { content: string; isError: boolean }> = {};
+    for (const turn of turns) {
       if (turn.kind !== "tool_results") continue;
       for (const block of turn.content) {
         if (block.type === "tool_result") {
-          toolResultsRef.current[block.tool_use_id] = {
+          result[block.tool_use_id] = {
             content: block.content,
             isError: Boolean(block.is_error),
           };
         }
       }
     }
-    prevTurnsLenRef.current = currentLen;
-  }
-
-  const toolResults = toolResultsRef.current;
+    return result;
+  }, [turns]);
 
   // Wire the external scrollRef to the same DOM element we control so that
   // MessageJumpBar can attach its scroll listener.
@@ -171,37 +100,138 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
       containerRef.current;
   });
 
-  // Build the virtual items list: grouped turns + optional streaming indicator.
-  // Index 0 is always the top spacer div, so actual item indices start at 1.
-  const grouped = buildVirtualItems(turns);
-  const items: VirtualItem[] = isStreaming
-    ? [...grouped, { kind: "__streaming__" }]
-    : grouped;
+  // Keep every persisted turn as a stable row. Dynamically replacing several
+  // live tool rows with one synthetic group made the transcript move while the
+  // user was reading it.
+  const renderedTurns = useMemo(
+    () => turns.filter((turn): turn is RenderedTurn => turn.kind !== "tool_results"),
+    [turns],
+  );
+  const items: MessageItem[] = isStreaming
+    ? [...renderedTurns, { kind: "__streaming__" }]
+    : renderedTurns;
+  const isEmpty = turns.length === 0 && !isStreaming;
+  const isHydrating = isEmpty && !historyReady;
 
-  // Build the jump-bar data: for each user message, record which Virtualizer
-  // child index it occupies (+1 for the top-spacer at index 0).
+  // Render only the newest history initially. Unlike height-based
+  // virtualization, this keeps every mounted row in ordinary document flow and
+  // prepends real rows in stable batches when the user asks for older history.
+  const tailStart = Math.max(0, items.length - INITIAL_HISTORY_ITEMS);
+  const historyIsExpanded =
+    historyWindow.chatId === chatId && historyWindow.expanded;
+  // A chat switch can render once with the previous chat's turns before the
+  // new replay/cache state commits. Until this chat is explicitly expanded,
+  // derive its window directly from the current tail without mutating state.
+  const historyStart = historyIsExpanded
+    ? Math.min(historyWindow.start, tailStart)
+    : tailStart;
+  const visibleItems = items.slice(historyStart);
+
+  const findRenderedMessage = (id: string): HTMLElement | undefined => {
+    const el = containerRef.current;
+    if (!el) return undefined;
+    return Array.from(
+      el.querySelectorAll<HTMLElement>('[data-turn-kind="user"][data-turn-id]'),
+    ).find((node) => node.dataset.turnId === id);
+  };
+
+  const scrollMessageToCenter = (id: string, behavior: ScrollBehavior) => {
+    const el = containerRef.current;
+    const target = findRenderedMessage(id);
+    if (!el || !target) return;
+    const containerTop = el.getBoundingClientRect().top;
+    const targetRect = target.getBoundingClientRect();
+    const targetCenter =
+      targetRect.top - containerTop + el.scrollTop + targetRect.height / 2;
+    el.scrollTo({
+      top: targetCenter - el.clientHeight / 2,
+      behavior,
+    });
+  };
+
+  const loadEarlier = useCallback(() => {
+    const el = containerRef.current;
+    const currentStart = historyStart;
+    if (!el || currentStart === 0 || pendingWindowScrollRef.current) return;
+    isPinnedRef.current = false;
+    pendingWindowScrollRef.current = {
+      kind: "prepend",
+      scrollHeight: el.scrollHeight,
+      scrollTop: el.scrollTop,
+    };
+    setHistoryWindow({
+      chatId,
+      expanded: true,
+      start: Math.max(0, currentStart - HISTORY_BATCH_SIZE),
+    });
+  }, [chatId, historyStart]);
+
+  // Prepend history as the user approaches the top. The layout effect below
+  // restores the exact viewport offset, so loading another batch is invisible
+  // to someone reading the first currently mounted message.
+  useEffect(() => {
+    const root = containerRef.current;
+    const sentinel = historySentinelRef.current;
+    if (!root || !sentinel || historyStart === 0) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries.some((entry) => entry.isIntersecting)) loadEarlier();
+      },
+      {
+        root,
+        rootMargin: "180px 0px 0px 0px",
+        threshold: 0,
+      },
+    );
+    observer.observe(sentinel);
+    return () => observer.disconnect();
+  }, [historyStart, loadEarlier]);
+
+  const scrollToMessage = (id: string) => {
+    const itemIndex = items.findIndex(
+      (item) => item.kind === "user" && item.id === id,
+    );
+    if (itemIndex < 0) return;
+    isPinnedRef.current = false;
+    if (itemIndex < historyStart) {
+      pendingWindowScrollRef.current = { kind: "jump", messageId: id };
+      setHistoryWindow({
+        chatId,
+        expanded: true,
+        start: Math.max(0, itemIndex - 5),
+      });
+      return;
+    }
+    scrollMessageToCenter(id, "smooth");
+  };
+
+  // Build the jump-bar from the complete transcript, not just the mounted
+  // history window. scrollToMessage reveals an unloaded target before jumping.
   const userItems = useMemo(() => {
-    const result: { id: string; text: string; itemIndex: number }[] = [];
-    items.forEach((item, i) => {
+    const result: { id: string; text: string }[] = [];
+    renderedTurns.forEach((item) => {
       // Only genuine user input belongs in the jump bar — injected system /
       // subagent messages share the "user" slot but aren't the user's turns.
       if (item.kind === "user" && (!item.origin || item.origin === "user")) {
-        result.push({ id: item.id, text: item.text, itemIndex: i + 1 }); // +1 for spacer
+        result.push({ id: item.id, text: item.text });
       }
     });
     return result;
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [turns, isStreaming]);
+  }, [renderedTurns]);
 
   // Keep jumpBarRef up to date every render so the scroll handler always
-  // reads the latest userItems and virtualizerRef without needing a re-mount.
+  // reads the latest userItems without needing a re-mount.
   useEffect(() => {
     if (!jumpBarRef) return;
     (jumpBarRef as React.MutableRefObject<JumpBarHandle | null>).current = {
-      virtualizerRef,
       containerRef,
       userItems,
       notifyUpdate: jumpBarRef.current?.notifyUpdate,
+      setPinned: (pinned) => {
+        isPinnedRef.current = pinned;
+      },
+      scrollToMessage,
     };
   });
 
@@ -212,115 +242,110 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [userItems]);
 
-  // On chat switch: arm the scroll-to-bottom flag and reset tool results.
-  // Also reset wasAtBottom to true so the ResizeObserver correctly pins to the
-  // bottom if streaming starts before the scroll event has fired.
-  useEffect(() => {
-    if (!chatId) return;
-    // Cancel any scroll timer still pending from the previous chat.
-    if (chatScrollTimerRef.current) {
-      clearTimeout(chatScrollTimerRef.current);
-      chatScrollTimerRef.current = null;
-    }
-    scrollToChatBottomRef.current = true;
-    wasAtBottomRef.current = true;
-    toolResultsRef.current = {};
-    prevTurnsLenRef.current = 0;
-  }, [chatId]); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Track whether the user is at the bottom via a real scroll event listener.
-  // This fires only on actual user scroll (not React re-renders), giving us
-  // accurate "at bottom" state without the snapshot-effect race condition.
+  // Only explicit upward input unpins the view. A plain scroll event is not
+  // enough: browsers also emit one for scroll anchoring, layout clamps, and our
+  // own scrollTop writes. Downward input re-pins once it reaches the true end.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+
+    let touchY: number | null = null;
     const onScroll = () => {
-      wasAtBottomRef.current =
-        el.scrollHeight - el.scrollTop - el.clientHeight <= SCROLL_THRESHOLD;
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distance <= BOTTOM_EPSILON) isPinnedRef.current = true;
     };
-    el.addEventListener("scroll", onScroll, { passive: true });
-    return () => el.removeEventListener("scroll", onScroll);
-  }, []);
-
-  // Keep the view pinned to the bottom (when the user was already there) on any
-  // height change that affects what's visible:
-  //   - the inner wrapper growing from streaming content (text flowing, code
-  //     blocks expanding, etc.), and
-  //   - the scroll container itself shrinking because the composer grew (its
-  //     textarea auto-resizes as the user types a long message). The inner
-  //     content height doesn't change in that case, so observing only the inner
-  //     wrapper would miss it and let the newest messages slip behind the
-  //     composer — the chat appears to "jump" and hide its own bottom.
-  // Direct el.scrollTop = el.scrollHeight bypasses virtua's stale item-size
-  // cache, which scrollToIndex(last, {align:"end"}) would use and undershoot.
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const ro = new ResizeObserver(() => {
-      if (wasAtBottomRef.current) {
-        el.scrollTop = el.scrollHeight;
+    const onWheel = (event: WheelEvent) => {
+      if (event.deltaY < 0) {
+        isPinnedRef.current = false;
       }
-    });
-    const inner = el.firstElementChild;
-    if (inner) ro.observe(inner);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, []);
+    };
+    const onTouchStart = (event: TouchEvent) => {
+      touchY = event.touches[0]?.clientY ?? null;
+    };
+    const onTouchMove = (event: TouchEvent) => {
+      const nextY = event.touches[0]?.clientY;
+      if (touchY !== null && nextY !== undefined && nextY > touchY) {
+        isPinnedRef.current = false;
+      }
+      touchY = nextY ?? touchY;
+    };
+    const onPointerDown = (event: PointerEvent) => {
+      const rect = el.getBoundingClientRect();
+      // A pointer press in the scrollbar gutter means the user is taking
+      // manual control. If they drag to the end, onScroll re-pins it.
+      if (event.clientX >= rect.right - 18) isPinnedRef.current = false;
+    };
+    const onPointerUp = () => {
+      const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
+      if (distance <= BOTTOM_EPSILON) isPinnedRef.current = true;
+    };
 
-  // Clean up any pending chat-switch scroll timer on unmount.
-  useEffect(() => {
+    el.addEventListener("scroll", onScroll, { passive: true });
+    el.addEventListener("wheel", onWheel, { passive: true });
+    el.addEventListener("touchstart", onTouchStart, { passive: true });
+    el.addEventListener("touchmove", onTouchMove, { passive: true });
+    el.addEventListener("pointerdown", onPointerDown, { passive: true });
+    window.addEventListener("pointerup", onPointerUp, { passive: true });
+    window.addEventListener("pointercancel", onPointerUp, { passive: true });
     return () => {
-      if (chatScrollTimerRef.current) clearTimeout(chatScrollTimerRef.current);
+      el.removeEventListener("scroll", onScroll);
+      el.removeEventListener("wheel", onWheel);
+      el.removeEventListener("touchstart", onTouchStart);
+      el.removeEventListener("touchmove", onTouchMove);
+      el.removeEventListener("pointerdown", onPointerDown);
+      window.removeEventListener("pointerup", onPointerUp);
+      window.removeEventListener("pointercancel", onPointerUp);
     };
   }, []);
 
-  // Auto-scroll whenever turns change (new message added or chat switch).
-  // We always defer to rAF so virtua has painted the new item before we read
-  // scrollHeight — otherwise we'd scroll to the old bottom and the new item
-  // would appear below the viewport.
+  useLayoutEffect(() => {
+    pendingWindowScrollRef.current = null;
+  }, [chatId]);
+
+  // After prepending a history batch, offset scrollTop by the exact new height
+  // so the message under the user's eyes does not move. Jump navigation that
+  // reveals an older batch centres its target in the same pre-paint phase.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    const pending = pendingWindowScrollRef.current;
+    if (!el || !pending) return;
+    pendingWindowScrollRef.current = null;
+    if (pending.kind === "prepend") {
+      el.scrollTop = pending.scrollTop + (el.scrollHeight - pending.scrollHeight);
+    } else {
+      scrollMessageToCenter(pending.messageId, "auto");
+    }
+  }, [historyStart]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Keep the view pinned when message content grows or the composer changes the
+  // viewport height. Native document flow makes scrollHeight authoritative.
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
+    const inner = el.firstElementChild;
+    const observer = new ResizeObserver(() => {
+      if (isPinnedRef.current) el.scrollTop = el.scrollHeight;
+      jumpBarRef?.current?.notifyUpdate?.();
+    });
+    if (inner) observer.observe(inner);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [jumpBarRef, isEmpty]);
 
-    const scrollToEnd = () => {
+  // Pin before paint whenever rows change. This prevents the one-frame upward
+  // jump caused by waiting for requestAnimationFrame while content is appended.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const chatChanged = previousChatIdRef.current !== chatId;
+    previousChatIdRef.current = chatId;
+    if (chatChanged) isPinnedRef.current = true;
+    if (items.length > 0 && (chatChanged || isPinnedRef.current)) {
       el.scrollTop = el.scrollHeight;
-    };
-
-    if (scrollToChatBottomRef.current && turns.length > 0) {
-      scrollToChatBottomRef.current = false;
-      // Use virtua's scrollToIndex rather than a direct DOM scroll. At this
-      // point virtua has only rendered items near the top (scrollTop=0), so
-      // el.scrollHeight is far shorter than the real bottom — direct DOM scroll
-      // would undershoot on any long chat. scrollToIndex tells virtua to render
-      // and position at the last item regardless of what's been painted yet.
-      requestAnimationFrame(() => {
-        virtualizerRef.current?.scrollToIndex(items.length, { align: "end" });
-      });
-      // Belt-and-suspenders: after virtua has settled, force the true DOM bottom
-      // in case scrollToIndex's estimated position was slightly off.
-      // Stored in a ref — NOT a local variable — so React re-renders between now
-      // and the timeout firing (more turns arriving, isStreaming toggling, etc.)
-      // don't cancel the scroll via effect cleanup.
-      if (chatScrollTimerRef.current) clearTimeout(chatScrollTimerRef.current);
-      chatScrollTimerRef.current = setTimeout(() => {
-        scrollToEnd();
-        // Second retry: variable-height items (code blocks, tool calls) can cause
-        // virtua to adjust layout after the first DOM scroll, so we nudge again.
-        chatScrollTimerRef.current = setTimeout(() => {
-          chatScrollTimerRef.current = null;
-          scrollToEnd();
-        }, 400);
-      }, 200);
-      return;
     }
-    if (turns.length === 1 || wasAtBottomRef.current) {
-      // Defer so virtua has painted the new item and scrollHeight is up to date.
-      const raf = requestAnimationFrame(scrollToEnd);
-      return () => cancelAnimationFrame(raf);
-    }
-  }, [turns]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [turns, isStreaming, chatId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const renderItem = (item: VirtualItem, i: number) => {
+  const renderItem = (item: MessageItem) => {
     if (item.kind === "__streaming__") {
       return (
         <div key="__streaming__" className="thinking-pulse" aria-label="thinking">
@@ -328,16 +353,6 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
           <span />
           <span />
         </div>
-      );
-    }
-    if (item.kind === "__tool_group__") {
-      return (
-        <ToolGroup
-          key={item.id}
-          tools={item.tools}
-          toolResults={toolResults}
-          cwd={cwd}
-        />
       );
     }
     if (item.kind === "user") {
@@ -396,12 +411,26 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
         </div>
       );
     }
-    // tool_results turns are invisible — they're threaded into their
-    // corresponding AssistantMessage card via the toolResults map.
-    return <div key={`tr-${i}`} style={{ display: "none" }} />;
   };
 
-  if (turns.length === 0 && !isStreaming) {
+  if (isHydrating) {
+    return (
+      <div
+        className="message-list message-list--hydrating"
+        ref={containerRef}
+        aria-label="Loading conversation"
+        aria-busy="true"
+      >
+        <div className="message-list-hydrating-indicator" aria-hidden="true">
+          <span />
+          <span />
+          <span />
+        </div>
+      </div>
+    );
+  }
+
+  if (isEmpty) {
     return (
       <div className="message-list message-list--empty" ref={containerRef}>
         <div className="message-list-empty">
@@ -414,14 +443,16 @@ function MessageListInner({ turns, isStreaming, cwd, scrollRef, jumpBarRef, chat
 
   return (
     <div className="message-list" ref={containerRef}>
-      <Virtualizer
-        ref={virtualizerRef}
-        scrollRef={containerRef}
-        bufferSize={600}
-      >
-        <div key="__top-spacer__" style={{ height: 40 }} />
-        {items.map(renderItem)}
-      </Virtualizer>
+      <div className="message-list-content">
+        {historyStart > 0 && (
+          <div
+            ref={historySentinelRef}
+            className="message-history-sentinel"
+            aria-hidden="true"
+          />
+        )}
+        {visibleItems.map(renderItem)}
+      </div>
     </div>
   );
 }

@@ -121,6 +121,80 @@ export interface RecentRepoInfo {
   lastOpenedAt: string;
 }
 
+// ---- Project templates ----
+
+/** A local codebase registered as a starting point for new projects. */
+export interface TemplateInfo {
+  id: string;
+  name: string;
+  path: string;
+  description?: string;
+  createdAt: string;
+  /** False when the folder has been moved or deleted since it was registered. */
+  exists: boolean;
+  /** Git repos are copied via `git ls-files`, honouring their .gitignore. */
+  isGitRepo: boolean;
+}
+
+export interface GitHubAccountInfo {
+  login: string;
+  host: string;
+  /** The account gh currently treats as active — used as the default choice. */
+  active: boolean;
+}
+
+/** A repository on GitHub, as listed on the clone screen. */
+export interface GitHubRepoInfo {
+  nameWithOwner: string;
+  owner: string;
+  description: string;
+  isPrivate: boolean;
+  isFork: boolean;
+  pushedAt: string;
+  sshUrl: string;
+}
+
+export type RepoVisibility = "private" | "public" | "internal";
+
+export interface CreateProjectRequest {
+  /** Omitted for an empty project — the folder is created with nothing in it. */
+  templateId?: string;
+  name: string;
+  parentDir: string;
+  initGit: boolean;
+  commit: boolean;
+  commitMessage?: string;
+  github?: {
+    account: string;
+    owner: string;
+    visibility: RepoVisibility;
+    description?: string;
+    push: boolean;
+  };
+}
+
+/**
+ * One stage of project creation. Steps after the file copy can fail without
+ * failing the whole operation — the project still exists locally — so the modal
+ * reports them individually.
+ */
+export interface CreateProjectStep {
+  label: string;
+  status: "ok" | "failed";
+  detail?: string;
+}
+
+export interface CreateProjectResult {
+  repo: RepoInfo;
+  steps: CreateProjectStep[];
+}
+
+/** Global preferences persisted in ~/.buildover/prefs.json. */
+export interface AppPrefs {
+  /** Where the last project was created or cloned; prefilled next time. */
+  lastProjectLocation?: string;
+}
+
 export interface ChatSummary {
   id: string;
   title: string;

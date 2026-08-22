@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { createPortal } from "react-dom";
-import { api } from "../lib/api.js";
+import { useState } from "react";
+import { NewProjectModal } from "./NewProjectModal.js";
 import type { RecentRepoInfo } from "../types.js";
 
 interface Props {
@@ -17,185 +16,26 @@ export function OpenRepoMenu({
   onForgetRecent,
 }: Props) {
   const [open, setOpen] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [cloneUrl, setCloneUrl] = useState("");
-  const [coords, setCoords] = useState<{ top: number; left: number } | null>(
-    null,
-  );
-  const ref = useRef<HTMLDivElement>(null);
-  const triggerRef = useRef<HTMLButtonElement>(null);
-  const popoverRef = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const onDocClick = (e: MouseEvent) => {
-      const target = e.target;
-      if (!(target instanceof Node)) return;
-      if (ref.current?.contains(target)) return;
-      if (popoverRef.current?.contains(target)) return;
-      setOpen(false);
-    };
-    document.addEventListener("mousedown", onDocClick);
-    return () => document.removeEventListener("mousedown", onDocClick);
-  }, [open]);
-
-  useEffect(() => {
-    if (!open) {
-      setCoords(null);
-      setCloneUrl("");
-      setError(null);
-      return;
-    }
-    const update = () => {
-      const rect = triggerRef.current?.getBoundingClientRect();
-      if (!rect) return;
-      setCoords({ top: rect.bottom + 4, left: rect.left });
-    };
-    update();
-    window.addEventListener("resize", update);
-    window.addEventListener("scroll", update, true);
-    return () => {
-      window.removeEventListener("resize", update);
-      window.removeEventListener("scroll", update, true);
-    };
-  }, [open]);
-
-  const handleBrowse = async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      const path = await api.pickFolder();
-      if (path) {
-        await onOpen(path);
-        setOpen(false);
-      }
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleRecent = async (path: string) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await onOpen(path);
-      setOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const handleClone = async () => {
-    const url = cloneUrl.trim();
-    if (!url) {
-      setError("Enter a repository URL first");
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
-      const parentDir = await api.pickFolder();
-      if (!parentDir) return; // user cancelled the folder picker
-      const repo = await api.cloneRepo(url, parentDir);
-      await onOpen(repo.path);
-      setOpen(false);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-
-  const filteredRecents = recents.filter((r) => !openPaths.includes(r.path));
-
-  const popover =
-    open && coords
-      ? createPortal(
-          <div
-            ref={popoverRef}
-            className="open-repo-popover"
-            role="menu"
-            style={{ top: coords.top, left: coords.left }}
-          >
-            <button
-              type="button"
-              className="open-repo-browse"
-              onClick={handleBrowse}
-              disabled={busy}
-            >
-              Browse for folder…
-            </button>
-            <div className="open-repo-clone">
-              <input
-                className="open-repo-clone-input"
-                type="text"
-                placeholder="Clone from URL (git@github.com:org/repo.git)"
-                value={cloneUrl}
-                onChange={(e) => setCloneUrl(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && !busy) void handleClone();
-                }}
-                disabled={busy}
-              />
-              <button
-                type="button"
-                className="open-repo-clone-submit"
-                onClick={handleClone}
-                disabled={busy || !cloneUrl.trim()}
-              >
-                {busy ? "Cloning…" : "Clone"}
-              </button>
-            </div>
-            {filteredRecents.length > 0 && (
-              <div className="open-repo-section-label">Recent</div>
-            )}
-            {filteredRecents.map((r) => (
-              <div key={r.path} className="open-repo-recent-row">
-                <button
-                  type="button"
-                  className="open-repo-recent"
-                  onClick={() => handleRecent(r.path)}
-                  disabled={busy}
-                  title={r.path}
-                >
-                  <span className="open-repo-recent-name">{r.name}</span>
-                  <span className="open-repo-recent-path">{r.path}</span>
-                </button>
-                <button
-                  type="button"
-                  className="open-repo-forget"
-                  onClick={() => onForgetRecent(r.path)}
-                  title="Forget this recent"
-                  aria-label="Forget"
-                >
-                  ×
-                </button>
-              </div>
-            ))}
-            {error && <div className="open-repo-error">{error}</div>}
-          </div>,
-          document.body,
-        )
-      : null;
 
   return (
-    <div className="open-repo-menu" ref={ref}>
+    <div className="open-repo-menu">
       <button
-        ref={triggerRef}
         type="button"
         className="repo-tab open-repo-trigger"
-        onClick={() => setOpen((v) => !v)}
-        disabled={busy}
-        title="Open a repository"
+        onClick={() => setOpen(true)}
+        title="Clone, open or create a project"
       >
-        + Open repo
+        + New project
       </button>
-      {popover}
+      {open && (
+        <NewProjectModal
+          recents={recents}
+          openPaths={openPaths}
+          onClose={() => setOpen(false)}
+          onOpen={onOpen}
+          onForgetRecent={onForgetRecent}
+        />
+      )}
     </div>
   );
 }

@@ -273,21 +273,21 @@ export async function createChat(
 // so two concurrent listChats calls can't both create one.
 export async function ensureCoordinatorChat(
   repoPath: string,
-): Promise<ChatRecord> {
+): Promise<ChatSummary> {
   return withChatLock(repoPath, "__coordinator_ensure__", async () => {
-    const dir = chatsDir(repoPath);
-    let entries: string[] = [];
-    try {
-      entries = await readdir(dir);
-    } catch (err: any) {
-      if (err?.code !== "ENOENT") throw err;
-    }
-    for (const entry of entries) {
-      if (!entry.endsWith(".json") || entry === "index.json") continue;
-      if (entry.includes(".tmp-")) continue;
-      const record = await readChat(repoPath, entry.slice(0, -".json".length)).catch(
-        () => null,
-      );
+    const index = await ensureIndexLoaded(repoPath);
+    await reconcileIndexWithDisk(repoPath, index);
+    const coordinator = [...index.values()].find(
+      (summary) => summary.kind === "coordinator",
+    );
+    if (coordinator) {
+      // This is the normal list-chats path: the summary proves the coordinator
+      // exists, and its canonical title needs no full-transcript read.
+      if (coordinator.title === "Coordinator") return coordinator;
+      // Read only the one transcript identified by the lightweight index. The
+      // old implementation parsed every chat file on every sidebar request.
+      // A read is only needed to self-heal a legacy renamed coordinator.
+      const record = await readChat(repoPath, coordinator.id).catch(() => null);
       if (record?.kind === "coordinator") {
         // Self-heal: the coordinator is permanently titled "Coordinator".
         // Repairs chats renamed before setTitle learned to refuse renames.
@@ -296,15 +296,19 @@ export async function ensureCoordinatorChat(
           record.titleAuto = false;
           await writeChat(repoPath, record);
         }
-        return record;
+        return toSummary(record);
       }
+      // Do not let a stale/corrupt indexed entry prevent recreation.
+      index.delete(coordinator.id);
+      schedulePersistIndex(repoPath, index);
     }
-    return createChat(repoPath, {
+    const created = await createChat(repoPath, {
       model: DEFAULT_MODEL,
       permissionMode: "bypassPermissions",
       title: "Coordinator",
       kind: "coordinator",
     });
+    return toSummary(created);
   });
 }
 
@@ -314,24 +318,14 @@ export async function ensureCoordinatorChat(
 export async function findCoordinatorChat(
   repoPath: string,
 ): Promise<ChatRecord | null> {
-  const dir = chatsDir(repoPath);
-  let entries: string[] = [];
-  try {
-    entries = await readdir(dir);
-  } catch (err: any) {
-    if (err?.code !== "ENOENT") throw err;
-    return null;
-  }
-  for (const entry of entries) {
-    if (!entry.endsWith(".json") || entry === "index.json") continue;
-    if (entry.includes(".tmp-")) continue;
-    const record = await readChat(
-      repoPath,
-      entry.slice(0, -".json".length),
-    ).catch(() => null);
-    if (record?.kind === "coordinator") return record;
-  }
-  return null;
+  const index = await ensureIndexLoaded(repoPath);
+  await reconcileIndexWithDisk(repoPath, index);
+  const coordinator = [...index.values()].find(
+    (summary) => summary.kind === "coordinator",
+  );
+  if (!coordinator) return null;
+  const record = await readChat(repoPath, coordinator.id).catch(() => null);
+  return record?.kind === "coordinator" ? record : null;
 }
 
 export async function readChat(
@@ -364,6 +358,27 @@ export async function appendEvent(
   return withChatLock(repoPath, chatId, async () => {
     const record = await readChat(repoPath, chatId);
     if (!record) return null;
+    // Reconnect/replay races can deliver the exact same SDK event twice. Keep
+    // persistence idempotent while still preserving legacy Codex events that
+    // reused a UUID for different content.
+    if (event.type === "assistant" || event.type === "user_tool_results") {
+      const serializedContent = JSON.stringify(event.content);
+      const duplicate = record.events.some(
+        (existing) =>
+          existing.type === event.type &&
+          existing.uuid === event.uuid &&
+          JSON.stringify(existing.content) === serializedContent,
+      );
+      if (duplicate) return record;
+    } else if (
+      event.type === "user_message" &&
+      record.events.some(
+        (existing) =>
+          existing.type === "user_message" && existing.id === event.id,
+      )
+    ) {
+      return record;
+    }
     record.events.push(event);
     applyEventToMeta(record, event);
     record.status = computeStatus(record);

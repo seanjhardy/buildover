@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ChevronRight, ChevronDown, Search, X } from "lucide-react";
-import { fileApi, type FileSearchResult } from "../lib/api.js";
+import { fileApi, type DirEntry, type FileSearchResult } from "../lib/api.js";
 import type { FileEntry } from "../hooks/useFilesChanged.js";
 
 // ── Icon helpers ────────────────────────────────────────────────────────────────
@@ -91,111 +91,97 @@ export function resolveFileIcon(name: string): string {
   return EXT_MAP[ext] ? `${BASE}/${EXT_MAP[ext]}` : `${BASE}/file.png`;
 }
 
-function resolveFolderIcon(label: string, open: boolean): string {
-  const segment = label.split("/")[0]!.toLowerCase();
-  const pair = FOLDER_MAP[segment];
+function resolveFolderIcon(name: string, open: boolean): string {
+  const pair = FOLDER_MAP[name.toLowerCase()];
   if (pair) return `${BASE}/folders/${open ? pair[1] : pair[0]}`;
   return `${BASE}/folders/${open ? "default-open.svg" : "default.svg"}`;
 }
 
-// ── Tree data structures ───────────────────────────────────────────────────────
-
-interface ExplorerFileNode { kind: "file"; name: string; relPath: string }
-interface ExplorerDirNode  { kind: "dir";  label: string; children: ExplorerTreeNode[] }
-type ExplorerTreeNode = ExplorerDirNode | ExplorerFileNode;
-
-function insertExplorerEntry(root: ExplorerDirNode, parts: string[], relPath: string): void {
-  if (parts.length === 1) { root.children.push({ kind: "file", name: parts[0]!, relPath }); return; }
-  const dirName = parts[0]!;
-  let dir = root.children.find((c): c is ExplorerDirNode => c.kind === "dir" && c.label === dirName);
-  if (!dir) { dir = { kind: "dir", label: dirName, children: [] }; root.children.push(dir); }
-  insertExplorerEntry(dir, parts.slice(1), relPath);
-}
-
-function collapseExplorerSingletons(node: ExplorerDirNode): ExplorerDirNode {
-  const collapsed = node.children.map((c) => c.kind === "dir" ? collapseExplorerSingletons(c) : c);
-  if (collapsed.length === 1 && collapsed[0]!.kind === "dir") {
-    const only = collapsed[0] as ExplorerDirNode;
-    return { kind: "dir", label: node.label === "" ? only.label : `${node.label}/${only.label}`, children: only.children };
-  }
-  return { ...node, children: collapsed };
-}
-
-function buildExplorerTree(files: string[]): ExplorerTreeNode[] {
-  const root: ExplorerDirNode = { kind: "dir", label: "", children: [] };
-  for (const relPath of files) {
-    const parts = relPath.split("/").filter(Boolean);
-    if (parts.length === 0) continue;
-    insertExplorerEntry(root, parts, relPath);
-  }
-  function sortChildren(children: ExplorerTreeNode[]): ExplorerTreeNode[] {
-    return [...children].sort((a, b) => {
-      if (a.kind !== b.kind) return a.kind === "dir" ? -1 : 1;
-      const aL = a.kind === "dir" ? a.label : a.name;
-      const bL = b.kind === "dir" ? b.label : b.name;
-      return aL.localeCompare(bL);
-    });
-  }
-  function sortTree(nodes: ExplorerTreeNode[]): ExplorerTreeNode[] {
-    return sortChildren(nodes).map((n) => n.kind === "dir" ? { ...n, children: sortTree(n.children) } : n);
-  }
-  return sortTree(collapseExplorerSingletons(root).children);
-}
-
-// ── Tree rendering ─────────────────────────────────────────────────────────────
+// ── Lazy tree rendering ────────────────────────────────────────────────────────
+// Each directory's contents are fetched the first time it is expanded, so the
+// tree mirrors the repo exactly without ever having to walk it all up front.
 
 const INDENT = 16;
 const BASE_INDENT = 4;
 
-function ExplorerFileNodeRow({
-  node, depth, activeFilePath, openFilePaths, onFileOpen,
-}: {
-  node: ExplorerFileNode; depth: number; activeFilePath: string | null;
-  openFilePaths: Set<string>; onFileOpen: (relPath: string) => void;
-}) {
-  const isActive = activeFilePath === node.relPath;
-  const isOpen   = openFilePaths.has(node.relPath);
+interface TreeCtx {
+  entries: Map<string, DirEntry[]>;
+  errors: Map<string, string>;
+  expanded: Set<string>;
+  onToggleDir: (relPath: string) => void;
+  activeFilePath: string | null;
+  openFilePaths: Set<string>;
+  onFileOpen: (relPath: string) => void;
+}
+
+function ExplorerFileRow({ name, relPath, depth, ctx }: { name: string; relPath: string; depth: number; ctx: TreeCtx }) {
+  const isActive = ctx.activeFilePath === relPath;
+  const isOpen   = ctx.openFilePaths.has(relPath);
   return (
     <div
       className={`files-tree-file files-tree-file--clickable${isActive ? " files-tree-file--active" : ""}`}
       style={{ paddingLeft: BASE_INDENT + depth * INDENT + 20 }}
-      title={node.relPath}
-      onClick={() => onFileOpen(node.relPath)}
+      title={relPath}
+      onClick={() => ctx.onFileOpen(relPath)}
     >
-      <img className="files-tree-icon" src={resolveFileIcon(node.name)} alt="" draggable={false} />
-      <span className={`files-tree-name${isOpen && !isActive ? " files-tree-name--open" : ""}`}>{node.name}</span>
+      <img className="files-tree-icon" src={resolveFileIcon(name)} alt="" draggable={false} />
+      <span className={`files-tree-name${isOpen && !isActive ? " files-tree-name--open" : ""}`}>{name}</span>
     </div>
   );
 }
 
-function ExplorerDirNodeRow({
-  node, depth, activeFilePath, openFilePaths, onFileOpen,
-}: {
-  node: ExplorerDirNode; depth: number; activeFilePath: string | null;
-  openFilePaths: Set<string>; onFileOpen: (relPath: string) => void;
-}) {
-  const [open, setOpen] = useState(depth === 0);
+function ExplorerDirRow({ name, relPath, depth, ctx }: { name: string; relPath: string; depth: number; ctx: TreeCtx }) {
+  const open = ctx.expanded.has(relPath);
   const paddingLeft = BASE_INDENT + depth * INDENT;
-  const guideLeft   = paddingLeft + 8;
   return (
     <div className="files-tree-dir-group">
-      <div className="files-tree-dir files-tree-dir--clickable" onClick={() => setOpen((v) => !v)} style={{ paddingLeft }}>
+      <div
+        className="files-tree-dir files-tree-dir--clickable"
+        onClick={() => ctx.onToggleDir(relPath)}
+        style={{ paddingLeft }}
+        title={relPath}
+      >
         <span className="files-tree-chevron">{open ? <ChevronDown size={11} /> : <ChevronRight size={11} />}</span>
-        <img className="files-tree-icon" src={resolveFolderIcon(node.label, open)} alt="" draggable={false} />
-        <span className="files-tree-dir-name">{node.label}</span>
+        <img className="files-tree-icon" src={resolveFolderIcon(name, open)} alt="" draggable={false} />
+        <span className="files-tree-dir-name">{name}</span>
       </div>
       {open && (
-        <div className="files-tree-children" style={{ "--indent-guide-left": `${guideLeft}px` } as React.CSSProperties}>
-          {node.children.map((child, i) =>
-            child.kind === "dir" ? (
-              <ExplorerDirNodeRow key={i} node={child} depth={depth + 1} activeFilePath={activeFilePath} openFilePaths={openFilePaths} onFileOpen={onFileOpen} />
-            ) : (
-              <ExplorerFileNodeRow key={i} node={child} depth={depth + 1} activeFilePath={activeFilePath} openFilePaths={openFilePaths} onFileOpen={onFileOpen} />
-            ),
-          )}
+        <div className="files-tree-children" style={{ "--indent-guide-left": `${paddingLeft + 8}px` } as React.CSSProperties}>
+          <ExplorerDirContents relPath={relPath} depth={depth + 1} ctx={ctx} />
         </div>
       )}
     </div>
+  );
+}
+
+function ExplorerDirContents({ relPath, depth, ctx }: { relPath: string; depth: number; ctx: TreeCtx }) {
+  const note = (text: string, isError = false) => (
+    <div
+      className={isError ? "files-tree-note files-tree-note--error" : "files-tree-note"}
+      style={{ paddingLeft: BASE_INDENT + depth * INDENT + 20 }}
+    >
+      {text}
+    </div>
+  );
+
+  const error = ctx.errors.get(relPath);
+  if (error) return note(error, true);
+
+  const entries = ctx.entries.get(relPath);
+  if (!entries) return note("Loading…");
+  if (entries.length === 0) return note("empty");
+
+  return (
+    <>
+      {entries.map((entry) => {
+        const childRelPath = relPath ? `${relPath}/${entry.name}` : entry.name;
+        return entry.kind === "dir" ? (
+          <ExplorerDirRow key={childRelPath} name={entry.name} relPath={childRelPath} depth={depth} ctx={ctx} />
+        ) : (
+          <ExplorerFileRow key={childRelPath} name={entry.name} relPath={childRelPath} depth={depth} ctx={ctx} />
+        );
+      })}
+    </>
   );
 }
 
@@ -311,10 +297,12 @@ interface Props {
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function FileExplorerSidebar({ repoPath, hidden, activeFilePath, openFilePaths, onFileOpen, onFileViewerOpen }: Props) {
-  const [files, setFiles]           = useState<string[]>([]);
+  const [dirEntries, setDirEntries] = useState<Map<string, DirEntry[]>>(new Map());
+  const [dirErrors, setDirErrors]   = useState<Map<string, string>>(new Map());
+  const [expanded, setExpanded]     = useState<Set<string>>(new Set());
   const [loading, setLoading]       = useState(false);
-  const [error, setError]           = useState<string | null>(null);
-  const hasLoadedRef                = useRef(false);
+  const expandedRef                 = useRef<Set<string>>(new Set());
+  const requestedRef                = useRef<Set<string>>(new Set());
   const openFilePathsSet            = new Set(openFilePaths);
 
   // ── Search state ─────────────────────────────────────────────────────────────
@@ -346,33 +334,66 @@ export function FileExplorerSidebar({ repoPath, hidden, activeFilePath, openFile
     } catch { /* ignore */ }
   }, [repoPath]);
 
-  // ── File tree loading ─────────────────────────────────────────────────────────
-  const refresh = useCallback(async () => {
+  // ── Lazy per-directory loading ────────────────────────────────────────────────
+  const repoPathRef = useRef(repoPath);
+  repoPathRef.current = repoPath;
+
+  const loadDir = useCallback(async (relPath: string) => {
+    requestedRef.current.add(relPath);
     try {
-      setError(null);
-      const result = await fileApi.listFiles(repoPath);
-      setFiles(result);
+      const entries = await fileApi.listDir(relPath ? `${repoPath}/${relPath}` : repoPath);
+      if (repoPathRef.current !== repoPath) return; // repo switched mid-flight
+      setDirEntries((prev) => new Map(prev).set(relPath, entries));
+      setDirErrors((prev) => {
+        if (!prev.has(relPath)) return prev;
+        const next = new Map(prev);
+        next.delete(relPath);
+        return next;
+      });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      requestedRef.current.delete(relPath);
+      if (repoPathRef.current !== repoPath) return;
+      setDirErrors((prev) => new Map(prev).set(relPath, err instanceof Error ? err.message : String(err)));
     }
   }, [repoPath]);
 
-  useEffect(() => { setFiles([]); setError(null); hasLoadedRef.current = false; }, [repoPath]);
+  // Re-reads the root plus every currently expanded folder, so a refresh picks
+  // up files the agent created without collapsing the user's tree.
+  const refresh = useCallback(async () => {
+    requestedRef.current = new Set();
+    setLoading(true);
+    try {
+      await Promise.all(["", ...expandedRef.current].map(loadDir));
+    } finally {
+      setLoading(false);
+    }
+  }, [loadDir]);
 
   useEffect(() => {
-    if (hasLoadedRef.current) return;
-    hasLoadedRef.current = true;
-    setLoading(true);
-    refresh().finally(() => setLoading(false));
-  }, [refresh]);
+    setDirEntries(new Map());
+    setDirErrors(new Map());
+    setExpanded(new Set());
+    expandedRef.current = new Set();
+    requestedRef.current = new Set();
+  }, [repoPath]);
+
+  useEffect(() => { void refresh(); }, [refresh]);
 
   const wasHiddenRef = useRef(hidden);
   useEffect(() => {
     const becameVisible = wasHiddenRef.current && !hidden;
     wasHiddenRef.current = hidden;
-    if (hidden) return;
     if (becameVisible) void refresh();
   }, [hidden, refresh]);
+
+  const handleToggleDir = useCallback((relPath: string) => {
+    const wasOpen = expandedRef.current.has(relPath);
+    const next = new Set(expandedRef.current);
+    wasOpen ? next.delete(relPath) : next.add(relPath);
+    expandedRef.current = next;
+    setExpanded(next);
+    if (!wasOpen && !requestedRef.current.has(relPath)) void loadDir(relPath);
+  }, [loadDir]);
 
   // ── Debounced search (first page) ────────────────────────────────────────────
   useEffect(() => {
@@ -415,7 +436,17 @@ export function FileExplorerSidebar({ repoPath, hidden, activeFilePath, openFile
     onFileViewerOpen({ path: `${repoPath}/${relPath}`, relPath, op: "edit" });
   };
 
-  const tree = buildExplorerTree(files);
+  const rootEntries = dirEntries.get("");
+  const rootError   = dirErrors.get("");
+  const treeCtx: TreeCtx = {
+    entries: dirEntries,
+    errors: dirErrors,
+    expanded,
+    onToggleDir: handleToggleDir,
+    activeFilePath,
+    openFilePaths: openFilePathsSet,
+    onFileOpen,
+  };
 
   return (
     <div className="sc-sidebar" style={{ display: hidden ? "none" : undefined }} aria-hidden={hidden}>
@@ -475,17 +506,12 @@ export function FileExplorerSidebar({ repoPath, hidden, activeFilePath, openFile
           ) : null
         ) : (
           <>
-            {error && <div className="sc-error">{error}</div>}
-            {!loading && !error && files.length === 0 && <div className="sc-empty">No files found</div>}
-            {!error && files.length > 0 && (
+            {rootError && <div className="sc-error">{rootError}</div>}
+            {!rootError && loading && !rootEntries && <div className="sc-empty">Loading files…</div>}
+            {!rootError && rootEntries?.length === 0 && <div className="sc-empty">This folder is empty</div>}
+            {!rootError && rootEntries && rootEntries.length > 0 && (
               <div className="files-tree">
-                {tree.map((node, i) =>
-                  node.kind === "dir" ? (
-                    <ExplorerDirNodeRow key={i} node={node} depth={0} activeFilePath={activeFilePath} openFilePaths={openFilePathsSet} onFileOpen={onFileOpen} />
-                  ) : (
-                    <ExplorerFileNodeRow key={i} node={node} depth={0} activeFilePath={activeFilePath} openFilePaths={openFilePathsSet} onFileOpen={onFileOpen} />
-                  ),
-                )}
+                <ExplorerDirContents relPath="" depth={0} ctx={treeCtx} />
               </div>
             )}
           </>

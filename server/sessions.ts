@@ -142,11 +142,6 @@ export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void
 
 const CODEX_FALLBACK_MODEL = "gpt-5.6-luna";
 const CURSOR_FALLBACK_MODEL = toCursorModelId("composer-2.5");
-/** Claude mid-turn resume when the same Claude session will pick the work back up. */
-const USAGE_LIMIT_CONTINUE_PROMPT = "Please continue.";
-/** Used when we switch providers after Claude hits a limit mid-turn. */
-const CROSS_PROVIDER_CONTINUE_PROMPT =
-  "The previous turn was interrupted because the Claude usage limit was reached. Continue the work from where it left off, using the conversation so far as context.";
 
 /** When Claude is exhausted, prefer Cursor subscription, then Codex. */
 async function resolveClaudeUsageFallback(
@@ -191,13 +186,9 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
       if (fallback) {
         console.log(`[usage-queue] Claude blocked, falling back to ${fallback} for ${chatId}`);
         await session.pushStatusForRecord(shifted.record);
-        const fallbackText =
-          shifted.turn.text === USAGE_LIMIT_CONTINUE_PROMPT
-            ? CROSS_PROVIDER_CONTINUE_PROMPT
-            : shifted.turn.text;
         void session
           .runTurn({
-            text: fallbackText,
+            text: shifted.turn.text,
             model: fallback,
             permissionMode: shifted.turn.permissionMode,
             attachments: shifted.turn.attachments,
@@ -251,6 +242,12 @@ class AgentSession {
   private pendingAttentions = new Map<string, PendingAttention>();
   private abort?: AbortController;
   private running = false;
+  // Structural chat operations (edit/resend, branch switch, revert) can arrive
+  // while an aborted turn is still unwinding, or while an invisible compact
+  // turn is running. These waiters let those operations wait for the session
+  // to become genuinely idle instead of racing the final cleanup and returning
+  // a misleading "Chat already running" error.
+  private idleWaiters = new Set<() => void>();
   // True while a silent (auto-compact) turn is in progress. Used to suppress
   // chat_status broadcasts for turn-content events so the client never sees
   // the chat flicker to "running" and back during an invisible compact turn.
@@ -281,6 +278,35 @@ class AgentSession {
 
   isRunning(): boolean {
     return this.running;
+  }
+
+  private waitUntilIdle(): Promise<void> {
+    if (!this.running) return Promise.resolve();
+    return new Promise((resolve) => {
+      this.idleWaiters.add(resolve);
+    });
+  }
+
+  private signalIdle(): void {
+    for (const resolve of this.idleWaiters) resolve();
+    this.idleWaiters.clear();
+  }
+
+  private async prepareStructuralOperation(busyMessage: string): Promise<void> {
+    if (!this.running) return;
+
+    // A foreground turn that the user has not stopped is still protected from
+    // destructive history changes. If Stop was already requested, however,
+    // the UI operation should wait for cleanup rather than lose the user's
+    // edit in the narrow abort/finally race. Invisible auto-compaction is also
+    // safe to pre-empt because it has no user-visible output to preserve.
+    if (!this.currentTurnSilent && !this.abort?.signal.aborted) {
+      throw new Error(busyMessage);
+    }
+
+    const idle = this.waitUntilIdle();
+    this.interrupt();
+    await idle;
   }
 
   pendingPermissionList(): {
@@ -454,13 +480,9 @@ class AgentSession {
           origin: args.origin,
           originLabel: args.originLabel,
         };
-    // Fresh user messages that never started should re-run with the original
-    // prompt once capacity returns. Mid-turn retries (isRetry) already had the
-    // user message applied to the provider session, so a short continue prompt
-    // is enough for Claude resume.
     const queuedTurn: QueuedChatTurn = {
       id: makeQueuedTurnId(),
-      text: args.isRetry ? USAGE_LIMIT_CONTINUE_PROMPT : args.text,
+      text: args.text,
       model: args.model,
       permissionMode: args.permissionMode,
       attachments: args.attachments,
@@ -542,8 +564,8 @@ class AgentSession {
       ? null
       : await this.usageBlockForFailure(message, args.model);
     if (usageBlock) {
-      // Prefer falling back to Cursor/Codex immediately instead of parking a
-      // "Please continue." queue entry while another provider still has quota.
+      // Prefer falling back to Cursor/Codex immediately instead of parking the
+      // interrupted request while another provider still has quota.
       if (isClaudeModel(args.model)) {
         const fallback = await resolveClaudeUsageFallback(args.model);
         if (fallback) {
@@ -553,7 +575,6 @@ class AgentSession {
           // pendingUserTurns drains in finally once this.running clears.
           this.pendingUserTurns.unshift({
             ...args,
-            text: CROSS_PROVIDER_CONTINUE_PROMPT,
             model: fallback,
             isRetry: true,
           });
@@ -943,6 +964,12 @@ class AgentSession {
     const emit = (event: RawAgentEvent) => {
       // Tag with this session's chatId before broadcasting / persisting.
       const tagged = { ...event, chatId: this.chatId } as AgentEvent;
+      // Provider runners finish by emitting turn_end before control returns to
+      // this AgentSession. Do not expose that event yet: `this.running` is
+      // still true until the outer finally block has persisted all preceding
+      // output and completed its cleanup. Broadcasting it here made the UI
+      // expose Edit/Resend while the server still rejected them as busy.
+      if (tagged.type === "turn_end") return;
       // Track context usage so we can auto-compact after the turn ends.
       if (tagged.type === "context_usage") {
         this.lastContextUsedTokens = tagged.usedTokens;
@@ -1165,18 +1192,56 @@ class AgentSession {
       const message = err instanceof Error ? err.message : String(err);
       queuedForUsage = await this.finalizeFailure(args, message);
     } finally {
-      this.running = false;
       const wasSilent = this.currentTurnSilent;
+      const wasAborted = this.abort?.signal.aborted === true;
       this.currentTurnSilent = false;
       this.pendingPermissions.clear();
-      const final = await withChatLock(this.repoPath, this.chatId, async () => {
-        const r = await readChat(this.repoPath, this.chatId);
-        if (!r) return null;
-        r.status = computeStatus(r);
-        await writeChat(this.repoPath, r);
-        return r;
-      });
-      if (final) await this.pushStatusFor(final);
+      let final: ChatRecord | null = null;
+      try {
+        // The client must only receive turn_end after every preceding event is
+        // durable and the session is actually available for another operation.
+        // Silent compact turns have no persisted turn_start, so they do not add
+        // a matching terminal event either.
+        if (!wasSilent) {
+          final = await this.record({
+            type: "turn_end",
+            ts: new Date().toISOString(),
+          });
+        } else {
+          final = await withChatLock(this.repoPath, this.chatId, async () => {
+            const r = await readChat(this.repoPath, this.chatId);
+            if (!r) return null;
+            r.status = computeStatus(r);
+            await writeChat(this.repoPath, r);
+            return r;
+          });
+        }
+      } catch (err) {
+        console.warn(
+          `[session] failed to finalize turn for ${this.chatId}:`,
+          err instanceof Error ? err.message : err,
+        );
+      } finally {
+        this.running = false;
+        this.abort = undefined;
+      }
+      if (final) {
+        try {
+          await this.pushStatusFor(final);
+        } catch (err) {
+          console.warn(
+            `[session] failed to publish final status for ${this.chatId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
+      }
+      if (!wasSilent) {
+        this.broadcast({ type: "turn_end", chatId: this.chatId });
+      }
+      // Release structural operations only after subscribers have received
+      // the terminal state, otherwise a fork replay can be overtaken by the
+      // old turn's delayed status/end events.
+      this.signalIdle();
 
       // Auto-compact if the context window is getting full, or if the agent
       // explicitly requested a compact via the ClearContext tool.
@@ -1184,6 +1249,7 @@ class AgentSession {
       // never start a compact turn when we just queued for a usage limit — it
       // would skip the usage check and immediately fail again.
       const shouldCompact =
+        !wasAborted &&
         !queuedForUsage &&
         (this.lastContextUsedTokens >= AUTO_COMPACT_TOKEN_THRESHOLD ||
           this.pendingCompact) &&
@@ -1218,7 +1284,7 @@ class AgentSession {
             !args.nudge &&
             !queuedForUsage &&
             !deferredErrorMessage &&
-            !this.abort.signal.aborted &&
+            !wasAborted &&
             (record?.kind ?? "user") === "subagent" &&
             record?.parentChatId &&
             !parentContacted
@@ -1337,7 +1403,7 @@ class AgentSession {
     model: Model;
     permissionMode: PermissionMode;
   }): Promise<void> {
-    if (this.running) throw new Error("Chat already running");
+    await this.prepareStructuralOperation("Chat already running");
 
     const result = await forkAtMessage(
       this.repoPath,
@@ -1382,7 +1448,9 @@ class AgentSession {
     parentMessageId: string;
     targetBranchId: string;
   }): Promise<void> {
-    if (this.running) throw new Error("Cannot switch branch while agent is running");
+    await this.prepareStructuralOperation(
+      "Cannot switch branch while agent is running",
+    );
 
     const record = await switchBranch(
       this.repoPath,
@@ -1412,7 +1480,9 @@ class AgentSession {
   // Revert file changes and chat history back to just before the given
   // checkpoint, then broadcast the updated record to all subscribers.
   async runRevert(checkpointId: string): Promise<void> {
-    if (this.running) throw new Error("Cannot revert while agent is running");
+    await this.prepareStructuralOperation(
+      "Cannot revert while agent is running",
+    );
 
     const record = await revertToCheckpoint(this.repoPath, this.chatId, checkpointId);
     if (!record) throw new Error("Checkpoint not found");

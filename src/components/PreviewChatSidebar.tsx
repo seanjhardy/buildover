@@ -235,6 +235,7 @@ export function PreviewChatSidebar({
         <MessageList
           turns={agent.turns}
           isStreaming={agent.isStreaming}
+          historyReady={agent.historyReady}
           cwd={agent.cwd ?? repoPath}
           scrollRef={msgScrollRef}
           jumpBarRef={jumpBarRef}

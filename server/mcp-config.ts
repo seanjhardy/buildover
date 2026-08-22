@@ -1,17 +1,33 @@
 /**
- * Reads and writes the user-managed MCP server list from mcp-servers.json
- * in the project root.  This file is read on every agent turn so changes
- * take effect immediately without a server restart.
+ * Reads and writes the user-managed MCP server list from
+ * ~/.buildover/mcp-servers.json.  Stored globally (not per-repo) so installed
+ * servers are available in every repo, independent of the server process's
+ * launch directory.  Read on every agent turn so changes take effect
+ * immediately without a server restart.
  */
-import { readFileSync, writeFileSync, existsSync } from "node:fs";
+import { readFileSync, writeFileSync, existsSync, mkdirSync } from "node:fs";
 import { join } from "node:path";
+import { homedir } from "node:os";
 import type { InstalledMcpServer } from "../src/types.js";
 
-const CONFIG_PATH = join(process.cwd(), "mcp-servers.json");
+const BUILDOVER_HOME = join(homedir(), ".buildover");
+const CONFIG_PATH = join(BUILDOVER_HOME, "mcp-servers.json");
+// Old per-repo location (server launch dir). Migrated into the global file on
+// first read so servers installed before the move aren't lost.
+const LEGACY_PATH = join(process.cwd(), "mcp-servers.json");
 
 export function readInstalledServers(): InstalledMcpServer[] {
   try {
-    if (!existsSync(CONFIG_PATH)) return [];
+    if (!existsSync(CONFIG_PATH)) {
+      if (existsSync(LEGACY_PATH)) {
+        const legacy = JSON.parse(
+          readFileSync(LEGACY_PATH, "utf8")
+        ) as InstalledMcpServer[];
+        writeInstalledServers(legacy);
+        return legacy;
+      }
+      return [];
+    }
     return JSON.parse(readFileSync(CONFIG_PATH, "utf8")) as InstalledMcpServer[];
   } catch {
     return [];
@@ -19,6 +35,7 @@ export function readInstalledServers(): InstalledMcpServer[] {
 }
 
 export function writeInstalledServers(servers: InstalledMcpServer[]): void {
+  mkdirSync(BUILDOVER_HOME, { recursive: true });
   writeFileSync(CONFIG_PATH, JSON.stringify(servers, null, 2), "utf8");
 }
 

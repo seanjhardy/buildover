@@ -555,6 +555,70 @@ async function listSshPrivateKeys(): Promise<string[]> {
 }
 
 /**
+ * Initialise a git repo in `repoPath`, optionally staging everything and making
+ * the first commit. Pass `message = null` to init without committing.
+ */
+export async function gitInitWithCommit(
+  repoPath: string,
+  message: string | null,
+): Promise<void> {
+  await execFileAsync("git", ["init"], { cwd: repoPath });
+  if (message === null) return;
+  await execFileAsync("git", ["add", "-A"], { cwd: repoPath });
+  // --allow-empty so an empty project still gets a first commit to push.
+  await execFileAsync("git", ["commit", "--allow-empty", "-m", message], {
+    cwd: repoPath,
+  });
+}
+
+export async function gitSetRemote(
+  repoPath: string,
+  name: string,
+  url: string,
+): Promise<void> {
+  // A template copy can carry no remotes at all, so `set-url` may fail; add is
+  // the normal path and set-url covers a remote that already exists.
+  await execFileAsync("git", ["remote", "add", name, url], { cwd: repoPath }).catch(
+    () => execFileAsync("git", ["remote", "set-url", name, url], { cwd: repoPath }),
+  );
+}
+
+/**
+ * Push the current branch to origin, setting upstream. Mirrors `cloneRepo`'s
+ * SSH handling: for an SSH remote we try each of the user's keys in turn, since
+ * with multiple GitHub accounts on one machine the default identity is often not
+ * the one that owns the new repo.
+ */
+export async function gitPushInitial(repoPath: string): Promise<void> {
+  const { stdout: remoteUrl } = await execFileAsync(
+    "git",
+    ["remote", "get-url", "origin"],
+    { cwd: repoPath },
+  );
+  const isSsh = !/^https?:\/\//i.test(remoteUrl.trim());
+  const keys = isSsh ? await listSshPrivateKeys() : [];
+  const attempts: (string | null)[] = keys.length > 0 ? keys : [null];
+
+  let lastError: unknown;
+  for (const key of attempts) {
+    const env: NodeJS.ProcessEnv = { ...process.env, GIT_TERMINAL_PROMPT: "0" };
+    if (key) {
+      env.GIT_SSH_COMMAND = `ssh -o IdentitiesOnly=yes -o BatchMode=yes -i "${key}"`;
+    }
+    try {
+      await execFileAsync("git", ["push", "-u", "origin", "HEAD"], {
+        cwd: repoPath,
+        env,
+      });
+      return;
+    } catch (err) {
+      lastError = err;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
  * Clone a git repository into `parentDir`, using the repo name derived from the
  * URL as the destination folder. Returns the absolute destination path.
  *

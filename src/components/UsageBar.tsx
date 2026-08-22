@@ -45,6 +45,15 @@ function windowLabel(seconds: number | undefined, fallback: string): string {
   return `${Math.round(seconds / 86_400)} day`;
 }
 
+function bucketBlocked(bucket: UsageBucket | null | undefined): boolean {
+  if (!bucket || bucket.utilization < 100) return false;
+  // A bucket whose reset time has already passed has effectively reset even if
+  // the provider hasn't refreshed the reported number yet — don't block on it.
+  if (bucket.resetsAt && new Date(bucket.resetsAt).getTime() <= Date.now())
+    return false;
+  return true;
+}
+
 function Bar({
   bucket,
   label,
@@ -101,10 +110,9 @@ export function UsageBar() {
   const claudeBlocked =
     !!usage &&
     [usage.fiveHour, usage.sevenDay, usage.sevenDaySonnet, usage.sevenDayOpus].some(
-      (bucket) => bucket && bucket.utilization >= 100,
+      bucketBlocked,
     );
-  const cursorBlocked =
-    cursorUsage?.total != null && cursorUsage.total.utilization >= 100;
+  const cursorBlocked = bucketBlocked(cursorUsage?.total);
   const codexBlocked = codexUsage?.quotaExceeded === true;
   const isBlocked = claudeBlocked || cursorBlocked || codexBlocked;
 
@@ -121,61 +129,90 @@ export function UsageBar() {
         className="usage-trigger"
         onClick={refresh}
         title="Click to refresh"
-        style={isBlocked ? { color: "var(--app-error)", fontWeight: 600 } : undefined}
+        style={isBlocked ? { fontWeight: 600 } : undefined}
       >
         {error && !usage && !cursorUsage && !codexUsage ? (
           <span style={{ color: "var(--app-error)" }}>usage error</span>
-        ) : isBlocked ? (
-          <>
-            <span style={{ color: "var(--app-error)" }}>⚠ Limit reached</span>
-            {claudeBlocked && session?.resetsAt && (
-              <>
-                <span className="usage-trigger-sep">·</span>
-                <span>Claude {formatTimeUntil(session.resetsAt)}</span>
-              </>
-            )}
-            {cursorBlocked && cursorTotal?.resetsAt && (
-              <>
-                <span className="usage-trigger-sep">·</span>
-                <span>Cursor {formatTimeUntil(cursorTotal.resetsAt)}</span>
-              </>
-            )}
-            {codexBlocked && codexPrimary?.resetsAt && (
-              <>
-                <span className="usage-trigger-sep">·</span>
-                <span>Codex {formatTimeUntil(codexPrimary.resetsAt)}</span>
-              </>
-            )}
-          </>
-        ) : sessionPct == null && cursorPct == null && codexPct == null ? (
+        ) : sessionPct == null &&
+          cursorPct == null &&
+          codexPct == null &&
+          !isBlocked ? (
           <span>{loading ? "loading usage…" : "usage"}</span>
         ) : (
           <>
-            {sessionPct != null && (
-              <span style={{ color: colorFor(sessionPct) }}>
-                Claude {sessionPct}%
-              </span>
-            )}
-            {sessionPct != null && cursorPct != null && (
-              <span className="usage-trigger-sep">·</span>
-            )}
-            {cursorPct != null && (
-              <span
-                className="usage-trigger-cursor"
-                style={{ color: colorFor(cursorPct) }}
-              >
-                <CursorMark />
-                Cursor {cursorPct}%
-              </span>
-            )}
-            {(sessionPct != null || cursorPct != null) && codexPct != null && (
-              <span className="usage-trigger-sep">·</span>
-            )}
-            {codexPct != null && (
-              <span style={{ color: colorFor(codexPct) }}>
-                Codex {codexPct}%
-              </span>
-            )}
+            {(() => {
+              // One chip per provider: a red "⚠ … limit" when that specific
+              // provider is blocked, otherwise its live percentage. This keeps
+              // a Codex/Cursor limit from implying Claude is unavailable.
+              const chips: JSX.Element[] = [];
+              if (claudeBlocked) {
+                chips.push(
+                  <span key="claude" style={{ color: "var(--app-error)" }}>
+                    ⚠ Claude limit
+                    {session?.resetsAt
+                      ? ` · ${formatTimeUntil(session.resetsAt)}`
+                      : ""}
+                  </span>,
+                );
+              } else if (sessionPct != null) {
+                chips.push(
+                  <span key="claude" style={{ color: colorFor(sessionPct) }}>
+                    Claude {sessionPct}%
+                  </span>,
+                );
+              }
+              if (cursorBlocked) {
+                chips.push(
+                  <span
+                    key="cursor"
+                    className="usage-trigger-cursor"
+                    style={{ color: "var(--app-error)" }}
+                  >
+                    <CursorMark />⚠ Cursor limit
+                    {cursorTotal?.resetsAt
+                      ? ` · ${formatTimeUntil(cursorTotal.resetsAt)}`
+                      : ""}
+                  </span>,
+                );
+              } else if (cursorPct != null) {
+                chips.push(
+                  <span
+                    key="cursor"
+                    className="usage-trigger-cursor"
+                    style={{ color: colorFor(cursorPct) }}
+                  >
+                    <CursorMark />
+                    Cursor {cursorPct}%
+                  </span>,
+                );
+              }
+              if (codexBlocked) {
+                chips.push(
+                  <span key="codex" style={{ color: "var(--app-error)" }}>
+                    ⚠ Codex limit
+                    {codexPrimary?.resetsAt
+                      ? ` · ${formatTimeUntil(codexPrimary.resetsAt)}`
+                      : ""}
+                  </span>,
+                );
+              } else if (codexPct != null) {
+                chips.push(
+                  <span key="codex" style={{ color: colorFor(codexPct) }}>
+                    Codex {codexPct}%
+                  </span>,
+                );
+              }
+              return chips.flatMap((chip, i) =>
+                i === 0
+                  ? [chip]
+                  : [
+                      <span key={`sep-${i}`} className="usage-trigger-sep">
+                        ·
+                      </span>,
+                      chip,
+                    ],
+              );
+            })()}
             {loading && <span className="usage-trigger-sep">refreshing…</span>}
           </>
         )}

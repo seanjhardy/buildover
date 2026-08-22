@@ -210,6 +210,8 @@ function savePaused(chatId: string | null, paused: boolean): void {
 
 interface UseAgentReturn {
   turns: ChatTurn[];
+  /** True once the active chat's authoritative replay has arrived. */
+  historyReady: boolean;
   connection: Connection;
   isStreaming: boolean;
   sessionId: string | undefined;
@@ -296,6 +298,7 @@ export function useAgent(
   // persisted queue could fire a message into a turn that is still running
   // server-side (the very thing the queue exists to prevent).
   const [replaySynced, setReplaySynced] = useState(false);
+  const replaySyncedChatIdRef = useRef<string | null>(null);
 
   // Tracks the number of turn_start events that haven't been matched by a
   // turn_end yet. This lets us guard against stale chat_status events (e.g.
@@ -321,6 +324,7 @@ export function useAgent(
   useEffect(() => {
     setLocalQueue(loadQueue(chatId));
     setQueuePaused(loadPaused(chatId));
+    replaySyncedChatIdRef.current = null;
     setReplaySynced(false);
   }, [chatId]);
 
@@ -636,6 +640,7 @@ export function useAgent(
         }
         // else: running and counter > 0 — live signal already correct, leave it.
         // The server streaming state is now known — allow the queue to drain.
+        replaySyncedChatIdRef.current = event.chatId;
         setReplaySynced(true);
       }
       // Note: we intentionally do NOT touch isStreaming for chat_status events.
@@ -897,6 +902,8 @@ export function useAgent(
 
   return {
     turns,
+    historyReady:
+      replaySynced && replaySyncedChatIdRef.current === chatId,
     connection,
     isStreaming,
     sessionId,
@@ -959,6 +966,13 @@ interface Setters {
   requestToToolUseId: Map<string, string>;
 }
 
+// Live events can overlap an authoritative replay during reconnect. Stable
+// event ids make that overlap idempotent instead of appending a second row.
+function appendTurnIfNew(prev: ChatTurn[], turn: ChatTurn): ChatTurn[] {
+  if (prev.some((existing) => existing.id === turn.id)) return prev;
+  return [...prev, turn];
+}
+
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
   switch (event.type) {
     case "chat_replay": {
@@ -1015,9 +1029,8 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       s.setSlashCommands(event.slashCommands ?? []);
       break;
     case "user_message_echo":
-      s.setTurns((prev) => [
-        ...prev,
-        {
+      s.setTurns((prev) =>
+        appendTurnIfNew(prev, {
           kind: "user",
           id: event.id,
           text: event.text,
@@ -1025,20 +1038,26 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
           origin: event.origin,
           originLabel: event.originLabel,
           ts: new Date().toISOString(),
-        },
-      ]);
+        }),
+      );
       break;
     case "assistant":
-      s.setTurns((prev) => [
-        ...prev,
-        { kind: "assistant", id: event.uuid, content: event.content },
-      ]);
+      s.setTurns((prev) =>
+        appendTurnIfNew(prev, {
+          kind: "assistant",
+          id: event.uuid,
+          content: event.content,
+        }),
+      );
       break;
     case "user_tool_results":
-      s.setTurns((prev) => [
-        ...prev,
-        { kind: "tool_results", id: event.uuid, content: event.content },
-      ]);
+      s.setTurns((prev) =>
+        appendTurnIfNew(prev, {
+          kind: "tool_results",
+          id: event.uuid,
+          content: event.content,
+        }),
+      );
       break;
     case "result":
       s.setSessionId(event.sessionId || undefined);
@@ -1166,14 +1185,13 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         event.message !== SERVER_RESTART_ERROR_MSG &&
         !isAbortErrorMessage(event.message)
       ) {
-        s.setTurns((prev) => [
-          ...prev,
-          {
+        s.setTurns((prev) =>
+          appendTurnIfNew(prev, {
             kind: "assistant",
             id: `err-${Date.now()}`,
             content: [{ type: "text", text: `**Error:** ${event.message}` }],
-          },
-        ]);
+          }),
+        );
       }
       break;
     case "turn_start":
@@ -1242,6 +1260,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
 
 function hydrateFromRecord(record: ChatRecord, s: Setters): void {
   const turns: ChatTurn[] = [];
+  const usedTurnIds = new Set<string>();
   let initSeen = false;
 
   // Build a map to track which tool_use blocks need their input updated.
@@ -1310,8 +1329,20 @@ function hydrateFromRecord(record: ChatRecord, s: Setters): void {
     // Skip result events for turns that had no user message — these are
     // silent auto-compact turns whose results should never be shown.
     if (ev.type === "result" && !currentTurnHasUserMessage) continue;
-    const t = chatEventToTurn(ev);
-    if (t) turns.push(t);
+    let t = chatEventToTurn(ev);
+    if (t) {
+      // Older Codex transcripts reused assistant UUIDs on every resumed turn.
+      // Preserve every distinct event, but give colliding rendered rows a
+      // deterministic occurrence suffix so React never aliases their DOM.
+      if (usedTurnIds.has(t.id)) {
+        const baseId = t.id;
+        let occurrence = 2;
+        while (usedTurnIds.has(`${baseId}::${occurrence}`)) occurrence++;
+        t = { ...t, id: `${baseId}::${occurrence}` } as ChatTurn;
+      }
+      usedTurnIds.add(t.id);
+      turns.push(t);
+    }
     if (!initSeen && ev.type === "system_init") {
       initSeen = true;
       s.setSessionId(ev.sessionId || undefined);

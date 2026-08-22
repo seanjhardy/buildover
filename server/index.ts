@@ -151,10 +151,22 @@ import {
   getRepoCollaborators,
   getRepoLabels,
   getStatusFiles,
+  listGitHubAccounts,
+  listGitHubOwners,
+  listGitHubRepos,
 } from "./github.js";
+import {
+  addTemplate,
+  createProjectFromTemplate,
+  listTemplates,
+  removeTemplate,
+  updateTemplate,
+} from "./templates.js";
+import { patchPrefs, readPrefs } from "./prefs.js";
 import type {
   AgentEvent,
   ClientMessage,
+  CreateProjectRequest,
   Model,
   OrchestratorClientMessage,
   OrchestratorEvent,
@@ -602,6 +614,7 @@ app.post("/api/repos/clone", async (req, res) => {
     const url = String(req.body?.url ?? "");
     const parentDir = String(req.body?.parentDir ?? "");
     const dest = await cloneRepo(url, parentDir);
+    await patchPrefs({ lastProjectLocation: parentDir });
     const meta = await ensureRepo(dest);
     await touchRecent(meta);
     res.json({ repo: meta });
@@ -619,6 +632,119 @@ app.delete("/api/repos/recents", async (req, res) => {
     res.json({ ok: true });
   } catch (err) {
     res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- Project templates ----
+app.get("/api/templates", async (_req, res) => {
+  try {
+    res.json({ templates: await listTemplates() });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/templates", async (req, res) => {
+  try {
+    const template = await addTemplate(
+      String(req.body?.path ?? ""),
+      req.body?.name ? String(req.body.name) : undefined,
+      req.body?.description ? String(req.body.description) : undefined,
+    );
+    res.json({ template });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.patch("/api/templates/:id", async (req, res) => {
+  try {
+    await updateTemplate(decodeURIComponent(req.params.id), {
+      ...(req.body?.name !== undefined ? { name: String(req.body.name) } : {}),
+      ...(req.body?.description !== undefined
+        ? { description: String(req.body.description) }
+        : {}),
+    });
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.delete("/api/templates/:id", async (req, res) => {
+  try {
+    await removeTemplate(decodeURIComponent(req.params.id));
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.post("/api/templates/create-project", async (req, res) => {
+  try {
+    const result = await createProjectFromTemplate(
+      req.body as CreateProjectRequest,
+    );
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- GitHub accounts (for creating new remote repos) ----
+app.get("/api/github/accounts", async (_req, res) => {
+  try {
+    res.json({ accounts: await listGitHubAccounts() });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/github/owners", async (req, res) => {
+  try {
+    const account = String(req.query.account ?? "");
+    if (!account) return res.status(400).json({ error: "account required" });
+    res.json({ owners: await listGitHubOwners(account) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+app.get("/api/github/repos", async (req, res) => {
+  try {
+    const account = String(req.query.account ?? "");
+    if (!account) return res.status(400).json({ error: "account required" });
+    const refresh = req.query.refresh === "1";
+    res.json(await listGitHubRepos(account, { refresh }));
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// ---- Preferences ----
+app.get("/api/prefs", async (_req, res) => {
+  try {
+    res.json({ prefs: await readPrefs() });
+  } catch (err) {
+    res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
     });
   }
@@ -1492,6 +1618,42 @@ app.get("/api/file/list", async (req, res) => {
     const files: string[] = [];
     await walkDir(root, root, files);
     res.json({ files });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Single-directory listing (explorer tree, loaded lazily per folder) ----
+// Nothing is hidden except OS metadata turds, so the tree mirrors the real
+// folder structure exactly. Huge dirs stay cheap because they are only read
+// when the user expands them.
+const DIR_LIST_HIDDEN = new Set([".DS_Store", "Thumbs.db", "desktop.ini"]);
+
+app.get("/api/file/dir", async (req, res) => {
+  try {
+    const dirPath = String(req.query.path ?? "");
+    if (!dirPath) throw new Error("path required");
+    if (!pathIsAbsolute(dirPath)) throw new Error("absolute path required");
+    const dir = resolvePath(dirPath);
+    const dirents = await readdir(dir, { withFileTypes: true });
+    const entries = await Promise.all(
+      dirents
+        .filter((e) => !DIR_LIST_HIDDEN.has(e.name))
+        .map(async (e) => {
+          // Dirents report symlinks as neither file nor dir; follow them so
+          // linked folders still expand.
+          const isDir = e.isSymbolicLink()
+            ? ((await fsStat(join(dir, e.name)).catch(() => null))?.isDirectory() ?? false)
+            : e.isDirectory();
+          return { name: e.name, kind: isDir ? ("dir" as const) : ("file" as const) };
+        }),
+    );
+    entries.sort((a, b) =>
+      a.kind !== b.kind
+        ? a.kind === "dir" ? -1 : 1
+        : a.name.localeCompare(b.name, undefined, { sensitivity: "base" }),
+    );
+    res.json({ entries });
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
