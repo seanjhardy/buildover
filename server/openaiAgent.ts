@@ -1,9 +1,9 @@
 /**
  * OpenAI Codex runner.
  *
- * Runs the official Codex CLI in non-interactive JSONL mode. This deliberately
- * delegates authentication, model transport, tools, sandboxing, and session
- * persistence to Codex instead of reimplementing its private Responses API.
+ * Uses Codex app-server over its stdio JSON-RPC transport. Unlike
+ * `codex exec --json`, app-server is bidirectional: Codex can pause a turn,
+ * ask Buildover for structured user input, and continue with the answer.
  */
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
@@ -19,6 +19,14 @@ import type {
 } from "../src/types.js";
 import { readCodexCreds, resolveCodexCommand } from "./codexAuth.js";
 
+type PermissionDecision =
+  | {
+      behavior: "allow";
+      updatedInput?: Record<string, unknown>;
+      updatedPermissions?: unknown[];
+    }
+  | { behavior: "deny"; message: string; interrupt?: boolean };
+
 export interface OpenAIRunArgs {
   prompt: string;
   model: string;
@@ -28,48 +36,101 @@ export interface OpenAIRunArgs {
   attachments?: Attachment[];
   conversationHistory: ChatEvent[];
   emit: (event: RawAgentEvent) => void;
+  requestPermission: (req: {
+    toolName: string;
+    input: Record<string, unknown>;
+    suggestions: unknown[];
+  }) => Promise<PermissionDecision>;
   abortController?: AbortController;
 }
 
-interface CodexUsage {
-  input_tokens?: number;
-  cached_input_tokens?: number;
-  output_tokens?: number;
-  reasoning_output_tokens?: number;
+interface RpcMessage {
+  id?: string | number;
+  method?: string;
+  params?: Record<string, any>;
+  result?: Record<string, any>;
+  error?: { code?: number; message?: string };
 }
 
 interface CodexItem {
   id?: string;
   type?: string;
   text?: string;
+  summary?: string[];
+  content?: string[];
   command?: string;
-  aggregated_output?: string;
-  exit_code?: number | null;
+  cwd?: string;
+  aggregatedOutput?: string | null;
+  exitCode?: number | null;
   status?: string;
-  changes?: Array<{ path?: string; kind?: string }>;
+  changes?: Array<Record<string, unknown>>;
   server?: string;
   tool?: string;
   arguments?: unknown;
   result?: unknown;
+  contentItems?: Array<{ type?: string; text?: string }> | null;
+  success?: boolean | null;
   error?: { message?: string } | string | null;
   query?: string;
-  items?: Array<{ text?: string; completed?: boolean }>;
 }
 
-interface CodexEvent {
-  type?: string;
-  thread_id?: string;
-  usage?: CodexUsage;
-  error?: { message?: string } | string;
-  message?: string;
-  item?: CodexItem;
+interface AskQuestion {
+  id?: string;
+  question: string;
+  header?: string;
+  multiSelect?: boolean;
+  options: Array<{ label: string; description?: string }>;
 }
 
-function contextWindowFor(model: string): number {
-  if (/^gpt-5\.(4|5|6)/.test(model)) return 272_000;
-  if (/^gpt-5/.test(model)) return 400_000;
-  return 200_000;
-}
+const APP_SERVER_SESSION_PREFIX = "appserver:";
+
+const ASK_USER_QUESTION_INSTRUCTIONS =
+  "Buildover provides an AskUserQuestion tool in every collaboration mode. " +
+  "Use it whenever you need a user decision or when the user asks you to show " +
+  "a question UI. Keep each header short and provide 2-3 useful options when " +
+  "possible; Buildover automatically adds a free-form Other option.";
+
+const ASK_USER_QUESTION_TOOL = {
+  type: "function",
+  name: "AskUserQuestion",
+  description:
+    "Ask the user one to three structured questions and wait for their answers. Available in both Default and Plan modes.",
+  inputSchema: {
+    type: "object",
+    additionalProperties: false,
+    properties: {
+      questions: {
+        type: "array",
+        minItems: 1,
+        maxItems: 3,
+        items: {
+          type: "object",
+          additionalProperties: false,
+          properties: {
+            question: { type: "string" },
+            header: { type: "string" },
+            multiSelect: { type: "boolean" },
+            options: {
+              type: "array",
+              maxItems: 3,
+              items: {
+                type: "object",
+                additionalProperties: false,
+                properties: {
+                  label: { type: "string" },
+                  description: { type: "string" },
+                },
+                required: ["label"],
+              },
+            },
+          },
+          required: ["question", "options"],
+        },
+      },
+    },
+    required: ["questions"],
+  },
+};
 
 function buildHistoryPreamble(
   events: ChatEvent[],
@@ -112,7 +173,10 @@ function buildHistoryPreamble(
   ].join("\n");
 }
 
-function appendTextAttachments(prompt: string, attachments?: Attachment[]): string {
+function appendTextAttachments(
+  prompt: string,
+  attachments?: Attachment[],
+): string {
   const textAttachments = (attachments ?? []).filter(
     (attachment) => attachment.contents != null,
   );
@@ -147,10 +211,73 @@ async function materializeImages(
   return { dir, paths };
 }
 
-function errorMessage(event: CodexEvent): string {
-  if (typeof event.error === "string") return event.error;
-  if (event.error?.message) return event.error.message;
-  return event.message || "Codex turn failed";
+function asRecord(value: unknown): Record<string, unknown> {
+  return value && typeof value === "object"
+    ? (value as Record<string, unknown>)
+    : {};
+}
+
+function normalizeOptions(
+  value: unknown,
+): Array<{ label: string; description?: string }> {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((option) => {
+    const record = asRecord(option);
+    if (typeof record.label !== "string" || !record.label.trim()) return [];
+    return [
+      {
+        label: record.label,
+        ...(typeof record.description === "string"
+          ? { description: record.description }
+          : {}),
+      },
+    ];
+  });
+}
+
+function normalizeAskInput(value: unknown): { questions: AskQuestion[] } {
+  const input = asRecord(value);
+  const candidates = Array.isArray(input.questions)
+    ? input.questions
+    : typeof input.question === "string"
+      ? [input]
+      : [];
+  const questions = candidates.flatMap((candidate, index) => {
+    const question = asRecord(candidate);
+    if (typeof question.question !== "string" || !question.question.trim()) {
+      return [];
+    }
+    return [
+      {
+        ...(typeof question.id === "string" ? { id: question.id } : {}),
+        question: question.question,
+        header:
+          typeof question.header === "string"
+            ? question.header
+            : `Q${index + 1}`,
+        multiSelect: question.multiSelect === true,
+        options: normalizeOptions(question.options),
+      },
+    ];
+  });
+  return { questions };
+}
+
+function decisionText(decision: PermissionDecision): string {
+  if (decision.behavior === "deny") {
+    return decision.message || "The user skipped this question.";
+  }
+  const answers = decision.updatedInput?.answers ?? {};
+  return `User answers: ${JSON.stringify(answers)}`;
+}
+
+function contentItemsText(item: CodexItem): string {
+  const text = (item.contentItems ?? [])
+    .filter((content) => content.type === "inputText")
+    .map((content) => content.text ?? "")
+    .filter(Boolean)
+    .join("\n");
+  return text || (item.success === false ? "Tool call failed" : "Tool completed");
 }
 
 function itemError(item: CodexItem): string | null {
@@ -159,8 +286,9 @@ function itemError(item: CodexItem): string | null {
 }
 
 /**
- * Runs one Buildover turn through `codex exec --json`.
- * Returns the Codex thread id used for future `codex exec resume` calls.
+ * Runs one Buildover turn through Codex app-server. Returns a prefixed thread
+ * id so legacy `codex exec` sessions can be migrated once without attempting
+ * to resume them without Buildover's dynamic question tool.
  */
 export async function runOpenAIAgentTurn(
   args: OpenAIRunArgs,
@@ -169,37 +297,51 @@ export async function runOpenAIAgentTurn(
   const command = resolveCodexCommand();
   const creds = await readCodexCreds();
   const images = await materializeImages(args.attachments);
-  const resumeId = args.codexSessionId;
-  let sessionId = resumeId;
+  const storedSessionId = args.codexSessionId;
+  const resumeId = storedSessionId?.startsWith(APP_SERVER_SESSION_PREFIX)
+    ? storedSessionId.slice(APP_SERVER_SESSION_PREFIX.length)
+    : undefined;
+  let threadId = resumeId;
+  let sessionId = resumeId
+    ? `${APP_SERVER_SESSION_PREFIX}${resumeId}`
+    : undefined;
+  let turnId: string | undefined;
   let initialized = false;
   let sawTerminalEvent = false;
+  let lastErrorMessage = "";
   let lastAgentText = "";
   let assistantCounter = 0;
   let toolTurns = 0;
-  // A resumed Codex thread keeps the same session id across every turn. Row
-  // ids based on sessionId + a counter therefore collided on each resume and
-  // made React reuse unrelated messages. Include a per-run nonce.
   const runNonce = `${startedAt.toString(36)}-${Math.random().toString(36).slice(2, 9)}`;
   const startedItems = new Set<string>();
+
+  const publicSessionId = () => sessionId ?? `codex-${Date.now()}`;
 
   const emitAssistant = (content: ContentBlock[]) => {
     if (content.length === 0) return;
     assistantCounter++;
     args.emit({
       type: "assistant",
-      uuid: `${sessionId ?? "codex"}-run-${runNonce}-a-${assistantCounter}`,
-      sessionId: sessionId ?? "codex-pending",
+      uuid: `${publicSessionId()}-run-${runNonce}-a-${assistantCounter}`,
+      sessionId: publicSessionId(),
       content,
     });
   };
 
   const emitInit = () => {
-    if (initialized) return;
+    if (initialized || !sessionId) return;
     initialized = true;
     args.emit({
       type: "system_init",
-      sessionId: sessionId ?? `codex-${Date.now()}`,
-      tools: ["Shell", "Read", "Write", "Edit", "WebSearch"],
+      sessionId,
+      tools: [
+        "Shell",
+        "Read",
+        "Write",
+        "Edit",
+        "WebSearch",
+        "AskUserQuestion",
+      ],
       mcpServers: [],
       cwd: args.cwd,
       model: args.model,
@@ -227,8 +369,8 @@ export async function runOpenAIAgentTurn(
     const id = item.id ?? `codex-tool-${Date.now()}-${toolTurns}`;
     args.emit({
       type: "user_tool_results",
-      uuid: `${sessionId ?? "codex"}-run-${runNonce}-tr-${id}`,
-      sessionId: sessionId ?? "codex-pending",
+      uuid: `${publicSessionId()}-run-${runNonce}-tr-${id}`,
+      sessionId: publicSessionId(),
       content: [
         {
           type: "tool_result",
@@ -241,58 +383,70 @@ export async function runOpenAIAgentTurn(
   };
 
   const onItem = (eventType: string, item: CodexItem) => {
-    const completed = eventType === "item.completed";
+    const completed = eventType === "item/completed";
     switch (item.type) {
-      case "agent_message":
+      case "agentMessage":
         if (completed && item.text) {
           lastAgentText = item.text;
           emitAssistant([{ type: "text", text: item.text }]);
         }
         break;
-      case "reasoning":
+      case "plan":
         if (completed && item.text) {
-          emitAssistant([{ type: "thinking", thinking: item.text }]);
+          lastAgentText = item.text;
+          emitAssistant([{ type: "text", text: item.text }]);
         }
         break;
-      case "command_execution":
-        emitToolStart(item, "Bash", { command: item.command ?? "" });
+      case "reasoning": {
+        const thinking = [...(item.summary ?? []), ...(item.content ?? [])]
+          .filter(Boolean)
+          .join("\n");
+        if (completed && thinking) {
+          emitAssistant([{ type: "thinking", thinking }]);
+        }
+        break;
+      }
+      case "commandExecution":
+        emitToolStart(item, "Bash", {
+          command: item.command ?? "",
+          ...(item.cwd ? { cwd: item.cwd } : {}),
+        });
         if (completed) {
           const output = [
-            item.exit_code != null ? `Exit code: ${item.exit_code}` : "",
-            item.aggregated_output ?? "",
+            item.exitCode != null ? `Exit code: ${item.exitCode}` : "",
+            item.aggregatedOutput ?? "",
           ]
             .filter(Boolean)
             .join("\n");
           emitToolResult(
             item,
             output,
-            item.status === "failed" || (item.exit_code ?? 0) !== 0,
+            item.status === "failed" || (item.exitCode ?? 0) !== 0,
           );
         }
         break;
-      case "file_change":
+      case "fileChange":
         if (completed) {
           const changes = item.changes ?? [];
           emitToolStart(item, "Edit", { changes });
           emitToolResult(
             item,
             changes
-              .map(
-                (change) =>
-                  `${change.kind ?? "update"}: ${change.path ?? "unknown"}`,
-              )
+              .map((change) => {
+                const path = String(change.path ?? "unknown");
+                const kind = String(change.kind ?? "update");
+                return `${kind}: ${path}`;
+              })
               .join("\n"),
-            item.status === "failed",
+            item.status === "failed" || item.status === "declined",
           );
         }
         break;
-      case "mcp_tool_call": {
+      case "mcpToolCall": {
         const name = item.tool
           ? `mcp__${item.server ?? "server"}__${item.tool}`
           : "MCP";
-        emitToolStart(item, name, {
-          arguments: item.arguments ?? {},
-        });
+        emitToolStart(item, name, { arguments: item.arguments ?? {} });
         if (completed) {
           const failure = itemError(item);
           emitToolResult(
@@ -303,74 +457,28 @@ export async function runOpenAIAgentTurn(
         }
         break;
       }
-      case "web_search":
+      case "dynamicToolCall": {
+        const input = item.tool === "AskUserQuestion"
+          ? normalizeAskInput(item.arguments)
+          : asRecord(item.arguments);
+        emitToolStart(item, item.tool ?? "Tool", input);
+        if (completed) {
+          emitToolResult(item, contentItemsText(item), item.success === false);
+        }
+        break;
+      }
+      case "webSearch":
         emitToolStart(item, "WebSearch", { query: item.query ?? "" });
         if (completed) {
           emitToolResult(item, `Search completed: ${item.query ?? ""}`);
         }
         break;
-      case "todo_list":
-        emitAssistant([
-          {
-            type: "tool_use",
-            id: item.id ?? `codex-todo-${Date.now()}`,
-            name: "TodoWrite",
-            input: {
-              todos: (item.items ?? []).map((todo, index) => ({
-                id: `${item.id ?? "todo"}-${index}`,
-                content: todo.text ?? "",
-                status: todo.completed ? "completed" : "pending",
-              })),
-            },
-          },
-        ]);
-        break;
-      case "error":
-        if (completed) {
-          args.emit({
-            type: "error",
-            message: itemError(item) ?? item.text ?? "Codex item failed",
-          });
-        }
-        break;
     }
   };
 
-  const cliArgs = [...command.args, "exec"];
-  if (resumeId) cliArgs.push("resume");
-  cliArgs.push("--json", "--model", args.model);
-  if (!resumeId) cliArgs.push("--color", "never");
-  if (!resumeId) cliArgs.push("--cd", args.cwd);
-  cliArgs.push("--skip-git-repo-check");
-
-  if (args.permissionMode === "bypassPermissions") {
-    cliArgs.push("--dangerously-bypass-approvals-and-sandbox");
-  } else if (resumeId) {
-    cliArgs.push(
-      "--config",
-      `sandbox_mode="${
-        args.permissionMode === "default" || args.permissionMode === "plan"
-          ? "read-only"
-          : "workspace-write"
-      }"`,
-      "--config",
-      'approval_policy="never"',
-    );
-  } else {
-    cliArgs.push(
-      "--sandbox",
-      args.permissionMode === "default" || args.permissionMode === "plan"
-        ? "read-only"
-        : "workspace-write",
-      "--config",
-      'approval_policy="never"',
-    );
-  }
-  for (const path of images.paths) cliArgs.push("--image", path);
-  if (resumeId) cliArgs.push(resumeId);
-  cliArgs.push("-");
-
   let prompt = appendTextAttachments(args.prompt, args.attachments);
+  // Raw ids belong to the old non-interactive runner. Start one app-server
+  // thread and inject Buildover's transcript as context during that migration.
   if (!resumeId) {
     prompt = buildHistoryPreamble(args.conversationHistory, args.prompt) + prompt;
   }
@@ -380,103 +488,342 @@ export async function runOpenAIAgentTurn(
       prompt;
   }
 
-  args.emit({ type: "turn_start" });
   const childEnv: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1" };
-  // A stale OPENAI_API_KEY in Buildover's .env must not silently switch a
-  // ChatGPT-authenticated Codex install to metered API billing.
   if (creds.kind === "chatgpt") delete childEnv.OPENAI_API_KEY;
   else childEnv.OPENAI_API_KEY = creds.apiKey;
-  const child = spawn(command.command, cliArgs, {
-    cwd: args.cwd,
-    env: childEnv,
-    stdio: ["pipe", "pipe", "pipe"],
-  });
+
+  const child = spawn(
+    command.command,
+    [...command.args, "app-server", "--stdio"],
+    {
+      cwd: args.cwd,
+      env: childEnv,
+      stdio: ["pipe", "pipe", "pipe"],
+    },
+  );
 
   let stderr = "";
   child.stderr.on("data", (chunk: Buffer) => {
     stderr += chunk.toString();
     if (stderr.length > 16_000) stderr = stderr.slice(-16_000);
   });
-  child.stdin.end(prompt);
+
+  const send = (message: unknown) => {
+    if (child.stdin.destroyed) return;
+    child.stdin.write(`${JSON.stringify(message)}\n`);
+  };
+
+  let stopTimer: ReturnType<typeof setTimeout> | undefined;
+  const stopServer = () => {
+    if (child.exitCode != null || child.signalCode != null) return;
+    child.kill("SIGTERM");
+    stopTimer = setTimeout(() => {
+      if (child.exitCode == null && child.signalCode == null) child.kill("SIGKILL");
+    }, 1_000);
+    stopTimer.unref?.();
+  };
+
+  const sandbox =
+    args.permissionMode === "bypassPermissions"
+      ? "danger-full-access"
+      : args.permissionMode === "acceptEdits"
+        ? "workspace-write"
+        : "read-only";
+
+  const turnInput: Array<Record<string, unknown>> = [
+    { type: "text", text: prompt, text_elements: [] },
+    ...images.paths.map((path) => ({ type: "localImage", path })),
+  ];
+
+  const startTurn = () => {
+    if (!threadId) return;
+    send({
+      method: "turn/start",
+      id: 3,
+      params: {
+        threadId,
+        input: turnInput,
+        cwd: args.cwd,
+        model: args.model,
+        approvalPolicy: "never",
+      },
+    });
+  };
+
+  const answerBuildoverQuestion = async (
+    rpcId: string | number,
+    itemId: string,
+    rawInput: unknown,
+    nativeQuestions?: Array<Record<string, unknown>>,
+  ) => {
+    const input = normalizeAskInput(rawInput);
+    emitToolStart({ id: itemId }, "AskUserQuestion", input);
+    const decision = await args.requestPermission({
+      toolName: "AskUserQuestion",
+      input,
+      suggestions: [],
+    });
+
+    if (nativeQuestions) {
+      const resolved = decision.behavior === "allow"
+        ? asRecord(decision.updatedInput?.answers)
+        : {};
+      const answers: Record<string, { answers: string[] }> = {};
+      for (const question of nativeQuestions) {
+        const id = typeof question.id === "string" ? question.id : "";
+        const text =
+          typeof question.question === "string" ? question.question : "";
+        if (!id) continue;
+        const value = resolved[text];
+        answers[id] = {
+          answers: Array.isArray(value)
+            ? value.map(String)
+            : value == null || value === ""
+              ? []
+              : [String(value)],
+        };
+      }
+      send({ id: rpcId, result: { answers } });
+      emitToolResult(
+        { id: itemId },
+        decisionText(decision),
+        decision.behavior === "deny",
+      );
+      return;
+    }
+
+    send({
+      id: rpcId,
+      result: {
+        contentItems: [{ type: "inputText", text: decisionText(decision) }],
+        // A Skip is still a valid answer to the dynamic tool. Returning a
+        // successful textual result lets Codex continue instead of failing the turn.
+        success: true,
+      },
+    });
+  };
+
+  const handleServerRequest = async (message: RpcMessage) => {
+    if (message.id == null || !message.method) return;
+    if (message.method === "item/tool/call") {
+      const params = message.params ?? {};
+      if (params.tool === "AskUserQuestion") {
+        await answerBuildoverQuestion(
+          message.id,
+          String(params.callId ?? `codex-question-${Date.now()}`),
+          params.arguments,
+        );
+        return;
+      }
+      send({
+        id: message.id,
+        result: {
+          contentItems: [
+            { type: "inputText", text: `Unsupported dynamic tool: ${params.tool}` },
+          ],
+          success: false,
+        },
+      });
+      return;
+    }
+    if (message.method === "item/tool/requestUserInput") {
+      const params = message.params ?? {};
+      const nativeQuestions = Array.isArray(params.questions)
+        ? (params.questions as Array<Record<string, unknown>>)
+        : [];
+      await answerBuildoverQuestion(
+        message.id,
+        String(params.itemId ?? `codex-question-${Date.now()}`),
+        { questions: nativeQuestions },
+        nativeQuestions,
+      );
+      return;
+    }
+    if (message.method === "item/commandExecution/requestApproval") {
+      send({ id: message.id, result: { decision: "decline" } });
+      return;
+    }
+    if (message.method === "item/fileChange/requestApproval") {
+      send({ id: message.id, result: { decision: "decline" } });
+      return;
+    }
+    send({
+      id: message.id,
+      error: { code: -32601, message: `Unsupported server request: ${message.method}` },
+    });
+  };
 
   const onAbort = () => {
-    try {
-      child.kill("SIGTERM");
-    } catch {
-      // Process may already have exited.
+    if (threadId && turnId) {
+      send({
+        method: "turn/interrupt",
+        id: 4,
+        params: { threadId, turnId },
+      });
+      const timer = setTimeout(stopServer, 750);
+      timer.unref?.();
+    } else {
+      stopServer();
     }
   };
   args.abortController?.signal.addEventListener("abort", onAbort);
+
+  args.emit({ type: "turn_start" });
 
   try {
     await new Promise<void>((resolve, reject) => {
       const lines = createInterface({ input: child.stdout });
       lines.on("line", (line) => {
         if (!line.trim()) return;
-        let event: CodexEvent;
+        let message: RpcMessage;
         try {
-          event = JSON.parse(line) as CodexEvent;
+          message = JSON.parse(line) as RpcMessage;
         } catch {
           return;
         }
 
-        if (event.type === "thread.started" && event.thread_id) {
-          sessionId = event.thread_id;
-          emitInit();
+        if (message.method && message.id != null) {
+          void handleServerRequest(message).catch((error) => {
+            send({
+              id: message.id,
+              error: {
+                code: -32603,
+                message: error instanceof Error ? error.message : String(error),
+              },
+            });
+          });
           return;
         }
-        emitInit();
+
+        if (message.error && message.id != null) {
+          sawTerminalEvent = true;
+          lastErrorMessage = message.error.message ?? "Codex app-server request failed";
+          args.emit({ type: "error", message: lastErrorMessage });
+          stopServer();
+          return;
+        }
+
+        if (message.id === 1) {
+          send({ method: "initialized" });
+          if (resumeId) {
+            send({
+              method: "thread/resume",
+              id: 2,
+              params: {
+                threadId: resumeId,
+                model: args.model,
+                cwd: args.cwd,
+                approvalPolicy: "never",
+                sandbox,
+                developerInstructions: ASK_USER_QUESTION_INSTRUCTIONS,
+                excludeTurns: true,
+              },
+            });
+          } else {
+            send({
+              method: "thread/start",
+              id: 2,
+              params: {
+                model: args.model,
+                cwd: args.cwd,
+                approvalPolicy: "never",
+                sandbox,
+                developerInstructions: ASK_USER_QUESTION_INSTRUCTIONS,
+                dynamicTools: [ASK_USER_QUESTION_TOOL],
+              },
+            });
+          }
+          return;
+        }
+
+        if (message.id === 2 && message.result?.thread?.id) {
+          threadId = String(message.result.thread.id);
+          sessionId = `${APP_SERVER_SESSION_PREFIX}${threadId}`;
+          emitInit();
+          startTurn();
+          return;
+        }
+
+        if (message.id === 3 && message.result?.turn?.id) {
+          turnId = String(message.result.turn.id);
+          return;
+        }
+
+        if (message.method === "turn/started") {
+          turnId = String(message.params?.turn?.id ?? turnId ?? "");
+          return;
+        }
 
         if (
-          event.type === "item.started" ||
-          event.type === "item.updated" ||
-          event.type === "item.completed"
+          message.method === "item/started" ||
+          message.method === "item/completed"
         ) {
-          if (event.item) onItem(event.type, event.item);
+          const item = message.params?.item as CodexItem | undefined;
+          if (item) onItem(message.method, item);
           return;
         }
 
-        if (event.type === "turn.completed") {
-          sawTerminalEvent = true;
-          const usage = event.usage ?? {};
-          const inputTokens = usage.input_tokens ?? 0;
-          const outputTokens = usage.output_tokens ?? 0;
-          const contextWindowSize = contextWindowFor(args.model);
-          const usedTokens = inputTokens + outputTokens;
+        if (message.method === "thread/tokenUsage/updated") {
+          const usage = message.params?.tokenUsage;
+          const total = usage?.total ?? {};
+          const usedTokens = Number(total.totalTokens ?? 0);
+          const contextWindowSize = Number(
+            usage?.modelContextWindow ?? 200_000,
+          );
           args.emit({
             type: "context_usage",
             usedTokens,
             contextWindowSize,
             pct: Math.min(100, (usedTokens / contextWindowSize) * 100),
-            inputTokens,
-            outputTokens,
-            cacheReadTokens: usage.cached_input_tokens ?? 0,
+            inputTokens: Number(total.inputTokens ?? 0),
+            outputTokens: Number(total.outputTokens ?? 0),
+            cacheReadTokens: Number(total.cachedInputTokens ?? 0),
             cacheWriteTokens: 0,
-          });
-          args.emit({
-            type: "result",
-            sessionId: sessionId ?? `codex-${Date.now()}`,
-            subtype: "success",
-            durationMs: Date.now() - startedAt,
-            numTurns: Math.max(1, toolTurns),
-            result: lastAgentText,
           });
           return;
         }
 
-        if (event.type === "turn.failed" || event.type === "error") {
+        if (message.method === "error") {
+          const willRetry = message.params?.willRetry === true;
+          lastErrorMessage =
+            message.params?.error?.message ?? "Codex turn failed";
+          if (!willRetry) args.emit({ type: "error", message: lastErrorMessage });
+          return;
+        }
+
+        if (message.method === "turn/completed") {
           sawTerminalEvent = true;
-          args.emit({ type: "error", message: errorMessage(event) });
+          const turn = message.params?.turn ?? {};
+          const status = String(turn.status ?? "completed");
+          const durationMs = Number(turn.durationMs ?? Date.now() - startedAt);
+          if (status === "failed") {
+            const failure =
+              turn.error?.message || lastErrorMessage || "Codex turn failed";
+            if (failure !== lastErrorMessage) {
+              args.emit({ type: "error", message: failure });
+            }
+          } else {
+            args.emit({
+              type: "result",
+              sessionId: publicSessionId(),
+              subtype: status === "interrupted" ? "interrupted" : "success",
+              durationMs,
+              numTurns: Math.max(1, toolTurns),
+              result: lastAgentText,
+            });
+          }
+          stopServer();
         }
       });
 
       child.once("error", reject);
       child.once("close", (code, signal) => {
-        if (args.abortController?.signal.aborted) {
+        if (stopTimer) clearTimeout(stopTimer);
+        if (args.abortController?.signal.aborted && !sawTerminalEvent) {
           sawTerminalEvent = true;
           args.emit({
             type: "result",
-            sessionId: sessionId ?? `codex-${Date.now()}`,
+            sessionId: publicSessionId(),
             subtype: "interrupted",
             durationMs: Date.now() - startedAt,
             numTurns: toolTurns,
@@ -486,15 +833,33 @@ export async function runOpenAIAgentTurn(
             type: "error",
             message:
               stderr.trim().slice(-1200) ||
-              `Codex exited with ${signal ? `signal ${signal}` : `code ${code}`}`,
+              `Codex app-server exited with ${
+                signal ? `signal ${signal}` : `code ${code}`
+              }`,
           });
         } else if (!sawTerminalEvent) {
           args.emit({
             type: "error",
-            message: "Codex exited without completing the turn.",
+            message: "Codex app-server exited without completing the turn.",
           });
         }
         resolve();
+      });
+
+      send({
+        method: "initialize",
+        id: 1,
+        params: {
+          clientInfo: {
+            name: "buildover",
+            title: "Buildover",
+            version: "0.1.0",
+          },
+          capabilities: {
+            experimentalApi: true,
+            requestAttestation: false,
+          },
+        },
       });
     });
   } finally {

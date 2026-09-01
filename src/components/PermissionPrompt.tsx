@@ -385,7 +385,7 @@ function askQuestionBranch(
   // Each question has its own answer; AskShell holds the state. We thread
   // a ref-like via local component state by lifting into a wrapper.
   return {
-    header: "Claude is asking",
+    header: "The agent is asking",
     body: <AskShell pending={pending} respond={respond} />,
     showRejectInput: false,
     defaultRejectMessage: "User skipped",

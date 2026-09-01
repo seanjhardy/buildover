@@ -17,7 +17,7 @@ export function NotificationButton() {
   return (
     <button
       className="notif-enable-btn"
-      title="Enable notifications when agents finish"
+      title="Enable notifications when agents finish or need input"
       onClick={async () => {
         await enablePush();
         setPerm(Notification.permission);

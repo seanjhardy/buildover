@@ -24,6 +24,25 @@ export interface Usage {
   fetchedAt: string;
 }
 
+export interface ClaudeLoginAttempt {
+  state: "idle" | "running" | "succeeded" | "failed";
+  startedAt?: string;
+  finishedAt?: string;
+  error?: string;
+}
+
+export interface ClaudeAuthStatus {
+  loggedIn: boolean;
+  authMethod?: string;
+  apiProvider?: string;
+  email?: string;
+  orgName?: string;
+  subscriptionType?: string;
+  expiresAt?: string;
+  login: ClaudeLoginAttempt;
+  error?: string;
+}
+
 export interface CursorUsage {
   total: UsageBucket | null;
   auto: UsageBucket | null;
@@ -75,9 +94,25 @@ export function useUsage() {
   const [usage, setUsage] = useState<Usage | null>(null);
   const [cursorUsage, setCursorUsage] = useState<CursorUsage | null>(null);
   const [codexUsage, setCodexUsage] = useState<CodexUsage | null>(null);
+  const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
+  const [claudeError, setClaudeError] = useState<string | null>(null);
+  const [claudeErrorStatus, setClaudeErrorStatus] = useState<number | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inflight = useRef<AbortController | null>(null);
+
+  const refreshClaudeAuth = useCallback(async (): Promise<ClaudeAuthStatus | null> => {
+    try {
+      const res = await fetch("/api/claude/auth/status");
+      if (!res.ok) return null;
+      const status = (await res.json()) as ClaudeAuthStatus;
+      setClaudeAuth(status);
+      if (!status.loggedIn) setUsage(null);
+      return status;
+    } catch {
+      return null;
+    }
+  }, []);
 
   const fetchOnce = useCallback(async () => {
     inflight.current?.abort();
@@ -89,15 +124,22 @@ export function useUsage() {
         fetch("/api/usage", { signal: ctrl.signal }),
         fetch("/api/cursor/usage", { signal: ctrl.signal }),
         fetch("/api/codex/usage", { signal: ctrl.signal }),
+        refreshClaudeAuth(),
       ]);
 
       let nextError: string | null = null;
 
       if (claudeRes.ok) {
         setUsage((await claudeRes.json()) as Usage);
+        setClaudeError(null);
+        setClaudeErrorStatus(null);
       } else {
         const body = await claudeRes.json().catch(() => ({ error: claudeRes.statusText }));
-        nextError = body.error || `Claude usage HTTP ${claudeRes.status}`;
+        const message = body.error || `Claude usage HTTP ${claudeRes.status}`;
+        setClaudeError(message);
+        setClaudeErrorStatus(claudeRes.status);
+        if (claudeRes.status === 401 || claudeRes.status === 403) setUsage(null);
+        nextError = message;
       }
 
       if (cursorRes.ok) {
@@ -145,23 +187,35 @@ export function useUsage() {
         setLoading(false);
       }
     }
-  }, []);
+  }, [refreshClaudeAuth]);
 
   useEffect(() => {
     fetchOnce();
     const id = setInterval(fetchOnce, POLL_MS);
+    // Pick up a login completed in another terminal, or a Keychain refresh
+    // that happened while Buildover was in the background, as soon as the app
+    // becomes active again instead of waiting for the 30-minute usage poll.
+    const handleFocus = () => {
+      void refreshClaudeAuth();
+    };
+    window.addEventListener("focus", handleFocus);
     return () => {
       clearInterval(id);
+      window.removeEventListener("focus", handleFocus);
       inflight.current?.abort();
     };
-  }, [fetchOnce]);
+  }, [fetchOnce, refreshClaudeAuth]);
 
   return {
     usage,
     cursorUsage,
     codexUsage,
+    claudeAuth,
+    claudeError,
+    claudeErrorStatus,
     error,
     loading,
     refresh: fetchOnce,
+    refreshClaudeAuth,
   };
 }

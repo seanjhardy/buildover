@@ -1,4 +1,4 @@
-import { readCreds } from "./anthropicAuth.js";
+import { fetchWithClaudeAuth } from "./anthropicAuth.js";
 
 // Bare Anthropic Messages API client. Uses the same OAuth token the Claude
 // Code CLI stores, so no separate ANTHROPIC_API_KEY is needed. We use this
@@ -23,16 +23,13 @@ export interface CompleteResult {
 
 // One-shot text completion. Throws on transport / auth / non-2xx responses.
 export async function complete(opts: CompleteOptions): Promise<CompleteResult> {
-  const creds = await readCreds();
-
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), opts.timeoutMs ?? 15_000);
 
   try {
-    const res = await fetch(MESSAGES_URL, {
+    const res = await fetchWithClaudeAuth(MESSAGES_URL, {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${creds.accessToken}`,
         "Content-Type": "application/json",
         "anthropic-version": "2023-06-01",
         "anthropic-beta": "oauth-2025-04-20",

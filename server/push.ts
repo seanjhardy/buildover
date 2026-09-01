@@ -10,8 +10,8 @@ const execFileAsync = promisify(execFile);
 
 // ── Web Push for the phone PWA ───────────────────────────────────────────────
 // Lets the laptop notify the iPhone (installed PWA, iOS 16.4+) when an agent
-// finishes a turn — but only while the Mac has been idle for a while, so we
-// don't buzz the phone when the user is sitting right at the desk.
+// finishes a turn or needs input — but only while the Mac has been idle for a
+// while, so we don't buzz the phone when the user is sitting right at the desk.
 
 const DIR = join(homedir(), ".buildover");
 const VAPID_PATH = join(DIR, "vapid.json");
@@ -156,5 +156,24 @@ export async function notifyAgentFinished(
     title: `✅ ${chatTitle || "Agent finished"}`,
     body: `Finished in ${repoName}`,
     tag: "agent-finished",
+  });
+}
+
+// Called as soon as an agent blocks on a question, permission, or other user
+// decision. Uses the same idle gate as completion notifications so a phone is
+// only buzzed when the user appears to be away from the Mac.
+export async function notifyAgentNeedsInput(
+  chatTitle: string,
+  repoName: string,
+  message?: string,
+): Promise<void> {
+  await init();
+  if (subscriptions.length === 0) return;
+  const idle = await getSystemIdleSeconds();
+  if (idle < IDLE_THRESHOLD_SECONDS) return;
+  await sendToAll({
+    title: `❓ ${chatTitle || "Agent needs your input"}`,
+    body: message?.trim() || `Needs your input in ${repoName}`,
+    tag: "agent-needs-input",
   });
 }

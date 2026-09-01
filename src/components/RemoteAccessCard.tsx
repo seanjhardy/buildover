@@ -51,7 +51,7 @@ export function RemoteAccessCard() {
           <ol className="ew-remote-steps">
             <li>Open the URL in <b>Safari</b>.</li>
             <li><b>Share → Add to Home Screen</b> for the branded app.</li>
-            <li>Open it from the icon, tap <b>Notifications</b> to get alerts when agents finish.</li>
+            <li>Open it from the icon, tap <b>Notifications</b> to get alerts when agents finish or need input.</li>
           </ol>
         </>
       ) : (

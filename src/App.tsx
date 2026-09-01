@@ -534,6 +534,38 @@ export default function App() {
     handle?.runCommand(command);
   }, [activeRepo]);
 
+  // Explorer renamed or moved entries on disk — follow them so open tabs keep
+  // pointing at the same files instead of going stale.
+  const handleEntriesMoved = useCallback((moves: Array<{ from: string; to: string }>) => {
+    if (!activeRepo) return;
+    const root = activeRepo.path;
+    const remap = (relPath: string) => {
+      const hit = moves.find(({ from }) => relPath === from || relPath.startsWith(`${from}/`));
+      return hit ? hit.to + relPath.slice(hit.from.length) : null;
+    };
+    setEditorFiles((prev) => prev.map((f) => {
+      const next = remap(f.relPath);
+      return next === null ? f : { ...f, relPath: next, path: `${root}/${next}` };
+    }));
+    setActiveEditorPath((prev) => {
+      if (!prev?.startsWith(`${root}/`)) return prev;
+      const next = remap(prev.slice(root.length + 1));
+      return next === null ? prev : `${root}/${next}`;
+    });
+  }, [activeRepo]);
+
+  const handleEntriesDeleted = useCallback((relPaths: string[]) => {
+    const isGone = (relPath: string) =>
+      relPaths.some((p) => relPath === p || relPath.startsWith(`${p}/`));
+    const remaining = editorFiles.filter((f) => !isGone(f.relPath));
+    setEditorFiles(remaining);
+    setActiveEditorPath((prev) =>
+      prev && remaining.some((f) => f.path === prev)
+        ? prev
+        : (remaining[remaining.length - 1]?.path ?? null),
+    );
+  }, [editorFiles]);
+
   const handleSetupRun = useCallback(async () => {
     if (!activeRepo) return;
     const targetRepoPath = activeRepo.path;
@@ -1042,6 +1074,9 @@ Important rules for commands:
                 }
               }}
               onFileViewerOpen={(entry) => setOpenFile(entry)}
+              onRunCommand={handleRunCommand}
+              onEntriesMoved={handleEntriesMoved}
+              onEntriesDeleted={handleEntriesDeleted}
             />
             <SourceControlSidebar
               repoPath={activeRepo.path}

@@ -333,8 +333,8 @@ export interface ChatRecord {
   createdAt: string;
   updatedAt: string;
   events: ChatEvent[];
-  /** User turns deferred because Claude usage is exhausted. The user message
-   *  is already persisted in events; these entries are the runnable work queue. */
+  /** Durable delayed turns: usage-limit retries and agent-scheduled wakeups.
+   *  Usage retry user messages are already persisted in events. */
   queuedTurns?: QueuedChatTurn[];
   /** When true, queued turns stay visible but will not auto-drain. */
   queuePaused?: boolean;
@@ -367,6 +367,9 @@ export interface QueuedChatTurn {
   text: string;
   model: Model;
   permissionMode: PermissionMode;
+  /** Why this turn is delayed. Older persisted entries predate this field and
+   *  are usage-limit retries. */
+  kind?: "usage_limit" | "scheduled_wakeup";
   attachments?: Attachment[];
   origin?: MessageOrigin;
   originLabel?: string;
@@ -655,6 +658,10 @@ export type AgentEvent =
       chatId: string;
       status: ChatStatus;
       sessionId?: string;
+      /** Included by durable status pushes so the open chat can update its
+       *  delayed-turn UI without waiting for a reconnect/replay. */
+      queuedTurns?: QueuedChatTurn[];
+      queuePaused?: boolean;
     }
   | {
       type: "chat_title";

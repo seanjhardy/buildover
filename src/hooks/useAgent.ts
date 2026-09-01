@@ -421,6 +421,11 @@ export function useAgent(
       setMcpServers(cached.mcpServers);
         setCwd(cached.cwd);
         setStatus(cached.status);
+        // Never carry the previous chat's spinner across the switch — the
+        // cached status is the best guess until the replay lands.
+        setIsStreaming(cached.status === "running");
+        setPendingPermission(undefined);
+        setPendingAttention(undefined);
         setChatPermissionMode(cached.chatPermissionMode);
         // Restore the last known context usage from the in-memory cache so the
         // ring is populated immediately on switch, without waiting for the
@@ -437,6 +442,7 @@ export function useAgent(
         setCwd(undefined);
         setStatus(null);
         setPendingPermission(undefined);
+        setPendingAttention(undefined);
         setChatPermissionMode(undefined);
         setChatContext1m(undefined);
         setContextUsage(null);
@@ -731,6 +737,14 @@ export function useAgent(
       setPendingPermission((p) =>
         p?.requestId === requestId ? undefined : p,
       );
+      // A replay received while the question was open intentionally paused the
+      // stream indicator. Once an answer is submitted, the same provider turn
+      // continues, so restore the open-turn counter until its real turn_end.
+      if (!(result.behavior === "deny" && result.interrupt)) {
+        turnCountRef.current = Math.max(1, turnCountRef.current);
+        setIsStreaming(true);
+        setStatus("running");
+      }
     },
     [],
   );
@@ -1230,6 +1244,8 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
     case "chat_status":
       s.setStatus(event.status);
       if (event.sessionId) s.setSessionId(event.sessionId);
+      if (event.queuedTurns) s.setQueuedTurns(event.queuedTurns);
+      if (event.queuePaused !== undefined) s.setQueuePaused(event.queuePaused);
       // Running ⇔ a turn is in progress for the agent.
       if (event.status === "running") s.setIsStreaming(true);
       else s.setIsStreaming(false);

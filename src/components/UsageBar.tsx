@@ -1,5 +1,7 @@
 import { useState } from "react";
+import { CircleCheck, LogIn, RefreshCw } from "lucide-react";
 import { useUsage, type UsageBucket } from "../hooks/useUsage.js";
+import { api } from "../lib/api.js";
 
 function colorFor(util: number): string {
   if (util >= 80) return "var(--app-error)";
@@ -97,8 +99,21 @@ function CursorMark({ size = 12 }: { size?: number }) {
 }
 
 export function UsageBar() {
-  const { usage, cursorUsage, codexUsage, error, loading, refresh } = useUsage();
+  const {
+    usage,
+    cursorUsage,
+    codexUsage,
+    claudeAuth,
+    claudeError,
+    claudeErrorStatus,
+    error,
+    loading,
+    refresh,
+    refreshClaudeAuth,
+  } = useUsage();
   const [hover, setHover] = useState(false);
+  const [loginBusy, setLoginBusy] = useState(false);
+  const [loginError, setLoginError] = useState<string | null>(null);
 
   const session = usage?.fiveHour;
   const sessionPct = session ? Math.round(session.utilization) : null;
@@ -115,6 +130,34 @@ export function UsageBar() {
   const cursorBlocked = bucketBlocked(cursorUsage?.total);
   const codexBlocked = codexUsage?.quotaExceeded === true;
   const isBlocked = claudeBlocked || cursorBlocked || codexBlocked;
+  const claudeSignedOut = claudeAuth?.loggedIn === false;
+
+  const handleClaudeLogin = async () => {
+    if (loginBusy) return;
+    setLoginBusy(true);
+    setLoginError(null);
+    try {
+      await api.startClaudeLogin();
+      const deadline = Date.now() + 5 * 60_000;
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        const status = await refreshClaudeAuth();
+        if (!status || status.login.state === "running") continue;
+        if (status.login.state === "succeeded" && status.loggedIn) {
+          await refresh();
+          return;
+        }
+        throw new Error(
+          status.login.error ?? "Claude login did not complete. Please try again.",
+        );
+      }
+      throw new Error("Claude login timed out. Please try again.");
+    } catch (err) {
+      setLoginError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setLoginBusy(false);
+    }
+  };
 
   const fetchedAt =
     usage?.fetchedAt ?? cursorUsage?.fetchedAt ?? codexUsage?.fetchedAt;
@@ -129,9 +172,14 @@ export function UsageBar() {
         className="usage-trigger"
         onClick={refresh}
         title="Click to refresh"
-        style={isBlocked ? { fontWeight: 600 } : undefined}
+        style={isBlocked || claudeSignedOut ? { fontWeight: 600 } : undefined}
       >
-        {error && !usage && !cursorUsage && !codexUsage ? (
+        {error &&
+        !usage &&
+        !cursorUsage &&
+        !codexUsage &&
+        !claudeSignedOut &&
+        claudeErrorStatus !== 429 ? (
           <span style={{ color: "var(--app-error)" }}>usage error</span>
         ) : sessionPct == null &&
           cursorPct == null &&
@@ -145,7 +193,13 @@ export function UsageBar() {
               // provider is blocked, otherwise its live percentage. This keeps
               // a Codex/Cursor limit from implying Claude is unavailable.
               const chips: JSX.Element[] = [];
-              if (claudeBlocked) {
+              if (claudeSignedOut) {
+                chips.push(
+                  <span key="claude" style={{ color: "var(--app-error)" }}>
+                    Claude signed out
+                  </span>,
+                );
+              } else if (claudeBlocked) {
                 chips.push(
                   <span key="claude" style={{ color: "var(--app-error)" }}>
                     ⚠ Claude limit
@@ -158,6 +212,12 @@ export function UsageBar() {
                 chips.push(
                   <span key="claude" style={{ color: colorFor(sessionPct) }}>
                     Claude {sessionPct}%
+                  </span>,
+                );
+              } else if (claudeErrorStatus === 429) {
+                chips.push(
+                  <span key="claude" style={{ color: "var(--app-warning)" }}>
+                    Claude usage delayed
                   </span>,
                 );
               }
@@ -233,19 +293,71 @@ export function UsageBar() {
             </div>
           )}
 
-          {usage && (
+          {(usage || claudeAuth || claudeError) && (
             <div className="usage-section">
-              <div
-                className="usage-popover-title"
-                style={{ color: "var(--app-claude-orange)" }}
-              >
-                Claude Code
+              <div className="usage-provider-heading">
+                <div>
+                  <div
+                    className="usage-popover-title"
+                    style={{ color: "var(--app-claude-orange)" }}
+                  >
+                    Claude Code
+                  </div>
+                  <div
+                    className={`usage-auth-state ${claudeAuth?.loggedIn ? "connected" : "disconnected"}`}
+                  >
+                    {claudeAuth?.loggedIn ? (
+                      <CircleCheck size={11} />
+                    ) : (
+                      <span className="usage-auth-dot" />
+                    )}
+                    {claudeAuth?.loggedIn
+                      ? `Signed in${claudeAuth.orgName ? ` · ${claudeAuth.orgName}` : ""}`
+                      : claudeAuth
+                        ? "Signed out"
+                        : "Authentication status unavailable"}
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  className="usage-login-button"
+                  onClick={() => void handleClaudeLogin()}
+                  disabled={loginBusy}
+                >
+                  {loginBusy ? (
+                    <RefreshCw size={12} className="spin" />
+                  ) : (
+                    <LogIn size={12} />
+                  )}
+                  {loginBusy
+                    ? "Finish in browser…"
+                    : claudeAuth?.loggedIn
+                      ? "Re-login"
+                      : "Sign in"}
+                </button>
               </div>
-              {usage.fiveHour && <Bar bucket={usage.fiveHour} label="Session" />}
-              {usage.sevenDay && <Bar bucket={usage.sevenDay} label="Weekly" />}
-              {usage.sevenDayOpus && <Bar bucket={usage.sevenDayOpus} label="Opus" />}
-              {usage.sevenDaySonnet && (
+              {usage?.fiveHour && <Bar bucket={usage.fiveHour} label="Session" />}
+              {usage?.sevenDay && <Bar bucket={usage.sevenDay} label="Weekly" />}
+              {usage?.sevenDayOpus && <Bar bucket={usage.sevenDayOpus} label="Opus" />}
+              {usage?.sevenDaySonnet && (
                 <Bar bucket={usage.sevenDaySonnet} label="Sonnet" />
+              )}
+              {claudeError && (
+                <div
+                  className="usage-note"
+                  style={
+                    claudeErrorStatus === 429
+                      ? { color: "var(--app-warning)" }
+                      : { color: "var(--app-error)" }
+                  }
+                >
+                  {claudeError}
+                </div>
+              )}
+              {loginError && (
+                <div className="usage-note" style={{ color: "var(--app-error)" }}>
+                  {loginError}
+                </div>
               )}
             </div>
           )}
@@ -343,8 +455,10 @@ export function UsageBar() {
           )}
 
           <div className="usage-popover-foot">
-            {usage?.subscriptionType && (
-              <span>claude: {usage.subscriptionType}</span>
+            {(usage?.subscriptionType || claudeAuth?.subscriptionType) && (
+              <span>
+                claude: {usage?.subscriptionType ?? claudeAuth?.subscriptionType}
+              </span>
             )}
             {cursorUsage?.membershipType && (
               <span>cursor: {cursorUsage.membershipType}</span>

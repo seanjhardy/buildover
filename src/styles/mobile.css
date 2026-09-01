@@ -25,6 +25,15 @@
 }
 
 @media (max-width: 768px) {
+  /* Follow the visual viewport when the software keyboard opens. A fixed body
+     otherwise retains the taller layout viewport and hides bottom controls. */
+  .app-shell {
+    position: absolute;
+    inset-inline: 0;
+    top: var(--app-visual-viewport-offset-top, 0px);
+    height: var(--app-visual-viewport-height, 100dvh);
+  }
+
   /* ---- Header: avoid horizontal overflow, respect side insets ---- */
   .app-header {
     padding-left: calc(var(--app-spacing-medium) + env(safe-area-inset-left, 0px));
@@ -218,5 +227,71 @@
     background: var(--app-secondary-background);
     color: var(--app-primary-foreground);
     cursor: pointer;
+  }
+
+  /* ---- AskUserQuestion: preserve transcript space and keep actions usable. ----
+     The prompt occupies at most 65% of the chat column; its question/options
+     scroll independently, while the tabs and Submit/Skip row remain visible. */
+  .permission[data-tool="AskUserQuestion"] {
+    flex: 0 1 auto;
+    min-height: 0;
+    max-height: min(65%, 560px);
+    overflow: hidden;
+    padding: var(--app-spacing-medium) var(--app-spacing-large)
+      calc(var(--app-spacing-medium) + env(safe-area-inset-bottom, 0px));
+  }
+
+  .permission[data-tool="AskUserQuestion"] > .permission-header {
+    flex: 0 0 auto;
+  }
+
+  .permission[data-tool="AskUserQuestion"] > .permission-body {
+    display: flex;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .permission[data-tool="AskUserQuestion"] .ask {
+    flex: 1;
+    min-height: 0;
+    max-width: 100%;
+  }
+
+  .permission[data-tool="AskUserQuestion"] .ask-tabs,
+  .permission[data-tool="AskUserQuestion"] .ask-actions {
+    flex: 0 0 auto;
+  }
+
+  .permission[data-tool="AskUserQuestion"] .ask-tabs {
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    scrollbar-width: none;
+  }
+
+  .permission[data-tool="AskUserQuestion"] .ask-tabs::-webkit-scrollbar {
+    display: none;
+  }
+
+  .permission[data-tool="AskUserQuestion"] .ask-question {
+    flex: 1 1 auto;
+    min-height: 0;
+    margin-bottom: 0;
+    padding-right: 2px;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .permission[data-tool="AskUserQuestion"] .ask-actions {
+    padding-top: var(--app-spacing-small);
+    padding-bottom: 1px;
+    background: var(--app-primary-background);
+  }
+
+  /* There is no Escape key on a phone, and this otherwise consumes valuable
+     keyboard-height space below the actual actions. */
+  .permission[data-tool="AskUserQuestion"] > .permission-hints {
+    display: none;
   }
 }

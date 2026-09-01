@@ -354,6 +354,7 @@ export async function appendEvent(
   repoPath: string,
   chatId: string,
   event: ChatEvent,
+  ensureOpenTurn = false,
 ): Promise<ChatRecord | null> {
   return withChatLock(repoPath, chatId, async () => {
     const record = await readChat(repoPath, chatId);
@@ -379,6 +380,21 @@ export async function appendEvent(
     ) {
       return record;
     }
+    // A live provider is stronger evidence than a stale recovery marker. If
+    // recovery closed the turn while the provider was still alive, reopen it
+    // in the same locked write as the next provider event. This keeps replay
+    // and a subsequent real server restart from mistaking active work for an
+    // already-finished turn.
+    if (ensureOpenTurn) {
+      let openTurn = false;
+      for (const existing of record.events) {
+        if (existing.type === "turn_start") openTurn = true;
+        else if (existing.type === "turn_end") openTurn = false;
+      }
+      if (!openTurn) {
+        record.events.push({ type: "turn_start", ts: event.ts });
+      }
+    }
     record.events.push(event);
     applyEventToMeta(record, event);
     record.status = computeStatus(record);
@@ -397,7 +413,16 @@ export async function enqueueChatTurn(
     const record = await readChat(repoPath, chatId);
     if (!record) return null;
     if (userEvent) record.events.push(userEvent);
-    record.queuedTurns = [...(record.queuedTurns ?? []), turn];
+    // Claude replaces an existing dynamic-loop wakeup when the same loop
+    // schedules its next tick. Mirror that behavior so a manually-triggered
+    // turn cannot leave two copies of the same wakeup behind.
+    const existing = turn.kind === "scheduled_wakeup"
+      ? (record.queuedTurns ?? []).filter(
+          (queued) =>
+            queued.kind !== "scheduled_wakeup" || queued.text !== turn.text,
+        )
+      : (record.queuedTurns ?? []);
+    record.queuedTurns = [...existing, turn];
     record.model = turn.model;
     record.permissionMode = turn.permissionMode;
     record.status = computeStatus(record);
@@ -537,6 +562,12 @@ export function computeStatus(record: ChatRecord): ChatStatus {
       case "result":
         lastResultIndex = i;
         hasUserMessageAfterResult = false;
+        lastTurnWasServerRestartError = false;
+        break;
+      case "assistant":
+      case "user_tool_results":
+        // Output arriving after a recovery marker proves the provider did not
+        // actually die. Do not leave the chat permanently labelled "error".
         lastTurnWasServerRestartError = false;
         break;
       case "error":
@@ -753,7 +784,17 @@ export async function recoverStaleChat(
       else if (ev.type === "turn_end") openTurn = false;
     }
 
-    if (pendingPermissionIds.size === 0 && !openTurn) return false;
+    if (pendingPermissionIds.size === 0 && !openTurn) {
+      // Older recovery races could leave a closed transcript's stored status
+      // at "error" even though later provider output proves the turn survived.
+      // Recompute and persist that metadata so the sidebar index self-heals as
+      // well as the full replay.
+      const correctedStatus = computeStatus(record);
+      if (correctedStatus === record.status) return false;
+      record.status = correctedStatus;
+      await writeChat(repoPath, record);
+      return true;
+    }
 
     const ts = new Date().toISOString();
     for (const requestId of pendingPermissionIds) {

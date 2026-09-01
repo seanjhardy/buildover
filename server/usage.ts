@@ -1,4 +1,4 @@
-import { readCreds } from "./anthropicAuth.js";
+import { fetchWithClaudeAuth, readCreds } from "./anthropicAuth.js";
 
 const USAGE_URL = "https://api.anthropic.com/api/oauth/usage";
 
@@ -29,6 +29,16 @@ export interface UsageLimitBlock {
   resetsAt: string | null;
 }
 
+export class ClaudeUsageError extends Error {
+  constructor(
+    public readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "ClaudeUsageError";
+  }
+}
+
 function parseBucket(raw: any): UsageBucket | null {
   if (!raw || typeof raw.utilization !== "number") return null;
   return {
@@ -39,10 +49,9 @@ function parseBucket(raw: any): UsageBucket | null {
 
 export async function fetchUsage(): Promise<UsageReport> {
   const creds = await readCreds();
-  const res = await fetch(USAGE_URL, {
+  const res = await fetchWithClaudeAuth(USAGE_URL, {
     method: "GET",
     headers: {
-      Authorization: `Bearer ${creds.accessToken}`,
       "Content-Type": "application/json",
       "anthropic-beta": "oauth-2025-04-20",
     },
@@ -50,7 +59,22 @@ export async function fetchUsage(): Promise<UsageReport> {
 
   if (!res.ok) {
     const body = await res.text().catch(() => "");
-    throw new Error(`usage endpoint ${res.status}: ${body.slice(0, 200)}`);
+    if (res.status === 401) {
+      throw new ClaudeUsageError(
+        res.status,
+        "Claude login has expired. Sign in again to reconnect Buildover.",
+      );
+    }
+    if (res.status === 429) {
+      throw new ClaudeUsageError(
+        res.status,
+        "Claude's usage service is temporarily rate limited. Claude is still signed in.",
+      );
+    }
+    throw new ClaudeUsageError(
+      res.status,
+      `Claude usage service returned ${res.status}: ${body.slice(0, 200)}`,
+    );
   }
 
   const raw = (await res.json()) as Record<string, any>;

@@ -317,6 +317,16 @@ export const api = {
 
   getClaudeUsage: () => getJson<import("../hooks/useUsage.js").Usage>("/api/usage"),
 
+  getClaudeAuthStatus: () =>
+    getJson<import("../hooks/useUsage.js").ClaudeAuthStatus>(
+      "/api/claude/auth/status",
+    ),
+
+  startClaudeLogin: () =>
+    send<{
+      login: import("../hooks/useUsage.js").ClaudeLoginAttempt;
+    }>("POST", "/api/claude/auth/login"),
+
   getCodexUsage: () =>
     getJson<import("../hooks/useUsage.js").CodexUsage>("/api/codex/usage"),
 
@@ -522,10 +532,46 @@ export const fileApi = {
   writeFile: (filePath: string, content: string) =>
     send<{ ok: boolean }>('POST', '/api/file/write', { path: filePath, content }),
 
-  searchFiles: (repoPath: string, query: string, excludeExts = "", offset = 0) =>
+  searchFiles: (repoPath: string, query: string, excludeExts = "", offset = 0, scope = "") =>
     getJson<{ matches: FileSearchResult[]; total: number; hasMore: boolean }>(
-      `/api/file/search?path=${encodeURIComponent(repoPath)}&query=${encodeURIComponent(query)}&excludeExts=${encodeURIComponent(excludeExts)}&offset=${offset}`,
+      `/api/file/search?path=${encodeURIComponent(repoPath)}&query=${encodeURIComponent(query)}&excludeExts=${encodeURIComponent(excludeExts)}&offset=${offset}&scope=${encodeURIComponent(scope)}`,
     ),
+
+  // ── Explorer mutations. Paths are repo-relative; the server resolves them
+  // against repoPath and rejects anything escaping it.
+  createEntry: (repoPath: string, relPath: string, kind: "file" | "dir") =>
+    send<{ relPath: string }>("POST", "/api/file/create", { repoPath, relPath, kind }),
+
+  renameEntry: (repoPath: string, from: string, to: string) =>
+    send<{ relPath: string }>("POST", "/api/file/rename", { repoPath, from, to }),
+
+  deleteEntries: (repoPath: string, relPaths: string[], permanent = false) =>
+    send<{ deleted: string[]; trashed: boolean }>("POST", "/api/file/delete", {
+      repoPath, relPaths, permanent,
+    }),
+
+  transferEntries: (repoPath: string, from: string[], toDir: string, mode: "copy" | "move") =>
+    send<{ moves: Array<{ from: string; to: string }> }>(
+      "POST", "/api/file/transfer", { repoPath, from, toDir, mode },
+    ),
+
+  /** Uploads one dropped-in file. `name` may contain slashes for folder drops. */
+  uploadFile: async (repoPath: string, toDir: string, name: string, file: Blob) => {
+    const query = new URLSearchParams({ repoPath, toDir, name });
+    const res = await fetch(`${getApiBase()}/api/file/upload?${query}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: file,
+    });
+    if (!res.ok) throw await httpError(res);
+    return (await res.json()) as { relPath: string };
+  },
+
+  revealEntry: (repoPath: string, relPath: string) =>
+    send<{ ok: boolean }>("POST", "/api/file/reveal", { repoPath, relPath }),
+
+  openExternally: (repoPath: string, relPath: string) =>
+    send<{ ok: boolean }>("POST", "/api/file/open-external", { repoPath, relPath }),
 };
 
 export interface ChangedFile {

@@ -29,7 +29,7 @@ function preview(text: string): string {
 }
 
 function formatTimeUntil(iso: string | null): string {
-  if (!iso) return "when usage resets";
+  if (!iso) return "when capacity returns";
   const now = Date.now();
   const target = new Date(iso).getTime();
   const ms = target - now;
@@ -40,6 +40,7 @@ function formatTimeUntil(iso: string | null): string {
   const mins = totalMin % 60;
   if (days > 0) return `in ${days}d ${hours}h`;
   if (hours > 0) return `in ${hours}h ${mins}m`;
+  if (totalMin === 0) return "in under a minute";
   return `in ${mins}m`;
 }
 
@@ -59,11 +60,13 @@ export function MessageQueue({
 
   if (queue.length === 0 && usageQueuedTurns.length === 0) return null;
 
-  const usageCount = usageQueuedTurns.length;
-  const usageLead = usageQueuedTurns[0] ?? null;
-  const usageResetNote =
-    usageLead && usageCount > 0
-      ? `${usageLead.reason} ${usageCount === 1 ? "1 message is" : `${usageCount} messages are`} queued ${paused ? "and will stay queued until you resume the queue." : `and will send automatically ${formatTimeUntil(usageLead.runAfter)}, unless you pause the queue.`}`
+  const wakeups = usageQueuedTurns.filter((turn) => turn.kind === "scheduled_wakeup");
+  const usageRetries = usageQueuedTurns.filter((turn) => turn.kind !== "scheduled_wakeup");
+  const delayedLead = usageQueuedTurns[0] ?? null;
+  const delayedCount = usageQueuedTurns.length;
+  const delayedNote =
+    delayedLead && delayedCount > 0
+      ? `${delayedLead.reason} ${delayedCount === 1 ? "1 turn is" : `${delayedCount} turns are`} queued ${paused ? "and will stay queued until you resume the queue." : `and will continue automatically ${formatTimeUntil(delayedLead.runAfter)}, unless you pause the queue.`}`
       : null;
 
   const totalCount = queue.length + usageQueuedTurns.length;
@@ -98,8 +101,8 @@ export function MessageQueue({
 
       {!collapsed && (
         <>
-          {usageResetNote && (
-            <div className="message-queue-note">{usageResetNote}</div>
+          {delayedNote && (
+            <div className="message-queue-note">{delayedNote}</div>
           )}
 
           {queue.length > 0 && (
@@ -174,13 +177,13 @@ export function MessageQueue({
             </ul>
           )}
 
-          {usageQueuedTurns.length > 0 && (
+          {wakeups.length > 0 && (
             <div className="message-queue-usage-section">
               <div className="message-queue-section-header">
-                Queued because usage is limited
+                Scheduled wakeups
               </div>
               <ul className="message-queue-list message-queue-list--usage">
-                {usageQueuedTurns.map((turn) => {
+                {wakeups.map((turn) => {
                   const attachmentCount = turn.attachments?.length ?? 0;
                   return (
                     <li
@@ -188,6 +191,45 @@ export function MessageQueue({
                       className="message-queue-item"
                       title={turn.reason}
                     >
+                      <span className="message-queue-badge">Wakeup</span>
+                      {attachmentCount > 0 && (
+                        <span
+                          className="message-queue-attachments"
+                          title={`${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
+                        >
+                          <Paperclip size={12} />
+                          {attachmentCount}
+                        </span>
+                      )}
+                      <span className="message-queue-text">{preview(turn.text)}</span>
+                      <div className="message-queue-item-actions">
+                        <button
+                          type="button"
+                          className="message-queue-action remove"
+                          onClick={() => onRemoveUsageTurn(turn.id)}
+                          title="Remove from queue"
+                          aria-label="Remove from queue"
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            </div>
+          )}
+
+          {usageRetries.length > 0 && (
+            <div className="message-queue-usage-section">
+              <div className="message-queue-section-header">
+                Queued because usage is limited
+              </div>
+              <ul className="message-queue-list message-queue-list--usage">
+                {usageRetries.map((turn) => {
+                  const attachmentCount = turn.attachments?.length ?? 0;
+                  return (
+                    <li key={turn.id} className="message-queue-item" title={turn.reason}>
                       <span className="message-queue-badge">Usage</span>
                       {attachmentCount > 0 && (
                         <span

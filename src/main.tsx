@@ -5,6 +5,33 @@ import { ErrorBoundary } from "./components/ErrorBoundary.js";
 import { ensurePushSubscription } from "./lib/push.js";
 import "./styles/app.css";
 
+// Mobile browsers keep the CSS layout viewport at its full height while the
+// on-screen keyboard shrinks the visual viewport. Expose that visible height
+// to CSS so the fixed PWA shell can resize with the keyboard instead of leaving
+// bottom-docked controls behind it.
+const syncVisualViewport = () => {
+  const viewport = window.visualViewport;
+  const height = viewport?.height ?? window.innerHeight;
+  const offsetTop = viewport?.offsetTop ?? 0;
+  document.documentElement.style.setProperty(
+    "--app-visual-viewport-height",
+    `${Math.round(height)}px`,
+  );
+  document.documentElement.style.setProperty(
+    "--app-visual-viewport-offset-top",
+    `${Math.round(offsetTop)}px`,
+  );
+};
+
+syncVisualViewport();
+window.addEventListener("resize", syncVisualViewport, { passive: true });
+window.visualViewport?.addEventListener("resize", syncVisualViewport, {
+  passive: true,
+});
+window.visualViewport?.addEventListener("scroll", syncVisualViewport, {
+  passive: true,
+});
+
 // If this device already granted notifications (installed phone PWA), make sure
 // it's still registered for push on the server. No-op everywhere else.
 void ensurePushSubscription();

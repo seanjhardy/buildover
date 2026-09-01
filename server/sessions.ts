@@ -30,7 +30,7 @@ import {
   writeChat,
 } from "./chats.js";
 import { basename } from "node:path";
-import { notifyAgentFinished } from "./push.js";
+import { notifyAgentFinished, notifyAgentNeedsInput } from "./push.js";
 import { generateTitle } from "./title.js";
 import { makeCheckpointId, saveSnapshot } from "./snapshots.js";
 import { getUsageLimitBlock, type UsageLimitBlock } from "./usage.js";
@@ -75,6 +75,10 @@ interface PendingAttention {
 const AUTO_COMPACT_TOKEN_THRESHOLD = 1_000_000;
 const USAGE_QUEUE_POLL_MS = 60_000;
 const MAX_TIMER_MS = 2_147_483_647;
+const SCHEDULE_WAKEUP_TOOL = "ScheduleWakeup";
+const AUTONOMOUS_WAKEUP_PROMPT = "<<autonomous-loop-dynamic>>";
+const MIN_WAKEUP_DELAY_SECONDS = 60;
+const MAX_WAKEUP_DELAY_SECONDS = 3_600;
 
 // The parent-facing tools a subagent uses to reach its coordinator. If a
 // subagent turn ends without calling any of these, it gets nudged once.
@@ -95,6 +99,38 @@ function queueTimerKey(repoPath: string, chatId: string): string {
 
 function makeQueuedTurnId(): string {
   return `qt-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function makeWakeupTurnId(): string {
+  return `wake-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+/**
+ * Derive the time Buildover should resume from Claude's successful native
+ * ScheduleWakeup result. The Claude CLI owns that timer only for the lifetime
+ * of its child process, so Buildover has to mirror it before the turn exits.
+ */
+export function wakeupRunAfter(
+  delaySeconds: number,
+  toolResult: string,
+  nowMs = Date.now(),
+): string {
+  const remainingMatch = toolResult.match(/\(in\s+(\d+)s\)/i);
+  if (remainingMatch) {
+    return new Date(nowMs + Number(remainingMatch[1]) * 1_000).toISOString();
+  }
+
+  const rounded = Number.isFinite(delaySeconds)
+    ? Math.round(delaySeconds)
+    : MIN_WAKEUP_DELAY_SECONDS;
+  const clamped = Math.max(
+    MIN_WAKEUP_DELAY_SECONDS,
+    Math.min(MAX_WAKEUP_DELAY_SECONDS, rounded),
+  );
+  // Native ScheduleWakeup fires on a minute boundary. This fallback is only
+  // used if a future CLI changes the human-readable result format.
+  const target = Math.ceil((nowMs + clamped * 1_000) / 60_000) * 60_000;
+  return new Date(target).toISOString();
 }
 
 function delayUntil(runAfter: string | null): number {
@@ -132,7 +168,9 @@ export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void
   const { listChats, readChat } = await import("./chats.js");
   const chats = await listChats(repoPath);
   for (const chat of chats) {
-    if (chat.status !== "queued") continue;
+    // Read the record even if the summary index is stale. A server can stop
+    // after persisting a wakeup but before rebuilding that index, and wakeups
+    // must still recover on the next launch.
     const record = await readChat(repoPath, chat.id).catch(() => null);
     if (record?.queuePaused) continue;
     const next = record?.queuedTurns?.[0];
@@ -176,11 +214,16 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
   const record = await readChat(repoPath, chatId);
   if (!record || record.queuePaused) return;
 
-  const nextModel = record.queuedTurns?.[0]?.model;
+  const nextTurn = record.queuedTurns?.[0];
+  const nextModel = nextTurn?.model;
   const usageBlock = await getProviderUsageLimitBlock(nextModel);
   if (usageBlock) {
     // Claude is exhausted — try running the queued turn via Cursor / Codex.
-    const shifted = await shiftQueuedChatTurn(repoPath, chatId);
+    // A scheduled wakeup must resume the existing Claude session; moving it
+    // to another provider would discard the loop's working context.
+    const shifted = nextTurn?.kind === "scheduled_wakeup"
+      ? null
+      : await shiftQueuedChatTurn(repoPath, chatId);
     if (shifted && isClaudeModel(shifted.turn.model)) {
       const fallback = await resolveClaudeUsageFallback(shifted.turn.model);
       if (fallback) {
@@ -218,7 +261,9 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
       model: shifted.turn.model,
       permissionMode: shifted.turn.permissionMode,
       attachments: shifted.turn.attachments,
-      isRetry: true,
+      // Usage-limit turns already persisted their user message when queued.
+      // Wakeup prompts have not, so persist them now as a system-origin turn.
+      isRetry: shifted.turn.kind !== "scheduled_wakeup",
       origin: shifted.turn.origin,
       originLabel: shifted.turn.originLabel,
     })
@@ -270,6 +315,10 @@ class AgentSession {
   // block treats this the same as hitting the auto-compact threshold — it runs
   // a silent /compact turn immediately after the current turn ends.
   private pendingCompact = false;
+  // Provider callbacks are synchronous, while transcript writes are async.
+  // Serialize those writes so permission requests, answers, output and the
+  // terminal turn_end can never be reordered on disk.
+  private persistenceTail: Promise<void> = Promise.resolve();
 
   constructor(chatId: string, repoPath: string) {
     this.chatId = chatId;
@@ -365,13 +414,15 @@ class AgentSession {
     if (this.running) {
       const userId = `u-${Date.now()}`;
       const ts = new Date().toISOString();
-      void this.record({
-        type: "user_message",
-        id: userId,
-        text: args.text,
-        origin: args.origin,
-        originLabel: args.originLabel,
-        ts,
+      this.enqueuePersistence(async () => {
+        await this.record({
+          type: "user_message",
+          id: userId,
+          text: args.text,
+          origin: args.origin,
+          originLabel: args.originLabel,
+          ts,
+        });
       });
       this.broadcastUserEcho(userId, args.text, undefined, args.origin, args.originLabel);
       // isRetry: the parked turn must not double-persist/echo the message.
@@ -435,18 +486,40 @@ class AgentSession {
     this.broadcast({ ...echo, origin, originLabel } as AgentEvent);
   }
 
-  private async record(event: ChatEvent): Promise<ChatRecord | null> {
-    return appendEvent(this.repoPath, this.chatId, event);
+  private async record(
+    event: ChatEvent,
+    ensureOpenTurn = false,
+  ): Promise<ChatRecord | null> {
+    return appendEvent(this.repoPath, this.chatId, event, ensureOpenTurn);
+  }
+
+  private enqueuePersistence(task: () => Promise<void>): void {
+    const next = this.persistenceTail.then(task);
+    this.persistenceTail = next.catch((err) => {
+      console.warn(
+        `[session] failed to persist event for ${this.chatId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    });
   }
 
   private async pushStatusFor(record: ChatRecord | null): Promise<void> {
     if (!record) return;
-    const status = computeStatus(record);
+    // In-memory liveness is authoritative while this process owns the turn.
+    // A stale recovery marker in the file must not tell connected clients that
+    // a provider which is actively emitting output has stopped.
+    const status = this.running
+      ? this.pendingPermissions.size > 0 || this.pendingAttentions.size > 0
+        ? "awaiting_input"
+        : "running"
+      : computeStatus(record);
     this.broadcast({
       type: "chat_status",
       chatId: this.chatId,
       status,
       sessionId: record.sessionId,
+      queuedTurns: record.queuedTurns ?? [],
+      queuePaused: record.queuePaused === true,
     });
     await rebuildIndex(this.repoPath);
   }
@@ -485,6 +558,7 @@ class AgentSession {
       text: args.text,
       model: args.model,
       permissionMode: args.permissionMode,
+      kind: "usage_limit",
       attachments: args.attachments,
       origin: args.origin,
       originLabel: args.originLabel,
@@ -612,17 +686,21 @@ class AgentSession {
     this.pendingPermissions.delete(requestId);
     // Persist the response on the transcript so future replays show it.
     const ts = new Date().toISOString();
-    void this.record({ type: "permission_response", requestId, result, ts }).then(
-      (rec) => {
-        // Only push a status update while the turn is still running. If the
-        // record() promise resolves after the turn's finally block has already
-        // called pushStatusFor (possible when the agent's last tool use results
-        // in a permission that is resolved just as the turn ends), broadcasting
-        // again here would produce a duplicate "agent_done" chat_status event
-        // and therefore a duplicate notification on the client.
-        if (this.running) this.pushStatusFor(rec);
-      },
-    );
+    this.enqueuePersistence(async () => {
+      const rec = await this.record({
+        type: "permission_response",
+        requestId,
+        result,
+        ts,
+      });
+      // Only push a status update while the turn is still running. If the
+      // record() promise resolves after the turn's finally block has already
+      // called pushStatusFor (possible when the agent's last tool use results
+      // in a permission that is resolved just as the turn ends), broadcasting
+      // again here would produce a duplicate "agent_done" chat_status event
+      // and therefore a duplicate notification on the client.
+      if (this.running) await this.pushStatusFor(rec);
+    });
     pending.resolve(result);
     return true;
   }
@@ -633,6 +711,7 @@ class AgentSession {
   private static readonly ALWAYS_PROMPT_TOOLS = new Set([
     "ExitPlanMode",
     "RequestUserAttention",
+    "AskUserQuestion",
   ]);
 
   // Updates the in-flight turn's permissionMode. When switching to bypass we
@@ -779,7 +858,9 @@ class AgentSession {
         };
         // appendEvent uses withChatLock internally — it will queue behind any
         // lock already held by the in-flight turn (no deadlock, just ordering).
-        void this.record(userEvent);
+        this.enqueuePersistence(async () => {
+          await this.record(userEvent);
+        });
         this.broadcastUserEcho(
           userId,
           args.text,
@@ -961,6 +1042,14 @@ class AgentSession {
     // meant to report back.
     let parentContacted = false;
 
+    interface WakeupCall {
+      delaySeconds: number;
+      prompt: string;
+      reason: string;
+    }
+    const wakeupCalls = new Map<string, WakeupCall>();
+    let confirmedWakeup: (WakeupCall & { runAfter: string }) | null = null;
+
     const emit = (event: RawAgentEvent) => {
       // Tag with this session's chatId before broadcasting / persisting.
       const tagged = { ...event, chatId: this.chatId } as AgentEvent;
@@ -979,6 +1068,42 @@ class AgentSession {
           if (block.type === "tool_use" && PARENT_FACING_TOOLS.has(block.name)) {
             parentContacted = true;
           }
+          if (block.type === "tool_use" && block.name === SCHEDULE_WAKEUP_TOOL) {
+            const input = block.input as Record<string, unknown>;
+            const delaySeconds = Number(input.delaySeconds);
+            const prompt = typeof input.prompt === "string" ? input.prompt : "";
+            if (prompt) {
+              wakeupCalls.set(block.id, {
+                delaySeconds,
+                prompt,
+                reason: typeof input.reason === "string"
+                  ? input.reason
+                  : "Agent requested a scheduled wakeup.",
+              });
+            }
+          }
+        }
+      }
+      if (tagged.type === "user_tool_results") {
+        for (const block of tagged.content) {
+          if (block.type !== "tool_result") continue;
+          const call = wakeupCalls.get(block.tool_use_id);
+          if (!call) continue;
+          wakeupCalls.delete(block.tool_use_id);
+          // Only mirror wakeups the Claude runtime actually accepted. Its
+          // failure response starts with "Wakeup not scheduled".
+          if (
+            !block.is_error &&
+            /\bNext wakeup scheduled\b/i.test(block.content)
+          ) {
+            confirmedWakeup = {
+              ...call,
+              runAfter: wakeupRunAfter(
+                call.delaySeconds,
+                block.content,
+              ),
+            };
+          }
         }
       }
       if (tagged.type === "error") {
@@ -990,8 +1115,66 @@ class AgentSession {
       if (!args.silent || !SILENT_SUPPRESS.has(tagged.type)) {
         this.broadcast(tagged);
       }
-      void this.persistAgentEvent(tagged);
+      this.queuePersistAgentEvent(tagged);
     };
+
+    // Shared permission bridge for providers that can pause a live turn. Claude
+    // reaches it through canUseTool; Codex app-server reaches it through the
+    // AskUserQuestion dynamic-tool/server-request flow.
+    const requestPermission = (req: {
+      toolName: string;
+      input: Record<string, unknown>;
+      suggestions?: unknown[];
+    }) =>
+      new Promise<
+        | {
+            behavior: "allow";
+            updatedInput?: Record<string, unknown>;
+            updatedPermissions?: unknown[];
+          }
+        | { behavior: "deny"; message: string; interrupt?: boolean }
+      >((resolve) => {
+        const requestId = `pr-${Date.now()}-${Math.random()
+          .toString(36)
+          .slice(2, 8)}`;
+        this.pendingPermissions.set(requestId, {
+          requestId,
+          toolName: req.toolName,
+          input: req.input,
+          suggestions: req.suggestions ?? [],
+          resolve,
+        });
+        const ev: AgentEvent = {
+          type: "permission_request",
+          chatId: this.chatId,
+          requestId,
+          toolName: req.toolName,
+          input: req.input,
+          suggestions: req.suggestions,
+        };
+        this.broadcast(ev);
+        this.queuePersistAgentEvent(ev);
+        if (!args.silent) {
+          const question = Array.isArray(req.input.questions)
+            ? req.input.questions.find(
+                (item): item is { question: string } =>
+                  typeof item === "object" &&
+                  item !== null &&
+                  typeof (item as { question?: unknown }).question === "string",
+              )?.question
+            : undefined;
+          const message =
+            question ??
+            (req.toolName === "ExitPlanMode"
+              ? "The agent is waiting for you to review its plan."
+              : `The agent needs approval to use ${req.toolName}.`);
+          void notifyAgentNeedsInput(
+            record.title ?? this.chatId,
+            basename(this.repoPath),
+            message,
+          );
+        }
+      });
 
     // Code-editing subagents run their SDK session in an isolated git worktree
     // so their edits don't touch the live main working tree until merged back.
@@ -1028,6 +1211,7 @@ class AgentSession {
           attachments: args.attachments,
           conversationHistory: record.events,
           emit,
+          requestPermission,
           abortController: this.abort,
         });
       } else {
@@ -1087,29 +1271,7 @@ class AgentSession {
           console.log(`[session] ClearContext requested by agent${reason ? `: ${reason}` : ""}`);
           this.pendingCompact = true;
         },
-        requestPermission: (req) =>
-          new Promise((resolve) => {
-            const requestId = `pr-${Date.now()}-${Math.random()
-              .toString(36)
-              .slice(2, 8)}`;
-            this.pendingPermissions.set(requestId, {
-              requestId,
-              toolName: req.toolName,
-              input: req.input,
-              suggestions: req.suggestions ?? [],
-              resolve,
-            });
-            const ev: AgentEvent = {
-              type: "permission_request",
-              chatId: this.chatId,
-              requestId,
-              toolName: req.toolName,
-              input: req.input,
-              suggestions: req.suggestions,
-            };
-            this.broadcast(ev);
-            void this.persistAgentEvent(ev);
-          }),
+        requestPermission,
         requestAttentionAck: (req) =>
           new Promise((resolve) => {
             this.pendingAttentions.set(req.attentionId, {
@@ -1135,7 +1297,14 @@ class AgentSession {
               chatId: this.chatId,
               status: "awaiting_input",
             });
-            void this.persistAgentEvent(ev);
+            this.queuePersistAgentEvent(ev);
+            if (!args.silent) {
+              void notifyAgentNeedsInput(
+                record.title ?? this.chatId,
+                basename(this.repoPath),
+                req.message,
+              );
+            }
           }),
         abortController: this.abort,
         // Snapshot the target file before any file-modifying tool runs so we
@@ -1198,6 +1367,10 @@ class AgentSession {
       this.pendingPermissions.clear();
       let final: ChatRecord | null = null;
       try {
+        // Provider callbacks enqueue writes without blocking the stream. Drain
+        // that queue before closing the turn so replay always sees all output
+        // before its matching turn_end.
+        await this.persistenceTail;
         // The client must only receive turn_end after every preceding event is
         // durable and the session is actually available for another operation.
         // Silent compact turns have no persisted turn_start, so they do not add
@@ -1224,6 +1397,53 @@ class AgentSession {
       } finally {
         this.running = false;
         this.abort = undefined;
+      }
+      // TypeScript does not track assignments made from the synchronous emit
+      // callback through the provider runner, so restore the declared type.
+      const wakeup = confirmedWakeup as
+        | (WakeupCall & { runAfter: string })
+        | null;
+      // Claude's native ScheduleWakeup timer belongs to the short-lived SDK
+      // child and disappears when this turn exits. Mirror a confirmed call in
+      // Buildover's durable queue so it survives both child exit and server
+      // restart. An explicit Stop before turn exit prevents it from queuing.
+      if (wakeup && !wasAborted && !wasSilent) {
+        try {
+          const prompt = wakeup.prompt === AUTONOMOUS_WAKEUP_PROMPT
+            ? args.text
+            : wakeup.prompt;
+          const queued = await enqueueChatTurn(
+            this.repoPath,
+            this.chatId,
+            {
+              id: makeWakeupTurnId(),
+              text: prompt,
+              model: args.model,
+              permissionMode: args.permissionMode,
+              kind: "scheduled_wakeup",
+              origin: "system",
+              originLabel: "Scheduled wakeup",
+              createdAt: new Date().toISOString(),
+              runAfter: wakeup.runAfter,
+              reason: wakeup.reason,
+            },
+          );
+          if (queued) {
+            final = queued;
+            if (!queued.queuePaused) {
+              scheduleQueuedTurnDrain(
+                this.repoPath,
+                this.chatId,
+                queued.queuedTurns?.[0]?.runAfter ?? wakeup.runAfter,
+              );
+            }
+          }
+        } catch (err) {
+          console.warn(
+            `[wakeup] failed to persist scheduled wakeup for ${this.chatId}:`,
+            err instanceof Error ? err.message : err,
+          );
+        }
       }
       if (final) {
         try {
@@ -1367,7 +1587,12 @@ class AgentSession {
     const ts = new Date().toISOString();
     const { chatId: _omit, ...rest } = event as AgentEvent & { chatId: string };
     const persisted = { ...rest, ts } as ChatEvent;
-    const updated = await this.record(persisted);
+    const provesTurnIsLive =
+      event.type === "assistant" ||
+      event.type === "user_tool_results" ||
+      event.type === "result" ||
+      event.type === "permission_request";
+    const updated = await this.record(persisted, provesTurnIsLive);
     // Always suppress pushStatusFor for terminal turn events (result, turn_end):
     // the finally block in runTurn is solely responsible for broadcasting the
     // definitive terminal status, so firing it here too would send a duplicate
@@ -1392,6 +1617,10 @@ class AgentSession {
     if (!suppressed) {
       await this.pushStatusFor(updated);
     }
+  }
+
+  private queuePersistAgentEvent(event: AgentEvent): void {
+    this.enqueuePersistence(() => this.persistAgentEvent(event));
   }
 
   // Fork the conversation at an existing user message. Saves the old trunk

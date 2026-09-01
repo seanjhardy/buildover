@@ -255,6 +255,334 @@
   opacity: 0.75;
 }
 
+/* ── Search scope chip ("Find in Folder") ────────────────────── */
+.fes-scope-chip {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  padding: 2px 4px 2px 6px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  background: var(--app-secondary-background);
+  color: var(--app-secondary-foreground);
+  font-size: 10.5px;
+}
+
+.fes-scope-path {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  direction: rtl;   /* keep the tail of long paths visible */
+  text-align: left;
+}
+
+.fes-scope-clear {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.fes-scope-clear:hover { opacity: 1; background: var(--app-list-hover-background); }
+
+/* ============================================================ */
+/* Explorer tree — rows, selection, drag & drop                  */
+/* ============================================================ */
+
+.fes-tree {
+  outline: none;               /* focusable for shortcuts, but no focus ring */
+  min-height: 100%;
+}
+
+.fes-tree--drop {
+  box-shadow: inset 0 0 0 1px var(--app-claude-orange);
+}
+
+/* Row container. Shares the inner icon/chevron classes with .files-tree-*,
+   but owns its own states (selected / cut / drop target). */
+.fes-row {
+  position: relative;          /* anchors the indent guides */
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 22px;
+  padding-right: 8px;
+  min-width: 0;
+  cursor: pointer;
+  user-select: none;
+  color: var(--app-primary-foreground);
+}
+
+.fes-row:hover { background: var(--app-list-hover-background); }
+
+.fes-row--active { background: var(--app-list-hover-background); }
+
+.fes-row--selected {
+  background: var(--app-list-active-background);
+}
+.fes-row--selected .fes-row-name { color: #fff; }
+
+/* Cut entries stay visible but clearly pending a paste */
+.fes-row--cut { opacity: 0.45; }
+
+/* Drop target folder */
+.fes-row--drop {
+  background: color-mix(in srgb, var(--app-claude-orange) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--app-claude-orange);
+}
+
+.fes-row-name {
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
+  font-weight: 400;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: var(--app-primary-foreground);
+}
+
+.fes-row-name--open { opacity: 0.75; }
+
+/* Vertical indent guides — one per ancestor level, drawn per row so the
+   lines join up into continuous rules down the tree. */
+.fes-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--app-primary-border-color);
+  opacity: 0.5;
+  pointer-events: none;
+}
+
+/* Notes (loading / empty / error) need the guide anchor too */
+.files-tree-note { position: relative; }
+
+/* ── Inline name entry (new file/folder, rename) ─────────────── */
+.fes-row--editing { cursor: default; background: transparent; }
+.fes-row--editing:hover { background: transparent; }
+
+.fes-inline-input {
+  flex: 1;
+  min-width: 0;
+  height: 18px;
+  padding: 0 4px;
+  border: 1px solid var(--app-claude-orange);
+  border-radius: 2px;
+  background: var(--app-primary-background);
+  color: var(--app-primary-foreground);
+  font-family: inherit;
+  font-size: 12px;
+  outline: none;
+}
+
+/* ── Finder-drop import progress ─────────────────────────────── */
+.fes-import-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+}
+
+/* ── Operation error banner ──────────────────────────────────── */
+.fes-op-error {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+  padding: 5px 6px 5px 8px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  background: color-mix(in srgb, var(--app-error) 14%, transparent);
+  color: var(--app-error);
+  font-size: 11px;
+}
+
+.fes-op-error-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fes-op-error-close {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+  padding: 2px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+.fes-op-error-close:hover { opacity: 1; }
+
+/* ── Delete confirmation ─────────────────────────────────────── */
+.fes-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0, 0, 0, 0.55);
+}
+
+.fes-modal {
+  width: min(420px, calc(100vw - 32px));
+  padding: 14px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-secondary-background);
+  box-shadow: 0 16px 48px rgba(0, 0, 0, 0.5);
+}
+
+.fes-modal-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 8px;
+  color: var(--app-primary-foreground);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.fes-modal-body {
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.fes-modal-list {
+  max-height: 140px;
+  margin: 0 0 8px;
+  padding-left: 16px;
+  overflow-y: auto;
+  font-family: var(--app-monospace-font, monospace);
+  font-size: 11px;
+}
+
+.fes-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  margin-top: 14px;
+}
+
+.fes-modal-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+.fes-modal-btn:hover { background: var(--app-list-hover-background); }
+
+.fes-modal-btn--ghost { color: var(--app-error); }
+.fes-modal-btn--ghost:hover { background: color-mix(in srgb, var(--app-error) 14%, transparent); }
+
+.fes-modal-btn--primary {
+  border-color: var(--app-claude-orange);
+  background: var(--app-claude-orange);
+  color: #fff;
+}
+.fes-modal-btn--primary:hover { filter: brightness(1.08); }
+
+/* ============================================================ */
+/* Shared right-click context menu                              */
+/* ============================================================ */
+
+.ctx-menu {
+  position: fixed;
+  z-index: 10001;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 232px;
+  max-height: calc(100vh - 16px);
+  padding: 4px;
+  overflow-y: auto;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-secondary-background);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.ctx-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: var(--app-primary-foreground);
+  font-family: inherit;
+  font-size: 12px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.ctx-menu-item--active { background: var(--app-list-hover-background); }
+
+.ctx-menu-item:disabled {
+  opacity: 0.4;
+  cursor: default;
+  background: transparent;
+}
+
+.ctx-menu-item--danger { color: #ff6b6b; }
+.ctx-menu-item--danger.ctx-menu-item--active { background: rgba(224, 49, 49, 0.14); }
+
+.ctx-menu-icon {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 14px;
+  opacity: 0.75;
+}
+
+.ctx-menu-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ctx-menu-shortcut {
+  flex-shrink: 0;
+  padding-left: 12px;
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.ctx-menu-divider {
+  height: 1px;
+  margin: 3px 4px;
+  background: var(--app-primary-border-color);
+}
+
 /* ============================================================ */
 /* Quick-open bar (above editor tabs)                           */
 /* ============================================================ */

@@ -19,7 +19,7 @@ import {
   deleteChat,
   listChats,
   readChat,
-  recoverStaleChatsForRepo,
+  recoverStaleChat,
   recoverStaleChatsForRepoWithIds,
   setContext1m,
   setModel,
@@ -32,6 +32,7 @@ import {
   withComputedStatus,
   toSummary,
   removeQueuedChatTurn,
+  withChatLock,
 } from "./chats.js";
 import {
   listTickets,
@@ -43,6 +44,16 @@ import {
 import { broadcastPlansUpdated } from "./coordinationTools.js";
 import { pickFolder } from "./picker.js";
 import {
+  createEntry,
+  deleteEntries,
+  importFile,
+  openEntryExternally,
+  renameEntry,
+  resolveInRepo,
+  revealEntry,
+  transferEntries,
+} from "./fileOps.js";
+import {
   ensureRepo,
   listRecents,
   removeRecent,
@@ -52,12 +63,13 @@ import {
   cancelQueuedTurnDrain,
   dropSession,
   getSession,
+  scheduleQueuedTurnDrain,
   scheduleQueuedTurnsForRepo,
   tryGetSession,
 } from "./sessions.js";
 import { getOrchestrator } from "./orchestrator.js";
 import { classifySegment } from "./segmenter.js";
-import { fetchUsage } from "./usage.js";
+import { ClaudeUsageError, fetchUsage } from "./usage.js";
 import { fetchCursorUsage } from "./cursorUsage.js";
 import { fetchCursorModels } from "./cursorModels.js";
 import { clearCursorCredsCache } from "./cursorAuth.js";
@@ -131,7 +143,8 @@ import {
   pullLatestMain,
   startSelfUpdateChecker,
 } from "./selfUpdate.js";
-import { readCreds } from "./anthropicAuth.js";
+import { fetchWithClaudeAuth } from "./anthropicAuth.js";
+import { getClaudeAuthStatus, startClaudeLogin } from "./claudeAuth.js";
 import {
   enableVpn,
   disableVpn,
@@ -163,8 +176,10 @@ import {
   updateTemplate,
 } from "./templates.js";
 import { patchPrefs, readPrefs } from "./prefs.js";
+import { DEFAULT_MODEL } from "../src/types.js";
 import type {
   AgentEvent,
+  ChatRecord,
   ClientMessage,
   CreateProjectRequest,
   Model,
@@ -298,10 +313,23 @@ app.get("/api/usage", async (_req, res) => {
   try {
     res.json(await fetchUsage());
   } catch (err) {
-    res.status(500).json({
+    res.status(err instanceof ClaudeUsageError ? err.status : 500).json({
       error: err instanceof Error ? err.message : String(err),
     });
   }
+});
+
+// Authentication is checked by the official CLI bundled with the Agent SDK,
+// rather than inferred from the usage endpoint (which can independently 429).
+app.get("/api/claude/auth/status", async (_req, res) => {
+  res.json(await getClaudeAuthStatus());
+});
+
+// Starts the official browser-based Claude.ai login and returns immediately.
+// The renderer polls the status route for completion; OAuth tokens never enter
+// the browser process or this response.
+app.post("/api/claude/auth/login", (_req, res) => {
+  res.status(202).json({ login: startClaudeLogin() });
 });
 
 app.get("/api/cursor/usage", async (_req, res) => {
@@ -346,10 +374,8 @@ app.post("/api/caffeinate/display", (req, res) => {
 // exposing credentials to the browser.
 app.get("/api/models", async (_req, res) => {
   try {
-    const creds = await readCreds();
-    const resp = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+    const resp = await fetchWithClaudeAuth("https://api.anthropic.com/v1/models?limit=100", {
       headers: {
-        Authorization: `Bearer ${creds.accessToken}`,
         "anthropic-version": "2023-06-01",
       },
     });
@@ -388,10 +414,8 @@ app.get("/api/models", async (_req, res) => {
 app.get("/api/models/all", async (_req, res) => {
   const [claudeSettled, cursorSettled, codexSettled] = await Promise.allSettled([
     (async () => {
-      const creds = await readCreds();
-      const resp = await fetch("https://api.anthropic.com/v1/models?limit=100", {
+      const resp = await fetchWithClaudeAuth("https://api.anthropic.com/v1/models?limit=100", {
         headers: {
-          Authorization: `Bearer ${creds.accessToken}`,
           "anthropic-version": "2023-06-01",
         },
       });
@@ -864,6 +888,7 @@ app.delete("/api/chats/:chatId", async (req, res) => {
     if (!ok) return res.status(404).json({ error: "Not found" });
     const session = tryGetSession(repoPath, req.params.chatId);
     session?.interrupt();
+    cancelQueuedTurnDrain(repoPath, req.params.chatId);
     dropSession(repoPath, req.params.chatId);
     // Remove embeddings for the deleted chat
     removeIndexedChat(repoPath, req.params.chatId);
@@ -883,9 +908,15 @@ app.delete("/api/chats/:chatId/queued-turns/:turnId", async (req, res) => {
     const repoPath = readRepoPath(req);
     const record = await removeQueuedChatTurn(repoPath, req.params.chatId, req.params.turnId);
     if (!record) return res.status(404).json({ error: "Not found" });
-    // Cancel the drain timer if the queue is now empty so there are no ghost firings.
-    if (!record.queuedTurns?.length) {
-      cancelQueuedTurnDrain(repoPath, req.params.chatId);
+    // The removed entry may have been the timer's current head. Always replace
+    // the timer with one for the new head so a later wakeup cannot be stranded.
+    cancelQueuedTurnDrain(repoPath, req.params.chatId);
+    if (record.queuedTurns?.length && !record.queuePaused) {
+      scheduleQueuedTurnDrain(
+        repoPath,
+        req.params.chatId,
+        record.queuedTurns[0].runAfter,
+      );
     }
     const session = tryGetSession(repoPath, req.params.chatId);
     await session?.pushStatusForRecord(record);
@@ -1674,6 +1705,95 @@ app.post("/api/file/write", async (req, res) => {
   }
 });
 
+// ---- Explorer file operations (create / rename / delete / copy / reveal) ----
+// Each takes the repo root plus repo-relative paths; fileOps re-resolves and
+// range-checks them so a request can't reach outside the repo it names.
+function fileOpHandler<T>(run: (body: Record<string, unknown>) => Promise<T>) {
+  return async (req: express.Request, res: express.Response) => {
+    try {
+      const body = (req.body ?? {}) as Record<string, unknown>;
+      if (!String(body.repoPath ?? "")) throw new Error("repoPath required");
+      res.json({ ok: true, ...(await run(body)) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  };
+}
+
+const asRelPaths = (value: unknown): string[] =>
+  Array.isArray(value) ? value.map((v) => String(v)) : [];
+
+app.post(
+  "/api/file/create",
+  fileOpHandler((b) =>
+    createEntry(
+      String(b.repoPath),
+      String(b.relPath ?? ""),
+      b.kind === "dir" ? "dir" : "file",
+    ),
+  ),
+);
+
+app.post(
+  "/api/file/rename",
+  fileOpHandler((b) =>
+    renameEntry(String(b.repoPath), String(b.from ?? ""), String(b.to ?? "")),
+  ),
+);
+
+app.post(
+  "/api/file/delete",
+  fileOpHandler((b) =>
+    deleteEntries(String(b.repoPath), asRelPaths(b.relPaths), b.permanent === true),
+  ),
+);
+
+app.post(
+  "/api/file/transfer",
+  fileOpHandler((b) =>
+    transferEntries(
+      String(b.repoPath),
+      asRelPaths(b.from),
+      String(b.toDir ?? ""),
+      b.mode === "move" ? "move" : "copy",
+    ),
+  ),
+);
+
+// Dropped-in files arrive one per request as a raw body: the browser only hands
+// us bytes (no source path), and streaming them individually keeps the size
+// limit per-file rather than per-drop.
+app.post(
+  "/api/file/upload",
+  express.raw({ type: "application/octet-stream", limit: "100mb" }),
+  async (req, res) => {
+    try {
+      const repoPath = String(req.query.repoPath ?? "");
+      const toDir = String(req.query.toDir ?? "");
+      const name = String(req.query.name ?? "");
+      if (!repoPath) throw new Error("repoPath required");
+      const data = Buffer.isBuffer(req.body) ? req.body : Buffer.alloc(0);
+      res.json({ ok: true, ...(await importFile(repoPath, toDir, name, data)) });
+    } catch (err) {
+      res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+    }
+  },
+);
+
+app.post(
+  "/api/file/reveal",
+  fileOpHandler(async (b) => {
+    await revealEntry(String(b.repoPath), String(b.relPath ?? ""));
+  }),
+);
+
+app.post(
+  "/api/file/open-external",
+  fileOpHandler(async (b) => {
+    await openEntryExternally(String(b.repoPath), String(b.relPath ?? ""));
+  }),
+);
+
 // ---- File content search (pure Node.js — no external binary required) ----
 interface SearchLineMatch { line: number; text: string }
 interface SearchFileResult { relPath: string; lines: SearchLineMatch[] }
@@ -1687,6 +1807,7 @@ app.get("/api/file/search", async (req, res) => {
     const repoPath    = String(req.query.path ?? "");
     const query       = String(req.query.query ?? "");
     const excludeExts = String(req.query.excludeExts ?? "");
+    const scope       = String(req.query.scope ?? "");
     const offset      = Math.max(0, parseInt(String(req.query.offset ?? "0"), 10) || 0);
 
     if (!repoPath) throw new Error("path required");
@@ -1694,6 +1815,9 @@ app.get("/api/file/search", async (req, res) => {
     if (!pathIsAbsolute(repoPath)) throw new Error("absolute path required");
 
     const root       = resolvePath(repoPath);
+    // "Find in Folder" narrows the walk to a subtree, but paths stay relative
+    // to the repo root so results open the same way as an unscoped search.
+    const walkFrom   = scope ? resolveInRepo(root, scope) : root;
     const queryLower = query.toLowerCase();
 
     const excludedExts = new Set(
@@ -1702,7 +1826,7 @@ app.get("/api/file/search", async (req, res) => {
 
     // Reuse the existing walkDir, but also skip build output for search.
     const allFiles: string[] = [];
-    await walkDir(root, root, allFiles, SEARCH_EXCLUDES);
+    await walkDir(root, walkFrom, allFiles, SEARCH_EXCLUDES);
 
     const results: SearchFileResult[] = [];
     let total   = 0;   // matches in this page
@@ -1960,7 +2084,7 @@ app.post("/api/self/force-pull", async (_req, res) => {
 // ---- Web Push (phone notifications) ----
 // The phone PWA fetches the VAPID public key, subscribes via the Push API, and
 // POSTs its subscription here. The server stores it and pushes when an agent
-// finishes while the Mac is idle (see server/push.ts).
+// finishes or needs input while the Mac is idle (see server/push.ts).
 app.get("/api/push/vapid-key", async (_req, res) => {
   try {
     res.json({ key: await getVapidPublicKey() });
@@ -2073,14 +2197,40 @@ const wss = new WebSocketServer({ noServer: true });
 const terminalWss = new WebSocketServer({ noServer: true });
 attachTerminalWss(terminalWss);
 
+// Stand-in transcript for a chat the client has navigated to before its
+// POST /api/chats has been persisted.
+function emptyChatRecord(chatId: string): ChatRecord {
+  const now = new Date().toISOString();
+  return {
+    id: chatId,
+    title: "New chat",
+    titleAuto: true,
+    status: "idle",
+    userMarkedFinished: false,
+    model: DEFAULT_MODEL,
+    permissionMode: "default",
+    createdAt: now,
+    updatedAt: now,
+    events: [],
+  };
+}
+
 wss.on("connection", (ws: WebSocket) => {
   // A connection can subscribe to many chats. We hold the unsubscribe fn plus
   // (repoPath, chatId) so subsequent client messages can route back to the
   // same session instance.
-  const subscriptions = new Map<
-    string,
-    { repoPath: string; chatId: string; unsubscribe: () => void }
-  >();
+  interface ChatSubscription {
+    repoPath: string;
+    chatId: string;
+    unsubscribe: () => void;
+    // A chat_replay is a whole-transcript snapshot the client applies by
+    // replacing its turn list wholesale. While one is being read off disk,
+    // live events park in `buffered` and are flushed once it has been sent,
+    // so the older snapshot can never land on top of newer state.
+    replaysInFlight: number;
+    buffered: AgentEvent[];
+  }
+  const subscriptions = new Map<string, ChatSubscription>();
 
   const send = (event: AgentEvent) => {
     if (ws.readyState === ws.OPEN) ws.send(JSON.stringify(event));
@@ -2091,10 +2241,35 @@ wss.on("connection", (ws: WebSocket) => {
     chatId: string,
     withReplay: boolean,
   ) => {
-    const existing = subscriptions.get(chatId);
-    if (existing && !withReplay) return; // already subscribed, no replay needed
+    let sub = subscriptions.get(chatId);
+    if (sub && !withReplay) return; // already subscribed, no replay needed
     const session = getSession(repoPath, chatId);
-    if (withReplay) {
+
+    // Attach to the session synchronously, before the first await. Anything
+    // the session emits while the transcript is being read would otherwise
+    // never reach this client — a lost turn_end leaves the chat spinning on a
+    // phantom "running" state, and a lost user_message_echo hides the first
+    // message — until the chat is re-opened and re-subscribed.
+    if (!sub) {
+      const created: ChatSubscription = {
+        repoPath,
+        chatId,
+        unsubscribe: () => {},
+        replaysInFlight: 0,
+        buffered: [],
+      };
+      created.unsubscribe = session.subscribe((event) => {
+        if (created.replaysInFlight > 0) created.buffered.push(event);
+        else send(event);
+      });
+      subscriptions.set(chatId, created);
+      sub = created;
+    }
+    if (!withReplay) return;
+
+    const entry = sub;
+    entry.replaysInFlight += 1;
+    try {
       // If the persisted record claims a turn is in flight but this session
       // has nothing running (typical after the previous server died), heal
       // the transcript before replaying so the client doesn't get a phantom
@@ -2102,7 +2277,11 @@ wss.on("connection", (ws: WebSocket) => {
       // Also re-heal if the chat is in "error" state from a previous recovery
       // and a new server restart happened during a retry — we need to append a
       // fresh error+turn_end so the client knows to retry again.
-      let record = await readChat(repoPath, chatId);
+      // The read runs under the chat lock so the snapshot never captures a
+      // transcript mid-append.
+      let record = await withChatLock(repoPath, chatId, () =>
+        readChat(repoPath, chatId),
+      );
       const needsRecovery =
         record &&
         !session.isRunning() &&
@@ -2110,40 +2289,67 @@ wss.on("connection", (ws: WebSocket) => {
           record.status === "awaiting_input" ||
           record.status === "error");
       if (needsRecovery) {
-        await recoverStaleChatsForRepo(repoPath).catch(() => {});
-        record = await readChat(repoPath, chatId);
+        // Recover only the chat being replayed. Repo-wide recovery here could
+        // close a completely different chat whose provider is still live.
+        await recoverStaleChat(repoPath, chatId).catch(() => {});
+        record = await withChatLock(repoPath, chatId, () =>
+          readChat(repoPath, chatId),
+        );
       }
       if (record) {
         record = withComputedStatus(record);
+        // Persisted state can briefly lag a live session (and older builds may
+        // have written a false restart marker). The process that owns the
+        // provider is the source of truth for a reconnecting client.
+        if (session.isRunning()) {
+          const awaitingInput =
+            session.pendingPermissionList().length > 0 ||
+            session.pendingAttentionList().length > 0;
+          record = {
+            ...record,
+            status: awaitingInput ? "awaiting_input" : "running",
+          };
+        }
         const queued = record.queuedTurns?.[0];
         if (queued) scheduleQueuedTurnsForRepo(repoPath).catch(() => {});
-        send({
-          type: "chat_replay",
-          chatId,
-          record,
-          pendingPermissions: session.pendingPermissionList(),
-          pendingAttentions: session.pendingAttentionList(),
-        });
-        // Always push chat_status after a replay so any sidebar subscriber
-        // on this same WS connection (withReplay: false) picks up the current
-        // status immediately — especially important after stale recovery where
-        // the status just changed from "running" or "error" to a new value.
-        //
-        // Use "awaiting_input" when the session has a pending attention, because
-        // that state is never written to the DB record (it's a live-only signal)
-        // so record.status would otherwise emit a misleading "running" status.
-        const hasPendingAttention = session.pendingAttentionList().length > 0;
-        send({
-          type: "chat_status",
-          chatId,
-          status: hasPendingAttention ? "awaiting_input" : record.status,
-          sessionId: record.sessionId,
-        });
+      }
+      // A missing record means the chat is brand new: the UI mints the id and
+      // routes to it before POST /api/chats has landed. Replay an empty
+      // transcript anyway so the client finishes hydrating instead of showing
+      // a loading indicator forever; the real events arrive live on the
+      // subscription above.
+      const replayed = record ?? emptyChatRecord(chatId);
+      send({
+        type: "chat_replay",
+        chatId,
+        record: replayed,
+        pendingPermissions: session.pendingPermissionList(),
+        pendingAttentions: session.pendingAttentionList(),
+      });
+      // Always push chat_status after a replay so any sidebar subscriber
+      // on this same WS connection (withReplay: false) picks up the current
+      // status immediately — especially important after stale recovery where
+      // the status just changed from "running" or "error" to a new value.
+      //
+      // Use "awaiting_input" when the session has a pending attention, because
+      // that state is never written to the DB record (it's a live-only signal)
+      // so record.status would otherwise emit a misleading "running" status.
+      const hasPendingAttention = session.pendingAttentionList().length > 0;
+      send({
+        type: "chat_status",
+        chatId,
+        status: hasPendingAttention ? "awaiting_input" : replayed.status,
+        sessionId: replayed.sessionId,
+      });
+    } finally {
+      entry.replaysInFlight -= 1;
+      if (entry.replaysInFlight === 0) {
+        const pending = entry.buffered.splice(0);
+        if (subscriptions.get(chatId) === entry) {
+          for (const event of pending) send(event);
+        }
       }
     }
-    if (existing) return;
-    const unsubscribe = session.subscribe(send);
-    subscriptions.set(chatId, { repoPath, chatId, unsubscribe });
   };
 
   const unsubscribe = (chatId: string) => {
@@ -2203,7 +2409,12 @@ wss.on("connection", (ws: WebSocket) => {
           const sub = subscriptions.get(msg.chatId);
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
-          session.resolvePermission(msg.requestId, msg.result);
+          const resolved = session.resolvePermission(msg.requestId, msg.result);
+          // The browser may have retained a question across a backend restart,
+          // but its in-process resolver no longer exists. Send an authoritative
+          // replay immediately instead of silently swallowing the answer and
+          // leaving the UI claiming the chat is still running.
+          if (!resolved) await subscribe(sub.repoPath, msg.chatId, true);
           break;
         }
         case "attention_ack": {
@@ -2378,19 +2589,10 @@ orchWss.on("connection", (ws: WebSocket) => {
   });
 });
 
-httpServer.listen(PORT, HOST, () => {
-  // eslint-disable-next-line no-console
-  console.log(`[server] listening on http://${HOST}:${PORT}`);
-  console.log(`[server] websocket at ws://${HOST}:${PORT}/agent`);
-  void recoverStaleChats();
-  void startScheduler();
-  startSelfUpdateChecker();
-});
-
 // Walk every recent repo and patch chats whose persisted state is "running"
 // or has unresolved permission requests — leftovers from a previous server
-// process that died mid-turn. After healing, automatically re-run each
-// interrupted turn so agents resume without the user having to click anything.
+// process that died mid-turn. Interrupted turns remain available for an
+// explicit retry; automatically replaying a crashing turn can cause a loop.
 async function recoverStaleChats(): Promise<void> {
   try {
     const recents = await listRecents();
@@ -2418,3 +2620,17 @@ async function recoverStaleChats(): Promise<void> {
     );
   }
 }
+
+// Finish stale transcript recovery before accepting websocket traffic. This
+// removes the startup window where a new live turn could begin while the
+// recovery scan was still closing turns from disk.
+void (async () => {
+  await recoverStaleChats();
+  httpServer.listen(PORT, HOST, () => {
+    // eslint-disable-next-line no-console
+    console.log(`[server] listening on http://${HOST}:${PORT}`);
+    console.log(`[server] websocket at ws://${HOST}:${PORT}/agent`);
+    void startScheduler();
+    startSelfUpdateChecker();
+  });
+})();
