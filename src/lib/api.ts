@@ -1,5 +1,6 @@
 import type {
   AppPrefs,
+  EffortLevel,
   ChatRecord,
   ChatSummary,
   CreateProjectRequest,
@@ -240,6 +241,22 @@ export const api = {
 
   getPrefs: () => getJson<{ prefs: AppPrefs }>(`/api/prefs`).then((r) => r.prefs),
 
+  /** `null` clears a pref back to its default. */
+  patchPrefs: (patch: { claudeEffort?: EffortLevel | null }) =>
+    send<{ prefs: AppPrefs }>("PATCH", `/api/prefs`, patch).then((r) => r.prefs),
+
+  /** Start OAuth sign-in for an installed remote MCP server. */
+  startMcpAuth: (id: string) =>
+    send<{ authUrl?: string; connected: boolean }>(
+      "POST",
+      `/api/mcp-servers/${encodeURIComponent(id)}/auth`,
+    ),
+
+  getMcpAuthState: (id: string) =>
+    getJson<{ state: "idle" | "pending" | "connected" | "failed"; error?: string }>(
+      `/api/mcp-servers/${encodeURIComponent(id)}/auth`,
+    ),
+
   listChats: (repoPath: string) =>
     getJson<{ chats: ChatSummary[] }>(
       `/api/chats?repoPath=${encodeURIComponent(repoPath)}`,
@@ -274,6 +291,7 @@ export const api = {
       label: string;
       contextWindow?: number;
       provider?: "claude" | "cursor" | "openai";
+      effortLevels?: EffortLevel[];
     };
 
     // Fetch Codex independently even when /models/all exists. This keeps the

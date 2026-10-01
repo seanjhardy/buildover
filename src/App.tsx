@@ -58,7 +58,9 @@ import {
   DEFAULT_MODEL,
   MODELS,
   getModelProvider,
+  type EffortLevel,
   type Model,
+  type ModelOption,
   type OrchestratorNav,
   type PermissionMode,
 } from "./types.js";
@@ -120,9 +122,7 @@ export default function App() {
   const selfUpdate = useSelfUpdate();
 
   const [model, setModel] = useState<Model>(DEFAULT_MODEL);
-  const [availableModels, setAvailableModels] = useState<
-    { id: string; label: string; provider?: "claude" | "cursor" | "openai" }[]
-  >(MODELS);
+  const [availableModels, setAvailableModels] = useState<ModelOption[]>(MODELS);
   const loadModels = useCallback(() => {
     api
       .getModels()
@@ -483,6 +483,22 @@ export default function App() {
       await api.patchChat(activeRepo.path, activeChatId, { context1m: enabled });
     }
   }, [activeChatId, activeRepo]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Claude reasoning effort — a global pref (like Claude Code's /effort), read
+  // by the server at the start of each Claude turn. Writes are debounced so a
+  // drag across the slider persists only where it lands.
+  const [claudeEffort, setClaudeEffort] = useState<EffortLevel | undefined>();
+  useEffect(() => {
+    api.getPrefs().then((p) => setClaudeEffort(p.claudeEffort)).catch(() => {});
+  }, []);
+  const effortSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  const handleEffortChange = useCallback((level: EffortLevel) => {
+    setClaudeEffort(level);
+    clearTimeout(effortSaveTimer.current);
+    effortSaveTimer.current = setTimeout(() => {
+      api.patchPrefs({ claudeEffort: level }).catch(() => {});
+    }, 300);
+  }, []);
 
   // ── Message queue ──────────────────────────────────────────────────────────
 
@@ -1380,6 +1396,8 @@ Important rules for commands:
                                 sdkSlashCommands={agent.slashCommands}
                                 context1m={context1m}
                                 onContext1mChange={handleContext1mChange}
+                                effort={claudeEffort}
+                                onEffortChange={handleEffortChange}
                               />
                             </div>
                           </div>

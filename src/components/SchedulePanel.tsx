@@ -31,8 +31,8 @@ function describeCron(expr: string): string {
 }
 
 const MODELS: { id: Model; label: string }[] = [
-  { id: "claude-opus-4-7", label: "Opus" },
-  { id: "claude-sonnet-4-6", label: "Sonnet" },
+  { id: "claude-opus-5", label: "Opus" },
+  { id: "claude-sonnet-5", label: "Sonnet" },
   { id: "claude-haiku-4-5", label: "Haiku" },
 ];
 
@@ -55,7 +55,7 @@ const EMPTY_FORM = {
   label: "",
   cronExpression: "",
   prompt: "",
-  model: "claude-sonnet-4-6" as Model,
+  model: "claude-sonnet-5" as Model,
   permissionMode: "default" as PermissionMode,
   enabled: true,
 };

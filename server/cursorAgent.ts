@@ -15,6 +15,11 @@ import {
   resolveCursorAgentBinary,
 } from "./cursorAuth.js";
 import { cursorNativeModelId } from "./modelProvider.js";
+import {
+  installedMcpServerInfos,
+  readInstalledServers,
+  syncCursorGlobalMcpServers,
+} from "./mcp-config.js";
 
 export interface CursorRunArgs {
   prompt: string;
@@ -173,6 +178,12 @@ export async function runCursorAgentTurn(
     args.permissionMode === "bypassPermissions" ||
     args.permissionMode === "acceptEdits";
 
+  // Make Buildover's installed MCP servers available to this cursor turn by
+  // upserting them into ~/.cursor/mcp.json (cursor-agent has no inline flag).
+  const installedServers = readInstalledServers();
+  const mcpServerInfos = installedMcpServerInfos(installedServers);
+  syncCursorGlobalMcpServers(installedServers);
+
   let sessionId = args.cursorSessionId;
   let needsPreamble = false;
 
@@ -198,6 +209,9 @@ export async function runCursorAgentTurn(
     "--workspace",
     args.cwd,
   ];
+  // Auto-approve the forwarded servers; without this cursor-agent blocks on an
+  // interactive approval prompt that never surfaces in the headless stream.
+  if (installedServers.length > 0) cliArgs.push("--approve-mcps");
   if (force) cliArgs.push("--force");
   if (args.permissionMode === "plan") cliArgs.push("--mode", "plan");
   if (sessionId) cliArgs.push("--resume", sessionId);
@@ -286,7 +300,7 @@ export async function runCursorAgentTurn(
             type: "system_init",
             sessionId: sid,
             tools: [],
-            mcpServers: [],
+            mcpServers: mcpServerInfos,
             cwd: args.cwd,
             model: args.model,
             permissionMode: args.permissionMode,
@@ -300,7 +314,7 @@ export async function runCursorAgentTurn(
             type: "system_init",
             sessionId: sid,
             tools: [],
-            mcpServers: [],
+            mcpServers: mcpServerInfos,
             cwd: args.cwd,
             model: args.model,
             permissionMode: args.permissionMode,
@@ -443,7 +457,7 @@ export async function runCursorAgentTurn(
             type: "system_init",
             sessionId: sid,
             tools: [],
-            mcpServers: [],
+            mcpServers: mcpServerInfos,
             cwd: args.cwd,
             model: args.model,
             permissionMode: args.permissionMode,

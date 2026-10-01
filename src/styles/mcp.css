@@ -113,6 +113,43 @@
 .mcp-status-needs-auth {
   background: var(--app-warning);
 }
+.mcp-auth {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--app-spacing-small);
+}
+.mcp-auth-btn {
+  font-size: 11px;
+  padding: 2px 8px;
+  border: 1px solid var(--app-input-border);
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+.mcp-auth-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.mcp-auth-link {
+  font-size: 11px;
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--app-secondary-foreground);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.mcp-auth-note {
+  font-size: 11px;
+  color: var(--app-success);
+}
+.mcp-auth-error {
+  flex-basis: 100%;
+  font-size: 11px;
+  color: var(--app-error);
+}
 .mcp-empty {
   font-size: 11px;
   color: var(--app-secondary-foreground);

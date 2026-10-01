@@ -275,6 +275,101 @@ export function createCustomToolsServer(
     },
   );
 
+  // Render3DModel: lets the agent embed an interactive 3D model viewer directly
+  // in the chat. Like the other Render* tools, the handler is a no-op
+  // confirmation — the geometry (vertices/faces/colors) lives in the tool_use
+  // input and is rendered client-side via the ModelBlock component using a
+  // self-contained Canvas 2D software renderer (no WebGL/three.js dependency).
+  const renderModelTool = tool(
+    "Render3DModel",
+    "Render an interactive 3D model directly in the chat. The model appears " +
+      "slowly spinning; the user can click-and-drag to orbit it and use the " +
+      "on-canvas controls to pause/resume the rotation. Use this to visualise 3D " +
+      "geometry — meshes, shapes, point clouds, molecules, simple scenes. Provide " +
+      "geometry as a list of vertices ([x, y, z] coordinates) and, for a solid " +
+      "mesh, a list of faces indexing into those vertices (0-based). Faces with " +
+      "more than three vertices are automatically triangulated as a fan, so " +
+      "quads/polygons are fine. If you omit faces, the vertices render as a point " +
+      "cloud. Colours are optional: pass a single colour to apply to everything, " +
+      "or an array with one colour per face (mesh) / per vertex (point cloud). The " +
+      "model is auto-centred and scaled to fit, so you do not need to normalise " +
+      "coordinates. Flat shading is applied automatically from the face geometry.",
+    {
+      vertices: z
+        .array(z.array(z.number()))
+        .describe(
+          "List of vertex positions, each a 3-number array [x, y, z]. " +
+            "Coordinates can be in any range — the model is auto-centred and scaled.",
+        ),
+      faces: z
+        .array(z.array(z.number()))
+        .optional()
+        .describe(
+          "Faces as arrays of 0-based vertex indices, e.g. [0, 1, 2]. Triangles " +
+            "are ideal; polygons with >3 indices are triangulated as a fan. Omit " +
+            "to render the vertices as a point cloud instead of a solid mesh.",
+        ),
+      colors: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Optional colours as hex ('#4e9af1'), rgb(...) or a few named colours. " +
+            "Provide one entry to colour the whole model, or one per face (mesh) / " +
+            "one per vertex (point cloud). Missing entries fall back to `color`.",
+        ),
+      color: z
+        .string()
+        .optional()
+        .describe(
+          "Single default colour for the whole model (hex/rgb/name). Overridden " +
+            "by per-element `colors` where provided. Defaults to a blue.",
+        ),
+      background: z
+        .string()
+        .optional()
+        .describe(
+          "Optional canvas background colour (hex/rgb). Defaults to transparent " +
+            "so it blends with the chat.",
+        ),
+      spin: z
+        .boolean()
+        .optional()
+        .describe(
+          "Whether the model auto-rotates on load. Defaults to true. The user can " +
+            "pause/resume with the on-canvas control or by dragging.",
+        ),
+      wireframe: z
+        .boolean()
+        .optional()
+        .describe("Render only the edges of the mesh instead of filled faces."),
+      title: z
+        .string()
+        .optional()
+        .describe("Short label shown above the viewer. Keep under ~60 chars."),
+      caption: z
+        .string()
+        .optional()
+        .describe(
+          "Optional one-line caption rendered under the viewer. Plain text.",
+        ),
+    },
+    async (args) => {
+      const title = args.title ? ` "${args.title}"` : "";
+      const vcount = Array.isArray(args.vertices) ? args.vertices.length : 0;
+      const fcount = Array.isArray(args.faces) ? args.faces.length : 0;
+      const detail =
+        fcount > 0 ? `${vcount} vertices, ${fcount} faces` : `${vcount}-point cloud`;
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Rendered 3D model${title} in the chat (${detail}).`,
+          },
+        ],
+      };
+    },
+  );
+
   // ClearContext: lets the agent proactively compact the conversation history
   // to free up context window space. Calling it schedules a silent /compact
   // turn immediately after the current turn ends — the same mechanism used by
@@ -519,6 +614,7 @@ export function createCustomToolsServer(
       renderSvgTool,
       renderTableTool,
       renderChartTool,
+      renderModelTool,
       clearContextTool,
       writeRunConfigTool,
       todoReadTool,

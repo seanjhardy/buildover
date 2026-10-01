@@ -17,11 +17,17 @@ import {
   Trash2,
 } from "lucide-react";
 import {
+  defaultEffortFor,
+  effortLevelsFor,
+  getModelProvider,
   type Attachment,
   type ContextUsage,
+  type EffortLevel,
   type Model,
+  type ModelOption,
   type PermissionMode,
 } from "../types.js";
+import { EffortButton } from "./EffortButton.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 import { ContextRing } from "./ContextRing.js";
 import { useTranscription } from "../hooks/useTranscription.js";
@@ -47,12 +53,15 @@ interface Props {
   /** Hide the permissions/mode pill (e.g. in compact embedded contexts) */
   hideModePill?: boolean;
   onModelChange: (model: string) => void;
-  availableModels: { id: string; label: string; provider?: "claude" | "cursor" | "openai" }[];
+  availableModels: ModelOption[];
   /** Called when the model picker opens — used to recover from a stale empty list. */
   onRefreshModels?: () => void;
   /** When true, the 1M context window beta is enabled for Claude models. */
   context1m?: boolean;
   onContext1mChange?: (enabled: boolean) => void;
+  /** Claude reasoning effort; the slider is hidden when onEffortChange is absent. */
+  effort?: EffortLevel;
+  onEffortChange?: (level: EffortLevel) => void;
 }
 
 // Hold the send button this long (ms) to enqueue into a paused queue instead
@@ -234,6 +243,8 @@ export function Composer(props: Props) {
     onToggleMcp,
     context1m = false,
     onContext1mChange,
+    effort,
+    onEffortChange,
     contextUsage,
     repoPath,
     sdkSlashCommands = [],
@@ -1201,6 +1212,21 @@ export function Composer(props: Props) {
               </div>
             )}
           </div>
+          {onEffortChange && getModelProvider(model) === "claude" && (() => {
+            const levels = effortLevelsFor(
+              model,
+              availableModels.find((m) => m.id === model)?.effortLevels,
+            );
+            if (levels.length < 2) return null;
+            return (
+              <EffortButton
+                levels={levels}
+                value={effort}
+                fallback={defaultEffortFor(model)}
+                onChange={onEffortChange}
+              />
+            );
+          })()}
           {!hideModePill && <div ref={modeWrapRef} className="popup-wrap">
             <button
               className="mode-pill"

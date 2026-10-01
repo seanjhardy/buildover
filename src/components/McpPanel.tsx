@@ -1,5 +1,7 @@
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import type { McpServerInfo } from "../types.js";
+import { api } from "../lib/api.js";
+import { openExternalUrl } from "../lib/openExternalUrl.js";
 
 interface Props {
   tools: string[];
@@ -74,6 +76,7 @@ export function McpPanel({ tools, mcpServers, cwd, onClose }: Props) {
                 <span className="mcp-server-name">{srv.name}</span>
                 <span className="mcp-count">{srvTools.length}</span>
               </div>
+              {srv.status === "needs-auth" && <McpConnect server={srv.name} />}
               <ul className="mcp-list">
                 {srvTools.map((t) => (
                   <li key={t}>
@@ -88,6 +91,60 @@ export function McpPanel({ tools, mcpServers, cwd, onClose }: Props) {
         })}
       </section>
     </aside>
+  );
+}
+
+// Sign-in for a remote server that reported `needs-auth`. The server opens the
+// provider's page in the browser and stores the token globally once the user
+// approves, so the server works from the next turn in every repo.
+function McpConnect({ server }: { server: string }) {
+  const [state, setState] = useState<"idle" | "pending" | "connected" | "failed">(
+    "idle",
+  );
+  const [error, setError] = useState<string>();
+
+  useEffect(() => {
+    if (state !== "pending") return;
+    const timer = setInterval(async () => {
+      try {
+        const r = await api.getMcpAuthState(server);
+        if (r.state === "connected" || r.state === "failed") {
+          setState(r.state);
+          setError(r.error);
+        }
+      } catch {}
+    }, 2000);
+    return () => clearInterval(timer);
+  }, [state, server]);
+
+  const connect = async () => {
+    setError(undefined);
+    setState("pending");
+    try {
+      const r = await api.startMcpAuth(server);
+      if (r.connected) setState("connected");
+      else if (r.authUrl) openExternalUrl(r.authUrl);
+    } catch (err) {
+      setState("failed");
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  if (state === "connected") {
+    return <div className="mcp-auth-note">Signed in — available from your next message.</div>;
+  }
+  return (
+    <div className="mcp-auth">
+      <button className="mcp-auth-btn" onClick={connect} disabled={state === "pending"}>
+        {state === "pending" ? "Waiting for sign-in…" : "Sign in"}
+      </button>
+      {state === "pending" && (
+        <button className="mcp-auth-link" onClick={connect}>
+          Retry
+        </button>
+      )}
+      {error && <div className="mcp-auth-error">{error}</div>}
+    </div>
   );
 }
 

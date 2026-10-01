@@ -165,16 +165,20 @@ export function scheduleQueuedTurnDrain(
 }
 
 export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void> {
-  const { listChats, readChat } = await import("./chats.js");
+  const { listChats } = await import("./chats.js");
+  // Drive scheduling off the lightweight summary index — reading every full
+  // transcript here made each sidebar load / 30s poll / reconnect scale with
+  // the total size of all chats in the repo. The index carries the first
+  // queued turn's runAfter and the paused flag, and is refreshed in-memory on
+  // every write, so it always reflects the current queue while the server is
+  // running. Startup recovery rebuilds the index from disk before this runs,
+  // so wakeups persisted just before a crash are still rescheduled on boot.
   const chats = await listChats(repoPath);
   for (const chat of chats) {
-    // Read the record even if the summary index is stale. A server can stop
-    // after persisting a wakeup but before rebuilding that index, and wakeups
-    // must still recover on the next launch.
-    const record = await readChat(repoPath, chat.id).catch(() => null);
-    if (record?.queuePaused) continue;
-    const next = record?.queuedTurns?.[0];
-    if (next) scheduleQueuedTurnDrain(repoPath, chat.id, next.runAfter);
+    if (chat.queuePaused) continue;
+    if (chat.queuedTurn) {
+      scheduleQueuedTurnDrain(repoPath, chat.id, chat.queuedTurn.runAfter);
+    }
   }
 }
 
@@ -1215,13 +1219,22 @@ class AgentSession {
           abortController: this.abort,
         });
       } else {
-      // Prefer the Claude-specific session id so a prior Cursor turn cannot
-      // poison Claude SDK resume.
+      // Prefer the Claude-specific session id so a prior Cursor / Codex turn
+      // cannot poison Claude SDK resume. Fall back to the legacy top-level
+      // sessionId only when it is genuinely a Claude handle: it must not equal
+      // either other provider's stored id (robust for current records) and must
+      // not carry a known non-Claude id prefix (covers legacy records written
+      // before per-provider tracking). Codex ids are `appserver:` / `codex-`,
+      // Cursor ids may be `cursor-`; the old `openai-` check never matched them,
+      // so switching a Codex chat to Claude resumed the Codex id and failed with
+      // "No conversation found".
+      const nonClaudeSessionPrefix = /^(appserver:|codex-|cursor-|openai-)/;
       const claudeSessionId =
         record.providerSessions?.claude ??
         (record.sessionId &&
-        !record.sessionId.startsWith("openai-") &&
-        record.providerSessions?.cursor !== record.sessionId
+        !nonClaudeSessionPrefix.test(record.sessionId) &&
+        record.providerSessions?.cursor !== record.sessionId &&
+        record.providerSessions?.openai !== record.sessionId
           ? record.sessionId
           : undefined);
       // When switching to Claude with no prior Claude session, inject a text
@@ -1327,30 +1340,57 @@ class AgentSession {
       // usage/session limit being exhausted while the agent was working, the
       // turn is re-queued to revive automatically after the reset instead of
       // surfacing a dead-end error.
-      // The persisted SDK session no longer exists — typically happens after a
-      // backend restart when the in-process session files are gone but the chat
-      // record still holds the old sessionId. Clear it silently and re-queue
-      // the turn so it retries with a fresh session; no error shown to the user.
+      // The persisted SDK session no longer exists — typically after a backend
+      // restart when the in-process session files are gone, or when a turn was
+      // stopped so early the provider never flushed its session to disk. Clear
+      // every stale handle for the failing provider — the top-level sessionId,
+      // the one-shot resume marker, AND the per-provider id — then re-queue so
+      // the retry starts a fresh session (with a history preamble) instead of
+      // resurrecting the dead id. Clearing only sessionId here left
+      // providerSessions.<provider> poisoned; because that id is preferred on
+      // resume, the retry resolved the same dead id, so the error resurfaced on
+      // every message and the chat never recovered.
       // Cast needed: TS CFA narrows deferredErrorMessage to null (the assignment
       // inside the emit closure isn't tracked), so we restore the declared type.
       if (
-        (deferredErrorMessage as string | null)?.includes("No conversation found with session ID") &&
-        record.sessionId
+        (deferredErrorMessage as string | null)?.includes(
+          "No conversation found with session ID",
+        )
       ) {
-        console.warn(
-          `[session] Stale SDK session ${record.sessionId} cleared, re-queuing turn`,
-        );
-        await withChatLock(this.repoPath, this.chatId, async () => {
-          const r = await readChat(this.repoPath, this.chatId);
-          if (r) {
+        const providerKey = getModelProvider(args.model);
+        const cleared = await withChatLock(
+          this.repoPath,
+          this.chatId,
+          async () => {
+            const r = await readChat(this.repoPath, this.chatId);
+            if (!r) return false;
+            const hadHandle =
+              !!r.sessionId ||
+              !!r.resumeSessionAt ||
+              !!r.providerSessions?.[providerKey];
             r.sessionId = undefined;
             r.resumeSessionAt = undefined;
+            if (r.providerSessions) delete r.providerSessions[providerKey];
             await writeChat(this.repoPath, r);
-          }
-        });
-        // Put the turn back at the front of the queue; the finally-block drain
-        // will pick it up immediately once this.running is cleared.
-        this.pendingUserTurns.unshift({ ...args, isRetry: true });
+            return hadHandle;
+          },
+        );
+        if (cleared) {
+          console.warn(
+            `[session] Stale ${providerKey} session cleared for ${this.chatId}, re-queuing turn`,
+          );
+          // Put the turn back at the front of the queue; the finally-block drain
+          // picks it up immediately once this.running is cleared.
+          this.pendingUserTurns.unshift({ ...args, isRetry: true });
+        } else {
+          // There was no session handle left to clear, so a genuinely fresh
+          // session still failed. Surface the error instead of re-queuing into
+          // an infinite loop.
+          queuedForUsage = await this.finalizeFailure(
+            args,
+            deferredErrorMessage as unknown as string,
+          );
+        }
       } else if (deferredErrorMessage) {
         queuedForUsage = await this.finalizeFailure(args, deferredErrorMessage);
       }

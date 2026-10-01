@@ -94,6 +94,17 @@ const indexCache = new Map<string, Map<string, ChatSummary>>();
 const indexLoading = new Map<string, Promise<Map<string, ChatSummary>>>();
 const indexPersistTimers = new Map<string, NodeJS.Timeout>();
 
+// Bumped whenever the shape of a persisted ChatSummary changes so that an
+// index.json written by an older build is discarded and rebuilt (rather than
+// silently missing newly-added fields). v2 added queuedTurn / queuePaused,
+// which the queue drainer reads instead of re-parsing every transcript.
+const INDEX_VERSION = 2;
+
+interface PersistedIndex {
+  version?: number;
+  chats: ChatSummary[];
+}
+
 // Full disk scan — the slow path, used only to (re)build the index from
 // scratch when no usable `index.json` exists.
 async function scanChatSummaries(repoPath: string): Promise<ChatSummary[]> {
@@ -139,10 +150,8 @@ async function ensureIndexLoaded(
   if (inflight) return inflight;
   const load = (async () => {
     const map = new Map<string, ChatSummary>();
-    const persisted = await readJson<{ chats: ChatSummary[] }>(
-      indexPath(repoPath),
-    );
-    if (persisted?.chats?.length) {
+    const persisted = await readJson<PersistedIndex>(indexPath(repoPath));
+    if (persisted?.version === INDEX_VERSION && persisted.chats?.length) {
       for (const c of persisted.chats) map.set(c.id, c);
     } else {
       for (const s of await scanChatSummaries(repoPath)) map.set(s.id, s);
@@ -213,8 +222,11 @@ function schedulePersistIndex(
   if (indexPersistTimers.has(repoPath)) return;
   const timer = setTimeout(() => {
     indexPersistTimers.delete(repoPath);
-    void writeJson(indexPath(repoPath), { chats: [...map.values()] }).catch(
-      (err) => console.warn("[chats] failed to persist chat index:", err),
+    void writeJson(indexPath(repoPath), {
+      version: INDEX_VERSION,
+      chats: [...map.values()],
+    } satisfies PersistedIndex).catch((err) =>
+      console.warn("[chats] failed to persist chat index:", err),
     );
   }, 500);
   // Don't keep the event loop alive just to flush the index.
@@ -628,7 +640,10 @@ export async function rebuildIndex(repoPath: string): Promise<void> {
   const map = new Map<string, ChatSummary>();
   for (const s of await scanChatSummaries(repoPath)) map.set(s.id, s);
   indexCache.set(repoPath, map);
-  await writeJson(indexPath(repoPath), { chats: [...map.values()] });
+  await writeJson(indexPath(repoPath), {
+    version: INDEX_VERSION,
+    chats: [...map.values()],
+  } satisfies PersistedIndex);
 }
 
 export function toSummary(record: ChatRecord): ChatSummary {
@@ -659,6 +674,10 @@ export function toSummary(record: ChatRecord): ChatSummary {
     ...(record.kind ? { kind: record.kind } : {}),
     ...(record.parentChatId ? { parentChatId: record.parentChatId } : {}),
     ...(record.task ? { task: record.task } : {}),
+    ...(record.queuedTurns?.[0]
+      ? { queuedTurn: { runAfter: record.queuedTurns[0].runAfter } }
+      : {}),
+    ...(record.queuePaused ? { queuePaused: true } : {}),
   };
 }
 
@@ -849,7 +868,14 @@ export async function recoverStaleChatsForRepoWithIds(repoPath: string): Promise
       );
     }
   }
-  if (recovered.length > 0) await rebuildIndex(repoPath);
+  // Always rebuild the index from disk after a recovery sweep. The startup
+  // queue drainer (scheduleQueuedTurnsForRepo) now reads queued-turn scheduling
+  // metadata from the summary index instead of every transcript, and a crash
+  // can leave index.json lagging the per-chat files by up to the persist
+  // debounce window. A fresh rebuild guarantees wakeups/retries persisted just
+  // before the crash are rescheduled on boot. This sweep already read every
+  // chat file, so the extra scan is startup-only and off the hot path.
+  await rebuildIndex(repoPath);
   return recovered;
 }
 

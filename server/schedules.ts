@@ -16,6 +16,7 @@ import cron from "node-cron";
 import { createChat } from "./chats.js";
 import { getSession } from "./sessions.js";
 import { getRepoMeta } from "./repos.js";
+import { DEFAULT_MODEL } from "../src/types.js";
 import type { Model, PermissionMode } from "../src/types.js";
 
 const BUILDOVER_DIR = join(homedir(), ".buildover");
@@ -116,7 +117,7 @@ export async function createTask(opts: NewTaskOpts): Promise<ScheduledTask> {
       prompt: opts.prompt,
       repoPath: opts.repoPath,
       chatId: opts.chatId,
-      model: opts.model ?? "claude-opus-4-8",
+      model: opts.model ?? DEFAULT_MODEL,
       permissionMode: opts.permissionMode ?? "default",
       enabled: opts.enabled ?? true,
       createdAt: nowIso(),

@@ -107,6 +107,12 @@
   animation: none;
   z-index: auto;
   flex: 1;
+  /* As a flex child, min-height defaults to `auto`, which lets this pane grow
+     to its content's height and overflow the bounded parent — clipping the
+     bottom and killing the inner scroll. min-height:0 keeps it capped so the
+     .file-viewer-body scrolls instead. (The overlay .detail-pane variant is
+     immune since it's absolutely positioned with an explicit height.) */
+  min-height: 0;
 }
 
 /* --- Header / tab bar --- */

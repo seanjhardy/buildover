@@ -4,16 +4,50 @@ export type Model = string;
 
 export type ModelProvider = "claude" | "cursor" | "openai";
 
+/** Claude reasoning effort levels, lowest to highest. */
+export const EFFORT_LEVELS = ["low", "medium", "high", "xhigh", "max"] as const;
+export type EffortLevel = (typeof EFFORT_LEVELS)[number];
+
+export interface ModelOption {
+  id: string;
+  label: string;
+  provider?: ModelProvider;
+  contextWindow?: number;
+  /** Effort levels the model accepts (from the Models API capabilities). */
+  effortLevels?: EffortLevel[];
+}
+
+/**
+ * Effort levels a Claude model supports. Prefers the live list from the
+ * Models API; falls back to a family heuristic for the static MODELS list.
+ */
+export function effortLevelsFor(model: string, live?: EffortLevel[]): EffortLevel[] {
+  if (live) return live;
+  if (!model.startsWith("claude-")) return [];
+  if (model.includes("haiku")) return [];
+  if (/-4-6\b/.test(model)) return ["low", "medium", "high", "max"];
+  if (/-4-5\b/.test(model)) return model.includes("opus") ? ["low", "medium", "high"] : [];
+  if (/-(3|4-[01])\b|-3-/.test(model)) return [];
+  return [...EFFORT_LEVELS];
+}
+
+/** The level the API uses when `effort` is omitted. */
+export function defaultEffortFor(model: string): EffortLevel {
+  return model.startsWith("claude-opus-5-5") ? "medium" : "high";
+}
+
 /** Fallback model list used before the /api/models response arrives. */
-export const MODELS: { id: string; label: string; provider?: ModelProvider }[] = [
+export const MODELS: ModelOption[] = [
+  { id: "claude-fable-5-1", label: "Claude Fable 5.1", provider: "claude" },
+  { id: "claude-opus-5", label: "Claude Opus 5", provider: "claude" },
+  { id: "claude-sonnet-5", label: "Claude Sonnet 5", provider: "claude" },
   { id: "claude-opus-4-8", label: "Claude Opus 4.8", provider: "claude" },
   { id: "claude-opus-4-7", label: "Claude Opus 4.7", provider: "claude" },
   { id: "claude-sonnet-4-6", label: "Claude Sonnet 4.6", provider: "claude" },
-  { id: "claude-sonnet-4-5", label: "Claude Sonnet 4.5", provider: "claude" },
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "claude" },
 ];
 
-export const DEFAULT_MODEL: Model = "claude-opus-4-8";
+export const DEFAULT_MODEL: Model = "claude-opus-5";
 
 /** Cursor model ids are stored as `cursor:<nativeId>`. */
 export const CURSOR_MODEL_PREFIX = "cursor:";
@@ -193,6 +227,8 @@ export interface CreateProjectResult {
 export interface AppPrefs {
   /** Where the last project was created or cloned; prefilled next time. */
   lastProjectLocation?: string;
+  /** Reasoning effort for Claude turns. Unset → the model's default. */
+  claudeEffort?: EffortLevel;
 }
 
 export interface ChatSummary {
@@ -213,6 +249,13 @@ export interface ChatSummary {
   parentChatId?: string;
   /** For subagent chats: short description of the assigned task. */
   task?: string;
+  /** First queued turn's schedule, mirrored from the full record so the queue
+   *  drainer can reschedule wakeups/retries without reading every transcript.
+   *  Absent when the chat has no queued turns. */
+  queuedTurn?: { runAfter: string | null };
+  /** Mirrors ChatRecord.queuePaused so the drainer can skip paused chats
+   *  without a full read. Absent === not paused. */
+  queuePaused?: boolean;
 }
 
 // Persisted chat events. These are a superset of the live AgentEvent stream

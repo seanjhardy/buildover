@@ -2,6 +2,7 @@ import { SvgBlock } from "./SvgBlock.js";
 import { TableBlock } from "./TableBlock.js";
 import { ChartBlock } from "./ChartBlock.js";
 import type { ChartDataset } from "./ChartBlock.js";
+import { ModelBlock } from "./ModelBlock.js";
 import { AskUserQuestionBlock } from "./AskUserQuestionBlock.js";
 import { FileOperationBlock } from "./FileOperationBlock.js";
 import { BashCommandBlock } from "./BashCommandBlock.js";
@@ -21,11 +22,13 @@ interface Props {
 // Returns the presentational type for tools that render inline as rich
 // content instead of the standard collapsed/expanded tool card. Handles
 // both the bare name and the MCP-prefixed form (`mcp__<server>__<tool>`).
-type PresentationalType = "svg" | "table" | "chart";
+type PresentationalType = "svg" | "table" | "chart" | "model";
 function getPresentationalType(name: string): PresentationalType | null {
   if (name === "RenderSVG" || name.endsWith("__RenderSVG")) return "svg";
   if (name === "RenderTable" || name.endsWith("__RenderTable")) return "table";
   if (name === "RenderChart" || name.endsWith("__RenderChart")) return "chart";
+  if (name === "Render3DModel" || name.endsWith("__Render3DModel"))
+    return "model";
   return null;
 }
 
@@ -92,6 +95,33 @@ export function ToolUseBlock({ name, input, result, cwd }: Props) {
           type={type}
           labels={labels}
           datasets={datasets}
+          title={typeof i.title === "string" ? i.title : undefined}
+          caption={typeof i.caption === "string" ? i.caption : undefined}
+        />
+      );
+    }
+
+    if (presentational === "model") {
+      const toNumberMatrix = (val: unknown): number[][] =>
+        Array.isArray(val)
+          ? (val as unknown[])
+              .filter(Array.isArray)
+              .map((row) => (row as unknown[]).map(Number))
+          : [];
+      const vertices = toNumberMatrix(i.vertices);
+      const faces = i.faces !== undefined ? toNumberMatrix(i.faces) : undefined;
+      const colors = Array.isArray(i.colors)
+        ? (i.colors as unknown[]).map(String)
+        : undefined;
+      return (
+        <ModelBlock
+          vertices={vertices}
+          faces={faces}
+          colors={colors}
+          color={typeof i.color === "string" ? i.color : undefined}
+          background={typeof i.background === "string" ? i.background : undefined}
+          spin={typeof i.spin === "boolean" ? i.spin : undefined}
+          wireframe={typeof i.wireframe === "boolean" ? i.wireframe : undefined}
           title={typeof i.title === "string" ? i.title : undefined}
           caption={typeof i.caption === "string" ? i.caption : undefined}
         />

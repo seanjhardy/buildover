@@ -661,6 +661,110 @@
   }
 }
 
+/* Effort button — sits beside the model pill for Claude models and opens a
+   popover with a segmented slider. */
+.effort-pill-btn {
+  background: transparent;
+  border: 0;
+  color: var(--app-secondary-foreground);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 8px;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: color 0.1s, background 0.1s;
+  white-space: nowrap;
+}
+.effort-pill-btn:hover,
+.effort-pill-btn.active {
+  color: var(--app-primary-foreground);
+  background: var(--app-list-hover-background);
+}
+@container composer-bar (max-width: 480px) {
+  .effort-pill-btn {
+    width: 30px;
+    padding: 0;
+    justify-content: center;
+  }
+  .effort-pill-label {
+    display: none;
+  }
+}
+
+.effort-popup {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  right: 0;
+  width: 240px;
+  background: var(--app-secondary-background);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-medium);
+  padding: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.effort-popup-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+}
+.effort-popup-title {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+}
+.effort-popup-level {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+.effort-popup-default {
+  font-weight: 400;
+  color: var(--app-secondary-foreground);
+}
+.effort-track {
+  position: relative;
+  height: 28px;
+  border-radius: 7px;
+  overflow: hidden;
+  background: var(--app-list-hover-background);
+  border: 1px solid var(--app-primary-border-color);
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+}
+.effort-track:focus-visible {
+  outline: 1px solid var(--app-claude-orange);
+  outline-offset: 2px;
+}
+.effort-track-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--app-claude-orange);
+  transition: width 0.12s ease-out;
+}
+.effort-track-notch {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: var(--app-secondary-background);
+  opacity: 0.6;
+  pointer-events: none;
+}
+.effort-popup-scale {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+}
+
 /* Model tooltip — shows the chat's current model on hover.
    position/left/top/transform are set inline (fixed coords from
    getBoundingClientRect) so it escapes overflow/stacking ancestors. */

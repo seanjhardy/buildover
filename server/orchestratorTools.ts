@@ -188,10 +188,18 @@ export function makeOrchestratorMcp(
           "Cleaned, well-formed first user message for the new chat. Rewrite the user's spoken input into clear instructions for a coding agent.",
         ),
       model: z
-        .enum(["claude-opus-4-8", "claude-opus-4-7", "claude-sonnet-4-6", "claude-haiku-4-5"])
+        .enum([
+          "claude-fable-5-1",
+          "claude-opus-5",
+          "claude-sonnet-5",
+          "claude-opus-4-8",
+          "claude-opus-4-7",
+          "claude-sonnet-4-6",
+          "claude-haiku-4-5",
+        ])
         .optional()
         .describe(
-          "Model for the new chat. Defaults to claude-opus-4-8 if omitted.",
+          "Model for the new chat. Defaults to claude-opus-5 if omitted.",
         ),
       permissionMode: z
         .enum(["default", "acceptEdits", "plan", "bypassPermissions"])
@@ -209,7 +217,7 @@ export function makeOrchestratorMcp(
           `Repo not found at ${args.repoPath}. Call open_repo first.`,
         );
       }
-      const model: Model = args.model ?? "claude-opus-4-8";
+      const model: Model = args.model ?? "claude-opus-5";
       const permissionMode: PermissionMode = args.permissionMode ?? "default";
       const record = await createChat(meta.path, { model, permissionMode });
 

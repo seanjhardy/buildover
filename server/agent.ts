@@ -9,12 +9,16 @@ import {
   type RequestCompact,
 } from "./customTools.js";
 import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
-import type {
-  AgentEvent,
-  Attachment,
-  ContentBlock,
-  Model,
-  PermissionMode,
+import { readPrefs } from "./prefs.js";
+import {
+  EFFORT_LEVELS,
+  effortLevelsFor,
+  type AgentEvent,
+  type Attachment,
+  type ContentBlock,
+  type EffortLevel,
+  type Model,
+  type PermissionMode,
 } from "../src/types.js";
 
 // Appended to every chat's system prompt. The native Task* progress tools are
@@ -103,6 +107,16 @@ interface RunArgs {
   extraMcpServers?: Record<string, McpSdkServerConfigWithInstance>;
 }
 
+// Clamps the preferred effort to the highest level the model supports at or
+// below it (e.g. `xhigh` → `high` on Sonnet 4.6). Undefined when the model has
+// no effort support or no preference is set.
+function resolveEffort(model: Model, preferred: EffortLevel | undefined): EffortLevel | undefined {
+  if (!preferred) return undefined;
+  const supported = effortLevelsFor(model);
+  const ceiling = EFFORT_LEVELS.indexOf(preferred);
+  return [...supported].reverse().find((l) => EFFORT_LEVELS.indexOf(l) <= ceiling);
+}
+
 // Runs one user-turn through the SDK, normalizing messages into our wire
 // format and emitting them via `emit`. Returns the (possibly new) session id.
 export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
@@ -120,6 +134,8 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
     requestAttentionAck,
     abortController,
   } = args;
+
+  const effort = resolveEffort(model, (await readPrefs()).claudeEffort);
 
   // Collect all assistant messages so getCurrentTodos can scan for TodoWrite calls
   const allMessages: any[] = [];
@@ -245,6 +261,8 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       // content is actually included. Harmless on older/non-adaptive models —
       // they return their thinking either way.
       thinking: { type: "adaptive", display: "summarized" },
+      // User-chosen effort from the composer slider; omitted → model default.
+      ...(effort ? { effort } : {}),
       ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
       // The claude_code preset exposes the harness's native TaskCreate/
       // TaskUpdate/TaskList tools and periodically nudges the model to use

@@ -146,12 +146,14 @@
 .message .assistant-text + .svg-block,
 .message .assistant-text + .table-block,
 .message .assistant-text + .chart-block,
+.message .assistant-text + .model-block,
 .message .thinking + .tool-inline,
 .message .thinking + .tool,
 .message .thinking + .tool-group,
 .message .thinking + .svg-block,
 .message .thinking + .table-block,
-.message .thinking + .chart-block {
+.message .thinking + .chart-block,
+.message .thinking + .model-block {
   margin-top: var(--app-spacing-medium);
 }
 
@@ -162,12 +164,14 @@
 .message .svg-block + .assistant-text,
 .message .table-block + .assistant-text,
 .message .chart-block + .assistant-text,
+.message .model-block + .assistant-text,
 .message .tool-inline + .thinking,
 .message .tool + .thinking,
 .message .tool-group + .thinking,
 .message .svg-block + .thinking,
 .message .table-block + .thinking,
-.message .chart-block + .thinking {
+.message .chart-block + .thinking,
+.message .model-block + .thinking {
   margin-top: var(--app-spacing-large);
 }
 
@@ -190,6 +194,14 @@
 .message .chart-block + .svg-block,
 .message .chart-block + .table-block,
 .message .chart-block + .chart-block,
+.message .chart-block + .model-block,
+.message .model-block + .tool-inline,
+.message .model-block + .tool,
+.message .model-block + .tool-group,
+.message .model-block + .svg-block,
+.message .model-block + .table-block,
+.message .model-block + .chart-block,
+.message .model-block + .model-block,
 .message .tool-inline + .svg-block,
 .message .tool + .svg-block,
 .message .tool-group + .svg-block,
@@ -198,7 +210,10 @@
 .message .tool-group + .table-block,
 .message .tool-inline + .chart-block,
 .message .tool + .chart-block,
-.message .tool-group + .chart-block {
+.message .tool-group + .chart-block,
+.message .tool-inline + .model-block,
+.message .tool + .model-block,
+.message .tool-group + .model-block {
   margin-top: var(--app-spacing-medium);
 }
 
@@ -825,6 +840,88 @@
   margin: 0 auto;
 }
 .chart-block-caption {
+  padding: 0 var(--app-spacing-large) var(--app-spacing-medium);
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+  font-style: italic;
+  border-top: 1px solid var(--app-tool-border);
+}
+
+.model-block {
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  background: var(--app-tool-background);
+  overflow: hidden;
+}
+.model-block-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px var(--app-spacing-large);
+  background: rgba(255, 255, 255, 0.02);
+  border-bottom: 1px solid var(--app-tool-border);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+  cursor: pointer;
+  user-select: none;
+}
+.model-block.collapsed .model-block-header {
+  border-bottom: none;
+}
+.model-block-header .chevron {
+  color: var(--app-secondary-foreground);
+  font-size: 10px;
+}
+.model-block-title {
+  font-weight: 600;
+  color: var(--app-claude-orange);
+}
+.model-block-controls {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+}
+.model-block-btn {
+  font-family: var(--app-monospace-font-family);
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--app-tool-border);
+  border-radius: var(--corner-radius-small, 4px);
+  padding: 2px 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.model-block-btn:hover {
+  background: rgba(255, 255, 255, 0.09);
+  color: var(--app-foreground, #eee);
+}
+.model-block-body {
+  padding: 0;
+  background:
+    radial-gradient(
+      circle at 50% 38%,
+      rgba(255, 255, 255, 0.04),
+      rgba(0, 0, 0, 0.14)
+    );
+}
+.model-block-canvas {
+  display: block;
+  width: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+.model-block-canvas:active {
+  cursor: grabbing;
+}
+.model-block-empty {
+  padding: var(--app-spacing-large);
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  text-align: center;
+}
+.model-block-caption {
   padding: 0 var(--app-spacing-large) var(--app-spacing-medium);
   font-size: 11px;
   color: var(--app-secondary-foreground);

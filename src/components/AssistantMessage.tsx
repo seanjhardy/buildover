@@ -35,7 +35,8 @@ function isPresentationalTool(name: string): boolean {
   return (
     name === "RenderSVG" || name.endsWith("__RenderSVG") ||
     name === "RenderTable" || name.endsWith("__RenderTable") ||
-    name === "RenderChart" || name.endsWith("__RenderChart")
+    name === "RenderChart" || name.endsWith("__RenderChart") ||
+    name === "Render3DModel" || name.endsWith("__Render3DModel")
   );
 }
 

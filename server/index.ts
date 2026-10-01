@@ -127,6 +127,7 @@ import {
   readInstalledServers,
   writeInstalledServers,
 } from "./mcp-config.js";
+import { startMcpAuth, getMcpAuthState } from "./mcpAuth.js";
 import type { InstalledMcpServer } from "../src/types.js";
 import { searchMessages, removeIndexedChat, getIndexStatus } from "./embeddings.js";
 import {
@@ -176,7 +177,7 @@ import {
   updateTemplate,
 } from "./templates.js";
 import { patchPrefs, readPrefs } from "./prefs.js";
-import { DEFAULT_MODEL } from "../src/types.js";
+import { DEFAULT_MODEL, EFFORT_LEVELS, type AppPrefs, type EffortLevel } from "../src/types.js";
 import type {
   AgentEvent,
   ChatRecord,
@@ -372,6 +373,24 @@ app.post("/api/caffeinate/display", (req, res) => {
 // ---- Model list ----
 // Proxies the Anthropic models API so the frontend gets a live list without
 // exposing credentials to the browser.
+type ApiModelInfo = {
+  id: string;
+  display_name: string;
+  capabilities?: {
+    effort?: { supported?: boolean } & Partial<Record<EffortLevel, { supported?: boolean }>>;
+  };
+};
+
+// Effort levels a model accepts, per the Models API `capabilities.effort`.
+// Undefined when the response predates capabilities, so the client falls back
+// to its own heuristic.
+function effortLevelsFromCapabilities(m: ApiModelInfo): EffortLevel[] | undefined {
+  const effort = m.capabilities?.effort;
+  if (!effort) return undefined;
+  if (!effort.supported) return [];
+  return EFFORT_LEVELS.filter((level) => effort[level]?.supported);
+}
+
 app.get("/api/models", async (_req, res) => {
   try {
     const resp = await fetchWithClaudeAuth("https://api.anthropic.com/v1/models?limit=100", {
@@ -384,7 +403,7 @@ app.get("/api/models", async (_req, res) => {
       return res.status(resp.status).json({ error: text || resp.statusText });
     }
     const data = (await resp.json()) as {
-      data: { id: string; display_name: string; created_at: string }[];
+      data: ApiModelInfo[];
     };
     // Return only claude-* models, newest first, shaped for the frontend.
     // Include context window sizes based on model family
@@ -400,6 +419,7 @@ app.get("/api/models", async (_req, res) => {
           label: m.display_name,
           contextWindow,
           provider: "claude" as const,
+          effortLevels: effortLevelsFromCapabilities(m),
         };
       });
     res.json({ models });
@@ -421,7 +441,7 @@ app.get("/api/models/all", async (_req, res) => {
       });
       if (!resp.ok) throw new Error(await resp.text().catch(() => resp.statusText));
       const data = (await resp.json()) as {
-        data: { id: string; display_name: string }[];
+        data: ApiModelInfo[];
       };
       return (data.data ?? [])
         .filter((m) => m.id.startsWith("claude-"))
@@ -431,6 +451,7 @@ app.get("/api/models/all", async (_req, res) => {
           contextWindow:
             m.id.includes("opus") || m.id.includes("sonnet") ? 1_000_000 : 200_000,
           provider: "claude" as const,
+          effortLevels: effortLevelsFromCapabilities(m),
         }));
     })(),
     fetchCursorModels(),
@@ -442,6 +463,7 @@ app.get("/api/models/all", async (_req, res) => {
     label: string;
     contextWindow?: number;
     provider: "claude" | "cursor" | "openai";
+    effortLevels?: EffortLevel[];
   }[] = [];
 
   if (claudeSettled.status === "fulfilled") {
@@ -774,6 +796,25 @@ app.get("/api/prefs", async (_req, res) => {
   }
 });
 
+app.patch("/api/prefs", async (req, res) => {
+  try {
+    const patch: Partial<AppPrefs> = {};
+    const effort = req.body?.claudeEffort;
+    if (effort !== undefined) {
+      if (effort !== null && !EFFORT_LEVELS.includes(effort)) {
+        return res.status(400).json({ error: `invalid claudeEffort: ${effort}` });
+      }
+      // null clears the override so the model default applies.
+      patch.claudeEffort = effort ?? undefined;
+    }
+    res.json({ prefs: await patchPrefs(patch) });
+  } catch (err) {
+    res.status(500).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 // ---- Chats ----
 function readRepoPath(req: express.Request): string {
   const p = (req.query.repoPath ?? req.body?.repoPath ?? "") as string;
@@ -810,7 +851,7 @@ app.get("/api/chats", async (req, res) => {
 app.post("/api/chats", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
-    const model = (req.body?.model as Model) ?? "claude-opus-4-8";
+    const model = (req.body?.model as Model) ?? DEFAULT_MODEL;
     const permissionMode =
       (req.body?.permissionMode as PermissionMode) ?? "default";
     const id = req.body?.id as string | undefined;
@@ -1277,6 +1318,22 @@ app.delete("/api/mcp-servers/:id", (req, res) => {
   const id = decodeURIComponent(req.params.id);
   writeInstalledServers(readInstalledServers().filter((s) => s.id !== id));
   res.json({ ok: true });
+});
+
+// OAuth sign-in for remote servers that report `needs-auth`. Returns the URL
+// to open; poll the GET route until the state leaves `pending`.
+app.post("/api/mcp-servers/:id/auth", async (req, res) => {
+  try {
+    res.json(await startMcpAuth(decodeURIComponent(req.params.id)));
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get("/api/mcp-servers/:id/auth", (req, res) => {
+  res.json(
+    getMcpAuthState(decodeURIComponent(req.params.id)) ?? { state: "idle" },
+  );
 });
 
 app.post("/api/git/cherry-pick", async (req, res) => {

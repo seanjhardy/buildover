@@ -18,6 +18,11 @@ import type {
   PermissionMode,
 } from "../src/types.js";
 import { readCodexCreds, resolveCodexCommand } from "./codexAuth.js";
+import {
+  installedMcpServerInfos,
+  readInstalledServers,
+  toCodexConfigArgs,
+} from "./mcp-config.js";
 
 type PermissionDecision =
   | {
@@ -295,6 +300,11 @@ export async function runOpenAIAgentTurn(
 ): Promise<string | undefined> {
   const startedAt = Date.now();
   const command = resolveCodexCommand();
+  // Forward Buildover's installed MCP servers to the app-server via `-c`
+  // config overrides so codex turns can call the same tools as Claude turns.
+  const installedServers = readInstalledServers();
+  const mcpConfigArgs = toCodexConfigArgs(installedServers);
+  const mcpServerInfos = installedMcpServerInfos(installedServers);
   const creds = await readCodexCreds();
   const images = await materializeImages(args.attachments);
   const storedSessionId = args.codexSessionId;
@@ -342,7 +352,7 @@ export async function runOpenAIAgentTurn(
         "WebSearch",
         "AskUserQuestion",
       ],
-      mcpServers: [],
+      mcpServers: mcpServerInfos,
       cwd: args.cwd,
       model: args.model,
       permissionMode: args.permissionMode,
@@ -494,7 +504,7 @@ export async function runOpenAIAgentTurn(
 
   const child = spawn(
     command.command,
-    [...command.args, "app-server", "--stdio"],
+    [...command.args, "app-server", ...mcpConfigArgs, "--stdio"],
     {
       cwd: args.cwd,
       env: childEnv,

@@ -27,13 +27,13 @@ interface Props {
 export function PermissionPrompt({ pending, onRespond }: Props) {
   const [feedback, setFeedback] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
-  const branch = buildBranch(pending);
 
   // Guard against "click-through" accidents: when the user clicks a chat in
   // the sidebar the same pointer-up event can land on a button that renders
   // into the same screen position. We keep buttons non-interactive for a
   // short window after mount so that an in-flight click cannot fire them.
   const [ready, setReady] = useState(false);
+  const branch = buildBranch(pending);
   useEffect(() => {
     setReady(false);
     const t = setTimeout(() => setReady(true), 350);
@@ -55,6 +55,10 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
     // Block all keyboard shortcuts until the prompt is ready (mount-delay guard).
     if (!ready) return;
     if (e.key === "Escape") {
+      // A question must never be discarded by an accidental keypress. Skipping a
+      // question is only ever an explicit, confirmed button click (see AskShell);
+      // Escape does nothing here. Other tools keep Escape = cancel.
+      if (pending.toolName === "AskUserQuestion") return;
       e.preventDefault();
       sendDeny(true);
       return;
@@ -111,7 +115,7 @@ export function PermissionPrompt({ pending, onRespond }: Props) {
     const inputAny = p.input as Record<string, unknown>;
 
     if (p.toolName === "AskUserQuestion") {
-      return askQuestionBranch(p, respond);
+      return askQuestionBranch(p, respond, ready);
     }
     if (p.toolName === "ExitPlanMode") {
       return exitPlanBranch(p, respond, () => sendDeny(false));
@@ -381,12 +385,24 @@ interface AskQuestion {
 function askQuestionBranch(
   pending: PendingPermission,
   respond: (r: Result) => void,
+  ready: boolean,
 ): Branch {
   // Each question has its own answer; AskShell holds the state. We thread
   // a ref-like via local component state by lifting into a wrapper.
   return {
     header: "The agent is asking",
-    body: <AskShell pending={pending} respond={respond} />,
+    // Keyed by requestId so every new question mounts a fresh shell: previous
+    // answers, an armed Skip, and the mount-delay guard all reset. Without the
+    // key React would reuse this instance across questions and stale state could
+    // carry over.
+    body: (
+      <AskShell
+        key={pending.requestId}
+        pending={pending}
+        respond={respond}
+        ready={ready}
+      />
+    ),
     showRejectInput: false,
     defaultRejectMessage: "User skipped",
     // Actions live inside the shell so we can disable Submit until valid.
@@ -398,14 +414,40 @@ function askQuestionBranch(
 function AskShell({
   pending,
   respond,
+  ready,
 }: {
   pending: PendingPermission;
   respond: (r: Result) => void;
+  // Mirrors PermissionPrompt's mount-delay guard: buttons stay inert for a
+  // short window after the prompt appears so an in-flight click (a pointer-up
+  // landing here as the card renders into that screen position) can't fire them.
+  ready: boolean;
 }) {
   const questions = ((pending.input as any).questions ?? []) as AskQuestion[];
   const [active, setActive] = useState(0);
   const [answers, setAnswers] = useState<Record<string, string[]>>({});
   const [otherText, setOtherText] = useState<Record<string, string>>({});
+  // Skipping throws away the agent's question entirely, so it must be a
+  // deliberate act: the button arms on the first click and only skips on a
+  // confirming second click. Together with the `ready` guard this makes it
+  // impossible for a single stray click — the kind that happens when a question
+  // appears just as the user clicks elsewhere, e.g. right after the machine
+  // wakes and the reconnect replay re-surfaces the pending question — to
+  // silently discard a question. Auto-disarms so a forgotten armed state can't
+  // be tripped much later.
+  const [skipArmed, setSkipArmed] = useState(false);
+  useEffect(() => {
+    if (!skipArmed) return;
+    const t = setTimeout(() => setSkipArmed(false), 3000);
+    return () => clearTimeout(t);
+  }, [skipArmed]);
+  const onSkip = () => {
+    if (!skipArmed) {
+      setSkipArmed(true);
+      return;
+    }
+    respond({ behavior: "deny", message: "User skipped", interrupt: false });
+  };
 
   const currentQ = questions[active];
 
@@ -531,24 +573,20 @@ function AskShell({
       <div className="permission-actions ask-actions">
         <button
           className="btn btn-primary"
-          disabled={!allAnswered}
+          disabled={!allAnswered || !ready}
           onClick={submit}
         >
           <span className="shortcut-num">1</span>
           Submit answers
         </button>
         <button
-          className="btn"
-          onClick={() =>
-            respond({
-              behavior: "deny",
-              message: "User skipped",
-              interrupt: false,
-            })
-          }
+          className={`btn ${skipArmed ? "btn-danger" : ""}`}
+          disabled={!ready}
+          onClick={onSkip}
+          title="Skipping discards this question without answering it"
         >
           <span className="shortcut-num">2</span>
-          Skip
+          {skipArmed ? "Click again to skip" : "Skip"}
         </button>
       </div>
     </div>
