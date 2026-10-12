@@ -21,6 +21,10 @@ export type RequestAttentionAck = (args: {
 // turn ends (same mechanism as auto-compact, but triggered by the agent itself).
 export type RequestCompact = (reason?: string) => void;
 
+// Callback type: signals that the agent wants to continue in a fresh chat. After
+// the current turn ends the session writes a handoff note and opens the new chat.
+export type RequestHandoff = (reason?: string) => void;
+
 // Callback type: returns the current todos from the conversation history by
 // scanning for the latest TodoWrite call (same logic as the useTodos hook).
 export type GetCurrentTodos = () => Array<{
@@ -36,6 +40,7 @@ export function createCustomToolsServer(
   requestCompact: RequestCompact,
   repoPath?: string,
   getCurrentTodos?: GetCurrentTodos,
+  requestHandoff?: RequestHandoff,
 ) {
   // RequestUserAttention: pauses the agent turn and surfaces a UI prompt.
   // Unlike the old implementation that returned immediately (making it
@@ -410,6 +415,41 @@ export function createCustomToolsServer(
     },
   );
 
+  // Handoff: the end-of-task sibling of ClearContext. Compaction keeps the
+  // same (still large) conversation; a handoff starts a fresh one, so every
+  // later message re-reads a few hundred tokens instead of the whole history.
+  const handoffTool = tool(
+    "Handoff",
+    "Finish this chat and continue in a fresh one. Call it when a task is complete or you reach a " +
+      "natural stopping point in a long chat, so the user can carry on from a short handoff note " +
+      "instead of every message re-sending this whole history. After this turn ends, a handoff note " +
+      "is written and a new chat is opened with the note prefilled (the user decides whether to send " +
+      "it). Do not call it mid-task or when you still have steps to finish. You do not need to " +
+      "write the note yourself.",
+    {
+      reason: z
+        .string()
+        .optional()
+        .describe("Brief reason, e.g. 'Feature implemented and verified; chat is large'. Not shown to the user."),
+    },
+    async (args) => {
+      if (!requestHandoff) {
+        return {
+          content: [{ type: "text" as const, text: "Handoff is not available in this chat." }],
+        };
+      }
+      requestHandoff(args.reason);
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: "Handoff scheduled. Finish your reply; a note and a fresh chat will be created when this turn ends.",
+          },
+        ],
+      };
+    },
+  );
+
   // WriteRunConfig: lets the agent persist a custom HTML run panel + metadata
   // for the current repo. The panel HTML is stored at
   // ~/.buildover/repos/{name}/run-panel.html and rendered in a sandboxed
@@ -616,6 +656,7 @@ export function createCustomToolsServer(
       renderChartTool,
       renderModelTool,
       clearContextTool,
+      handoffTool,
       writeRunConfigTool,
       todoReadTool,
       todoWriteTool,

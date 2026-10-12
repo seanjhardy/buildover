@@ -3,7 +3,8 @@
 // image, point it at a copy whose long edge is ≤ IMAGE_MAX_EDGE (default 1024).
 // A 1920×1080 screenshot costs ~2.7k tokens on current models and is re-read on
 // every later call in the session; at 1024px it is ~0.8k. macOS only (sips).
-// Same logic buildover applies in-process (server/tokenEconomy.ts).
+// Install it globally: buildover no longer applies this in-process (every SDK
+// session loads ~/.claude/settings.json, so a second copy would double-process).
 //
 // ~/.claude/settings.json:
 //   "hooks": { "PreToolUse": [{ "matcher": "Read", "hooks": [{ "type": "command",

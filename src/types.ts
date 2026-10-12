@@ -265,6 +265,39 @@ export interface AppPrefs {
   claudeEffort?: EffortLevel;
   /** Token count at which Claude chats auto-compact. Unset → 200k. */
   autoCompactWindow?: number;
+  /** Max turns running at once across all chats; extras queue FIFO. Unset → 4,
+   *  0 → unlimited. */
+  maxConcurrentTurns?: number;
+  /** How many hours a chat with "Keep warm" on is pinged to keep its prompt
+   *  cache alive after the last real activity. Unset / 0 → off. */
+  keepWarmHours?: number;
+}
+
+/** Running spend for one chat, API-equivalent (list price, not billing). */
+export interface ChatCost {
+  /** Sum of every turn's cost: visible turns, silent compactions, keep-alives. */
+  totalUsd: number;
+  /** Cost of the last visible (non-silent) turn. */
+  lastTurnUsd: number;
+  /** Visible turns counted in totalUsd. */
+  turns: number;
+  /** Part of totalUsd spent on silent turns (compaction, keep-alive pings,
+   *  handoff notes). */
+  silentUsd?: number;
+  /** ISO time of the last API round-trip (any turn, silent or not). The prompt
+   *  cache is warm for ~1h after this. */
+  lastApiAt?: string;
+  /** Server bookkeeping: the SDK's cumulative `total_cost_usd` at the last
+   *  result, used to turn that running total into per-turn deltas. */
+  lastCumulativeUsd?: number;
+}
+
+/** Link written when a chat is continued in a fresh one (handoff). */
+export interface ChatHandoffTo {
+  chatId: string;
+  title: string;
+  notePath: string;
+  createdAt: string;
 }
 
 export interface ChatSummary {
@@ -292,6 +325,10 @@ export interface ChatSummary {
   /** Mirrors ChatRecord.queuePaused so the drainer can skip paused chats
    *  without a full read. Absent === not paused. */
   queuePaused?: boolean;
+  /** Mirrors ChatRecord.keepWarm so startup can re-arm keep-alive timers. */
+  keepWarm?: boolean;
+  /** Mirrors ChatRecord.handoffTo?.chatId. */
+  continuedInChatId?: string;
 }
 
 // Persisted chat events. These are a superset of the live AgentEvent stream
@@ -439,6 +476,16 @@ export interface ChatRecord {
   worktreeBranch?: string;
   /** When true, enables the 1M token context window beta for Claude models. */
   context1m?: boolean;
+  /** Running API-equivalent cost, including silent turns (see ChatCost). */
+  cost?: ChatCost;
+  /** Opt-in: ping the chat every 55 min after its last activity so the
+   *  prompt cache never goes cold (window length = prefs.keepWarmHours). */
+  keepWarm?: boolean;
+  /** Set on the old chat once it has been continued in a fresh one. */
+  handoffTo?: ChatHandoffTo;
+  /** Set on the fresh chat: where it came from, and the composer text to
+   *  prefill (the note is never auto-sent). */
+  handoffFrom?: { chatId: string; notePath: string; prefill?: string };
 }
 
 export interface QueuedChatTurn {
@@ -715,6 +762,8 @@ export type AgentEvent =
       sessionId: string;
       subtype: string;
       durationMs: number;
+      /** Cost of THIS turn (the server converts the SDK's cumulative
+       *  `total_cost_usd` into a per-turn delta). */
       totalCostUsd?: number;
       numTurns: number;
       result?: string;
@@ -779,6 +828,30 @@ export type AgentEvent =
        *  delayed-turn UI without waiting for a reconnect/replay. */
       queuedTurns?: QueuedChatTurn[];
       queuePaused?: boolean;
+      /** Present while the turn waits for a global concurrency slot
+       *  (status "queued"). */
+      slotQueue?: { position: number; running: number; max: number };
+    }
+  | {
+      // Live-only status line above the composer: a rate-limit / retry notice
+      // from the SDK stream. `message: null` clears it.
+      type: "chat_notice";
+      chatId: string;
+      kind: "rate_limit" | "retry";
+      message: string | null;
+    }
+  | {
+      // Running cost changed (after every turn, including silent ones).
+      type: "chat_cost";
+      chatId: string;
+      cost: ChatCost;
+    }
+  | {
+      // The chat was continued in a fresh one (agent-triggered handoff, or
+      // after POST /api/chats/:id/handoff). Tagged with the OLD chat's id.
+      type: "chat_handoff";
+      chatId: string;
+      handoffTo: ChatHandoffTo;
     }
   | {
       type: "chat_title";

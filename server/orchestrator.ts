@@ -135,6 +135,11 @@ class OrchestratorSession {
           // Code toolset and only expose our MCP tools.
           tools: [],
           mcpServers: { "buildover-orchestrator": this.mcp.server },
+          // Stateless router: it uses no skills, hooks, subagents or CLAUDE.md,
+          // and its only MCP server is passed explicitly above. Skip loading
+          // ~/.claude settings (user MCP servers, hooks such as the image
+          // downscaler, global agents) so every voice turn starts lean.
+          settingSources: [],
           // No `resume` — `persistSession: false` means sessions aren't on
           // disk, and resuming a non-persisted session crashes the CLI
           // subprocess ("Claude Code process exited with code 1"). The

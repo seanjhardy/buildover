@@ -9,14 +9,11 @@ import {
   createCustomToolsServer,
   type RequestAttentionAck,
   type RequestCompact,
+  type RequestHandoff,
 } from "./customTools.js";
 import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
 import { readPrefs } from "./prefs.js";
-import {
-  DEFAULT_AUTO_COMPACT_WINDOW,
-  TOKEN_SAVING_AGENTS,
-  downscaleImageReads,
-} from "./tokenEconomy.js";
+import { DEFAULT_AUTO_COMPACT_WINDOW } from "./tokenEconomy.js";
 import {
   EFFORT_LEVELS,
   effortLevelsFor,
@@ -54,7 +51,8 @@ export type RawAgentEvent = DistOmit<
         | "turn_start"
         | "turn_end"
         | "permission_request"
-        | "context_usage";
+        | "context_usage"
+        | "chat_notice";
     }
   >,
   "chatId"
@@ -100,6 +98,9 @@ export interface RunArgs {
   // agent wants to compact history; the session schedules a /compact turn
   // after the current turn ends (same path as auto-compact).
   requestCompact: RequestCompact;
+  // Called by the Handoff tool handler: after the turn ends the session writes
+  // a handoff note and opens a fresh chat to continue in.
+  requestHandoff: RequestHandoff;
   // Aborting this stops the current turn only. Background tasks keep running;
   // ClaudeLiveQuery.close() is what tears the whole CLI process down.
   abortController?: AbortController;
@@ -251,6 +252,12 @@ export class ClaudeLiveQuery {
   private idleTimer?: NodeJS.Timeout;
   private closed = false;
   private lastPublished = "";
+  // True while a rate-limit / retry notice is showing on the client, so the
+  // next real output can clear it. `warningShown` is the softer "approaching
+  // limit" notice, which stays up until the limit status says it is allowed
+  // again (or the turn ends).
+  private noticeActive = false;
+  private warningShown = false;
 
   static async start(args: RunArgs, hooks: LiveQueryHooks): Promise<ClaudeLiveQuery> {
     const prefs = await readPrefs();
@@ -276,6 +283,7 @@ export class ClaudeLiveQuery {
       (reason) => this.args.requestCompact(reason),
       this.cwd,
       () => this.currentTodos(),
+      (reason) => this.args.requestHandoff(reason),
     );
 
     const canUseTool: CanUseTool = async (toolName, input) => {
@@ -353,11 +361,11 @@ export class ClaudeLiveQuery {
         ...(effort ? { effort } : {}),
         ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
         // Every call re-reads the whole context, so cost scales with its size.
-        // Compact well before the 1M window (see tokenEconomy.ts).
+        // Compact well before the 1M window (see tokenEconomy.ts). The Haiku
+        // search/research agents and the image-downscale hook come from the
+        // user's global ~/.claude settings, which this query loads because
+        // `settingSources` is deliberately omitted.
         settings: { autoCompactWindow },
-        // Read-only search / web research on Haiku 5.5 instead of the main model.
-        agents: TOKEN_SAVING_AGENTS,
-        hooks: { PreToolUse: [{ matcher: "Read", hooks: [downscaleImageReads] }] },
         // One-line progress summaries for running subagents, shown on their
         // row in the Agents panel.
         agentProgressSummaries: true,
@@ -693,11 +701,65 @@ export class ClaudeLiveQuery {
             permissionMode: message.permissionMode,
             slashCommands: message.slash_commands ?? [],
           });
+        } else if (message.subtype === "api_retry") {
+          // The CLI hit a retryable API error and is backing off. Surface it
+          // as a non-fatal status instead of leaving the chat looking hung.
+          const secs = Math.max(1, Math.ceil((message.retry_delay_ms ?? 0) / 1000));
+          const limited = message.error_status === 429 || message.error === "rate_limit";
+          const cause = limited
+            ? "Rate limited"
+            : message.error === "overloaded"
+              ? "API overloaded"
+              : message.error_status
+                ? `API error ${message.error_status}`
+                : "Connection problem";
+          const attempt =
+            message.attempt && message.max_retries
+              ? ` (attempt ${message.attempt}/${message.max_retries})`
+              : "";
+          this.noticeActive = true;
+          emit({
+            type: "chat_notice",
+            kind: limited ? "rate_limit" : "retry",
+            message: `${cause}, retrying in ${secs}s${attempt}`,
+          });
+        }
+        break;
+      }
+
+      case "rate_limit_event": {
+        const info = message.rate_limit_info;
+        if (!info) break;
+        if (info.status === "rejected") {
+          const resets = info.resetsAt
+            ? ` Resets ${new Date(info.resetsAt < 1e12 ? info.resetsAt * 1000 : info.resetsAt).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })}.`
+            : "";
+          this.noticeActive = true;
+          emit({
+            type: "chat_notice",
+            kind: "rate_limit",
+            message: `Rate limited${info.rateLimitType ? ` (${String(info.rateLimitType).replace(/_/g, " ")})` : ""}.${resets}`,
+          });
+        } else if (info.status === "allowed_warning") {
+          this.warningShown = true;
+          emit({
+            type: "chat_notice",
+            kind: "rate_limit",
+            message: `Approaching usage limit${info.rateLimitType ? ` (${String(info.rateLimitType).replace(/_/g, " ")})` : ""}`,
+          });
+        } else if (this.noticeActive || this.warningShown) {
+          this.noticeActive = false;
+          this.warningShown = false;
+          emit({ type: "chat_notice", kind: "rate_limit", message: null });
         }
         break;
       }
 
       case "assistant": {
+        if (this.noticeActive) {
+          this.noticeActive = false;
+          emit({ type: "chat_notice", kind: "retry", message: null });
+        }
         const content = normalizeContent(message.message?.content ?? []);
         // Store assistant messages so currentTodos can scan for TodoWrite calls
         this.assistantMessages.push({ type: "assistant", message: message.message, content });
@@ -765,6 +827,10 @@ export class ClaudeLiveQuery {
 
       case "result": {
         this.sessionId = message.session_id ?? this.sessionId;
+        if (this.noticeActive) {
+          this.noticeActive = false;
+          emit({ type: "chat_notice", kind: "retry", message: null });
+        }
         emit({
           type: "result",
           sessionId: this.sessionId ?? "",

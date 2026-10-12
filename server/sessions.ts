@@ -16,6 +16,10 @@ import {
 import { makeCoordinationMcp } from "./coordinationTools.js";
 import { coordinatorPrompt, subagentPrompt } from "./prompts.js";
 import {
+  createChat,
+  saveChatCost,
+  setHandoffTo,
+  toSummary,
   appendEvent,
   computeStatus,
   enqueueChatTurn,
@@ -35,12 +39,28 @@ import { basename } from "node:path";
 import { notifyAgentFinished, notifyAgentNeedsInput } from "./push.js";
 import { generateTitle } from "./title.js";
 import { makeCheckpointId, saveSnapshot } from "./snapshots.js";
-import { getUsageLimitBlock, type UsageLimitBlock } from "./usage.js";
+import {
+  getUsageLimitBlock,
+  invalidateUsageCache,
+  type UsageLimitBlock,
+} from "./usage.js";
+import { readPrefs } from "./prefs.js";
+import { turnSlots } from "./turnSlots.js";
+import { compactBackstopTokens } from "./tokenEconomy.js";
+import {
+  HANDOFF_WARM_PROMPT,
+  chatCacheIsWarm,
+  handoffPrefill,
+  saveHandoffNote,
+  writeNoteWithHaiku,
+} from "./handoff.js";
 import type {
   AgentEvent,
   AgentTask,
   Attachment,
+  ChatCost,
   ChatEvent,
+  ChatHandoffTo,
   ChatRecord,
   MessageOrigin,
   Model,
@@ -48,6 +68,7 @@ import type {
   QueuedChatTurn,
 } from "../src/types.js";
 import { SUBAGENT_MODEL } from "../src/types.js";
+import { turnCostDelta } from "../src/pricing.js";
 
 export type Subscriber = (event: AgentEvent) => void;
 
@@ -77,8 +98,10 @@ interface PendingAttention {
   resolve: (result: { feedback?: string; interrupt?: boolean }) => void;
 }
 
-// Absolute context-window usage (in tokens) that triggers automatic compaction.
-const AUTO_COMPACT_TOKEN_THRESHOLD = 1_000_000;
+// Non-Claude providers don't compact through the SDK and their context is
+// rarely this large; keep the old absolute backstop for them. Claude chats use
+// compactBackstopTokens(prefs.autoCompactWindow) instead.
+const NON_CLAUDE_COMPACT_TOKEN_THRESHOLD = 1_000_000;
 const USAGE_QUEUE_POLL_MS = 60_000;
 const MAX_TIMER_MS = 2_147_483_647;
 const SCHEDULE_WAKEUP_TOOL = "ScheduleWakeup";
@@ -96,6 +119,37 @@ const PARENT_FACING_TOOLS = new Set([
 
 const PARENT_NUDGE_PROMPT =
   "You've stopped without contacting your coordinator this turn. If your assignment is complete, call `mark_task_finished` with a summary. If you have a question, a blocker, or an interim finding, call `report_to_parent`. If you genuinely have nothing to report yet and are still working, continue the task. Don't reply to this message with plain text — your coordinator only sees what you send through those tools.";
+
+/*
+ * Keep-warm pings (opt-in per chat; window length = prefs.keepWarmHours, default
+ * 0 = off). The longest prompt-cache TTL the API offers is 1h, and cache reads
+ * refresh it. So a chat that is left idle goes cold after an hour and its next
+ * message re-sends the whole context at the 1h cache-WRITE price. A silent
+ * "ping" turn every 55 minutes re-reads the context at the much cheaper
+ * cache-READ price instead and resets the 1h clock.
+ *
+ * Economics, Opus 5.5 at 200k context ($4/MTok input; 1h write = 2x = $8,
+ * read = 0.05x = $0.20):
+ *   - one ping    ~ 200k x $0.20/MTok = $0.04, plus a few output tokens
+ *   - cold resend ~ 200k x $8/MTok    = $1.60
+ * Keeping a chat warm for 6h is ~7 pings, about $0.25 - cheaper than ONE cold
+ * restart. It only pays off if the user comes back within the window, which is
+ * why it is opt-in and time-boxed.
+ *
+ * Pings reuse the silent-turn machinery (like auto-compact): nothing is shown
+ * in the chat, the cost counts toward the running total, and no slot is taken
+ * unless one is free. The timer restarts whenever a real turn ends; it stops on
+ * delete / archive / toggle-off, once keepWarmHours have passed since the last
+ * real activity, and is skipped while a turn is running or the cap is full.
+ */
+const KEEP_WARM_INTERVAL_MS = 55 * 60_000;
+// Margin before the 1h TTL during which a ping can still be retried.
+const KEEP_WARM_CACHE_TTL_MS = 59 * 60_000;
+const KEEP_WARM_RETRY_MS = 2 * 60_000;
+const KEEP_ALIVE_PROMPT = "(keep-alive ping: reply with exactly: ok)";
+
+// Thrown inside runTurn when a turn is stopped while waiting for a slot.
+const SLOT_WAIT_ABORTED = Symbol("slot-wait-aborted");
 
 const queueTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
@@ -186,6 +240,10 @@ export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void
   // so wakeups persisted just before a crash are still rescheduled on boot.
   const chats = await listChats(repoPath);
   for (const chat of chats) {
+    // Keep-warm timers live in memory; re-arm any that a restart dropped.
+    if (chat.keepWarm && !chat.userMarkedFinished) {
+      void getSession(repoPath, chat.id).syncKeepWarm().catch(() => {});
+    }
     if (chat.queuePaused) continue;
     if (chat.queuedTurn) {
       scheduleQueuedTurnDrain(repoPath, chat.id, chat.queuedTurn.runAfter);
@@ -376,6 +434,9 @@ class AgentSession {
   // block treats this the same as hitting the auto-compact threshold — it runs
   // a silent /compact turn immediately after the current turn ends.
   private pendingCompact = false;
+  // Set when the agent calls the Handoff tool: after the turn ends the session
+  // writes a handoff note and opens a fresh chat (see handoff.ts).
+  private pendingHandoff?: { reason?: string };
   // Provider callbacks are synchronous, while transcript writes are async.
   // Serialize those writes so permission requests, answers, output and the
   // terminal turn_end can never be reordered on disk.
@@ -392,6 +453,24 @@ class AgentSession {
   // A CLI-initiated turn (a background task settled and woke the model) that
   // arrived while another turn was running. Adopted once the session frees up.
   private pendingAdoption?: { live: ClaudeLiveQuery; notes: string[] };
+
+  // ---- Global concurrency cap (see turnSlots.ts) ----
+  // A running visible turn holds one slot. It is released while the turn is
+  // parked waiting for the user (permission / attention) so a handful of
+  // unattended prompts can't starve every other chat.
+  private holdsSlot = false;
+  private slotSuspended = false;
+  private waitingForSlot = false;
+  private slotPosition = 0;
+  private resumingSlot?: Promise<void>;
+
+  // Running spend, mirrored to the record after every result (see recordTurnCost).
+  private costState: ChatCost = { totalUsd: 0, lastTurnUsd: 0, turns: 0 };
+
+  // ---- Keep-warm pings (see KEEP_WARM_* below) ----
+  private keepWarmTimer?: ReturnType<typeof setTimeout>;
+  // Last real (non-ping) activity; the keep-warm window is measured from here.
+  private keepWarmAnchorMs = 0;
 
   constructor(chatId: string, repoPath: string) {
     this.chatId = chatId;
@@ -584,11 +663,13 @@ class AgentSession {
     // In-memory liveness is authoritative while this process owns the turn.
     // A stale recovery marker in the file must not tell connected clients that
     // a provider which is actively emitting output has stopped.
-    const status = this.running
-      ? this.pendingPermissions.size > 0 || this.pendingAttentions.size > 0
-        ? "awaiting_input"
-        : "running"
-      : computeStatus(record);
+    const status = this.waitingForSlot
+      ? "queued"
+      : this.running
+        ? this.pendingPermissions.size > 0 || this.pendingAttentions.size > 0
+          ? "awaiting_input"
+          : "running"
+        : computeStatus(record);
     this.broadcast({
       type: "chat_status",
       chatId: this.chatId,
@@ -596,12 +677,316 @@ class AgentSession {
       sessionId: record.sessionId,
       queuedTurns: record.queuedTurns ?? [],
       queuePaused: record.queuePaused === true,
+      ...(this.waitingForSlot
+        ? {
+            slotQueue: {
+              position: this.slotPosition,
+              running: turnSlots.stats.running,
+              max: turnSlots.stats.max,
+            },
+          }
+        : {}),
     });
     await rebuildIndex(this.repoPath);
   }
 
   async pushStatusForRecord(record: ChatRecord | null): Promise<void> {
     await this.pushStatusFor(record);
+  }
+
+  // ---- Global concurrency slots ----
+
+  private async broadcastStatus(): Promise<void> {
+    try {
+      await this.pushStatusFor(await readChat(this.repoPath, this.chatId));
+    } catch {
+      // Best-effort status refresh.
+    }
+  }
+
+  // Waits for a global turn slot, showing a "queued" status meanwhile. Resolves
+  // false when the turn was stopped while it was still queued.
+  private async acquireSlot(): Promise<boolean> {
+    if (this.holdsSlot) return true;
+    turnSlots.setMax((await readPrefs()).maxConcurrentTurns);
+    if (turnSlots.tryAcquire()) {
+      this.holdsSlot = true;
+      return true;
+    }
+    this.waitingForSlot = true;
+    const got = await turnSlots.acquire({
+      signal: this.abort?.signal,
+      onPosition: (position) => {
+        this.slotPosition = position;
+        void this.broadcastStatus();
+      },
+    });
+    this.waitingForSlot = false;
+    if (got) this.holdsSlot = true;
+    void this.broadcastStatus();
+    return got;
+  }
+
+  private releaseSlot(): void {
+    this.slotSuspended = false;
+    if (!this.holdsSlot) return;
+    this.holdsSlot = false;
+    turnSlots.release();
+  }
+
+  // The turn is about to block on the user (permission / attention prompt):
+  // give the slot back so waiting chats can run in the meantime.
+  private suspendSlot(): void {
+    if (!this.holdsSlot) return;
+    this.holdsSlot = false;
+    this.slotSuspended = true;
+    turnSlots.release();
+  }
+
+  // The user answered; take a slot again before the turn continues. Jumps the
+  // queue because the turn already has in-flight state.
+  private resumeSlot(): Promise<void> {
+    if (!this.slotSuspended) return Promise.resolve();
+    if (this.resumingSlot) return this.resumingSlot;
+    const resuming = (async () => {
+      const got = await turnSlots.acquire({ front: true, signal: this.abort?.signal });
+      if (got) {
+        this.holdsSlot = true;
+        this.slotSuspended = false;
+      }
+    })().finally(() => {
+      if (this.resumingSlot === resuming) this.resumingSlot = undefined;
+    });
+    this.resumingSlot = resuming;
+    return resuming;
+  }
+
+  // ---- Cost accounting ----
+
+  // The SDK's `total_cost_usd` is the CUMULATIVE total for the CLI session
+  // (each result carries the running total, and a resumed session continues
+  // from its saved total), so a per-turn figure is the difference to the
+  // previous result. A drop (new session after /clear or a stale resume) means
+  // the counter restarted, in which case the value itself is the turn's cost.
+  private recordTurnCost(
+    cumulativeUsd: number | undefined,
+    silent: boolean,
+  ): number | undefined {
+    const prev = this.costState;
+    let delta: number | undefined;
+    if (typeof cumulativeUsd === "number") {
+      delta = turnCostDelta(prev.lastCumulativeUsd, cumulativeUsd);
+    }
+    const spent = delta ?? 0;
+    this.costState = {
+      totalUsd: prev.totalUsd + spent,
+      lastTurnUsd: silent ? prev.lastTurnUsd : spent,
+      turns: silent ? prev.turns : prev.turns + 1,
+      silentUsd: (prev.silentUsd ?? 0) + (silent ? spent : 0),
+      lastApiAt: new Date().toISOString(),
+      lastCumulativeUsd: cumulativeUsd ?? prev.lastCumulativeUsd,
+    };
+    const snapshot = this.costState;
+    this.broadcast({ type: "chat_cost", chatId: this.chatId, cost: snapshot });
+    this.enqueuePersistence(() => saveChatCost(this.repoPath, this.chatId, snapshot));
+    return delta;
+  }
+
+  // ---- Keep-warm ----
+
+  private keepWarmEnabled = false;
+
+  private clearKeepWarm(): void {
+    if (this.keepWarmTimer) clearTimeout(this.keepWarmTimer);
+    this.keepWarmTimer = undefined;
+  }
+
+  private scheduleKeepWarm(delayMs: number): void {
+    this.clearKeepWarm();
+    if (!this.keepWarmEnabled) return;
+    this.keepWarmTimer = setTimeout(() => void this.keepWarmTick(), delayMs);
+    // Never keep the process alive just for a ping.
+    this.keepWarmTimer.unref?.();
+  }
+
+  // Re-evaluates this chat's keep-warm timer against its persisted state.
+  // Called when the toggle or archive state changes and at startup.
+  async syncKeepWarm(): Promise<void> {
+    const record = await readChat(this.repoPath, this.chatId);
+    this.keepWarmEnabled = !!record?.keepWarm && !record.userMarkedFinished;
+    if (!record || !this.keepWarmEnabled) {
+      this.clearKeepWarm();
+      return;
+    }
+    if (this.running || this.keepWarmTimer) return; // a turn end re-arms it
+    const lastApi = Date.parse(record.cost?.lastApiAt ?? record.updatedAt);
+    // An already-cold chat is left alone: a ping would pay the full re-write.
+    // The next real message warms it and starts the chain.
+    if (!Number.isFinite(lastApi) || Date.now() - lastApi >= KEEP_WARM_CACHE_TTL_MS) return;
+    this.keepWarmAnchorMs ||= lastApi;
+    this.scheduleKeepWarm(Math.max(0, lastApi + KEEP_WARM_INTERVAL_MS - Date.now()));
+  }
+
+  private async keepWarmTick(): Promise<void> {
+    this.keepWarmTimer = undefined;
+    try {
+      const [record, prefs] = await Promise.all([
+        readChat(this.repoPath, this.chatId),
+        readPrefs(),
+      ]);
+      const hours = prefs.keepWarmHours ?? 0;
+      this.keepWarmEnabled = !!record?.keepWarm && !record.userMarkedFinished;
+      if (!record || !this.keepWarmEnabled || hours <= 0) return;
+      if (!isClaudeModel(record.model) || !record.sessionId) return;
+      // Window over: stop pinging; the cache is allowed to expire.
+      if (Date.now() - this.keepWarmAnchorMs >= hours * 3_600_000) return;
+      const lastApi = Date.parse(record.cost?.lastApiAt ?? record.updatedAt);
+      if (Number.isFinite(lastApi) && Date.now() - lastApi >= KEEP_WARM_CACHE_TTL_MS) return;
+      // A running turn re-arms the timer when it ends; queued turns are about
+      // to do the same, so a ping would be wasted.
+      if (this.running || this.pendingUserTurns.length > 0 || record.queuedTurns?.length) return;
+      await this.runTurn({
+        text: KEEP_ALIVE_PROMPT,
+        model: record.model,
+        permissionMode: record.permissionMode,
+        isRetry: true,
+        silent: true,
+        keepAlive: true,
+      });
+    } catch (err) {
+      console.warn(
+        `[keep-warm] ping failed for ${this.chatId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  // A real turn just ended (or started): restart the keep-warm clock from now.
+  private noteRealActivity(): void {
+    this.keepWarmAnchorMs = Date.now();
+    this.scheduleKeepWarm(KEEP_WARM_INTERVAL_MS);
+  }
+
+  // ---- Handoff to a fresh chat ----
+
+  // Asks this chat's own agent for the note in a silent turn (warm cache only).
+  private async writeNoteInChat(record: ChatRecord): Promise<string> {
+    const texts: string[] = [];
+    await this.runTurn({
+      text: HANDOFF_WARM_PROMPT,
+      model: record.model,
+      permissionMode: record.permissionMode,
+      isRetry: true, // don't echo the prompt as a user message
+      silent: true, // nothing appears in the chat
+      onEvent: (event) => {
+        if (event.type !== "assistant") return;
+        const text = event.content
+          .filter((b): b is { type: "text"; text: string } => b.type === "text")
+          .map((b) => b.text)
+          .join("")
+          .trim();
+        if (text) texts.push(text);
+      },
+    });
+    // The note is the agent's final message; earlier text would be narration.
+    return texts[texts.length - 1] ?? "";
+  }
+
+  /**
+   * Continues this chat in a fresh one: writes a handoff note, saves it under
+   * .buildover/handoffs, creates a new chat in the same repo / worktree whose
+   * composer is prefilled with the note (not sent), and links the two.
+   *
+   * Cache warm (last API call < 55 min ago): a silent turn in this chat writes
+   * the note; the context is cache-read, which is cheap. Cache cold: the chat
+   * is NOT woken (that would re-write its whole context); Haiku 5.5 writes the
+   * note from the persisted transcript instead.
+   */
+  async handoff(): Promise<{
+    method: "warm" | "cold";
+    notePath: string;
+    handoffTo: ChatHandoffTo;
+    chat: ChatRecord;
+  }> {
+    const record = await readChat(this.repoPath, this.chatId);
+    if (!record) throw new Error(`Chat ${this.chatId} not found`);
+    if (record.handoffTo) {
+      const existing = await readChat(this.repoPath, record.handoffTo.chatId);
+      // Re-clicking after a successful handoff just reopens the same chat.
+      if (existing) {
+        return {
+          method: "cold",
+          notePath: record.handoffTo.notePath,
+          handoffTo: record.handoffTo,
+          chat: existing,
+        };
+      }
+    }
+    let note = "";
+    let method: "warm" | "cold" = "cold";
+    if (
+      !this.running &&
+      isClaudeModel(record.model) &&
+      record.sessionId &&
+      chatCacheIsWarm(record)
+    ) {
+      try {
+        note = await this.writeNoteInChat(record);
+        method = "warm";
+      } catch (err) {
+        console.warn(
+          `[handoff] warm note failed for ${this.chatId}, falling back to Haiku:`,
+          err instanceof Error ? err.message : err,
+        );
+      }
+    }
+    if (!note.trim()) {
+      note = await writeNoteWithHaiku(record, this.repoPath);
+      method = "cold";
+    }
+
+    const notePath = await saveHandoffNote(record, this.repoPath, note);
+    const fresh = await createChat(this.repoPath, {
+      model: record.model,
+      permissionMode: record.permissionMode,
+      title: `Continue: ${record.title}`.slice(0, 60),
+      worktreePath: record.worktreePath,
+      worktreeBranch: record.worktreeBranch,
+      context1m: record.context1m,
+      handoffFrom: {
+        chatId: record.id,
+        notePath,
+        prefill: handoffPrefill(notePath, note),
+      },
+    });
+    const handoffTo: ChatHandoffTo = {
+      chatId: fresh.id,
+      title: fresh.title,
+      notePath,
+      createdAt: new Date().toISOString(),
+    };
+    await setHandoffTo(this.repoPath, this.chatId, handoffTo);
+    // Sidebar: add the new chat. Both events ride this chat's channel (the one
+    // the sidebar is already subscribed to).
+    this.broadcast({ type: "chat_created", chatId: this.chatId, summary: toSummary(fresh) });
+    this.broadcast({ type: "chat_handoff", chatId: this.chatId, handoffTo });
+    await rebuildIndex(this.repoPath);
+    return { method, notePath, handoffTo, chat: fresh };
+  }
+
+  // The agent called Handoff and its turn has ended.
+  private async runAgentRequestedHandoff(reason?: string): Promise<void> {
+    try {
+      await this.handoff();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      console.warn(`[handoff] agent-requested handoff failed for ${this.chatId}: ${message}`);
+      this.broadcast({
+        type: "error",
+        chatId: this.chatId,
+        message: `Handoff failed${reason ? ` (${reason})` : ""}: ${message}`,
+      });
+    }
   }
 
   private async queueForUsageLimit(
@@ -687,9 +1072,12 @@ class AgentSession {
     errorMessage: string,
     model: string,
   ): Promise<UsageLimitBlock | null> {
+    const looksLikeLimit = /rate.?limit|429|usage limit|quota|exceeded your/i.test(errorMessage);
+    // The ~3 min usage cache is stale by definition once a turn hits a limit.
+    if (looksLikeLimit) invalidateUsageCache();
     const block = await getProviderUsageLimitBlock(model).catch(() => null);
     if (block) return block;
-    if (/rate.?limit|429|usage limit|quota|exceeded your/i.test(errorMessage)) {
+    if (looksLikeLimit) {
       return {
         message:
           "Usage limit reached while the agent was working. Execution is deferred until the limit resets.",
@@ -853,6 +1241,8 @@ class AgentSession {
   // Stops the turn and kills every subagent / shell task the chat's CLI
   // process is running. Used when the chat is deleted.
   dispose(): void {
+    this.keepWarmEnabled = false;
+    this.clearKeepWarm();
     this.interrupt();
     this.closeLive();
   }
@@ -1049,6 +1439,12 @@ class AgentSession {
     // that process instead of sending `text` to the model; `text` is only
     // the system message shown above it.
     adoptLive?: ClaudeLiveQuery;
+    // A keep-warm ping (see KEEP_ALIVE_PROMPT): silent, takes a slot only if
+    // one is free, and never counts as real activity.
+    keepAlive?: boolean;
+    // Observes every event of this turn (before silent suppression). Used to
+    // capture the text of a silent handoff-note turn.
+    onEvent?: (event: AgentEvent) => void;
   }): Promise<void> {
     if (args.adoptLive) {
       if (!args.adoptLive.hasPendingUnsolicitedTurn()) return;
@@ -1142,10 +1538,29 @@ class AgentSession {
       }
     }
 
+    if (args.keepAlive) {
+      // Pings are best-effort: skip when the cap is saturated or the plan is
+      // out of usage rather than waiting or queueing.
+      turnSlots.setMax((await readPrefs()).maxConcurrentTurns);
+      if (this.running) return;
+      if (await getUsageLimitBlock(args.model)) {
+        this.scheduleKeepWarm(KEEP_WARM_INTERVAL_MS);
+        return;
+      }
+      if (this.running) return;
+      if (!turnSlots.tryAcquire()) {
+        this.scheduleKeepWarm(KEEP_WARM_RETRY_MS);
+        return;
+      }
+      this.holdsSlot = true;
+    }
+
     this.running = true;
     this.currentTurnSilent = args.silent ?? false;
     this.abort = new AbortController();
     this.currentPermissionMode = args.permissionMode;
+    // A real message restarts the keep-warm clock when its turn ends.
+    if (!args.keepAlive) this.clearKeepWarm();
 
     const record = await withChatLock(this.repoPath, this.chatId, async () => {
       const r = await readChat(this.repoPath, this.chatId);
@@ -1157,8 +1572,11 @@ class AgentSession {
     });
     if (!record) {
       this.running = false;
+      this.releaseSlot();
       throw new Error(`Chat ${this.chatId} not found`);
     }
+    this.costState = record.cost ?? { totalUsd: 0, lastTurnUsd: 0, turns: 0 };
+    this.keepWarmEnabled = !!record.keepWarm && !record.userMarkedFinished;
 
     const isFirstUserTurn = !record.events.some(
       (e) => e.type === "user_message",
@@ -1250,6 +1668,8 @@ class AgentSession {
       // lastContextUsedTokens field is still updated (done before the broadcast
       // check) so the threshold logic works correctly.
       "context_usage",
+      // Retry / rate-limit notices from a background turn would be confusing.
+      "chat_notice",
     ]);
 
     // Captures a mid-turn `error` event emitted by the SDK runner so the
@@ -1287,6 +1707,13 @@ class AgentSession {
       if (tagged.type === "context_usage") {
         this.lastContextUsedTokens = tagged.usedTokens;
       }
+      // The SDK reports a cumulative cost; convert it to this turn's cost so
+      // every consumer (result line, running total) sees per-turn figures.
+      if (tagged.type === "result") {
+        const delta = this.recordTurnCost(tagged.totalCostUsd, args.silent === true);
+        if (delta !== undefined) tagged.totalCostUsd = delta;
+      }
+      args.onEvent?.(tagged);
       if (tagged.type === "assistant") {
         for (const block of tagged.content) {
           if (block.type === "tool_use" && PARENT_FACING_TOOLS.has(block.name)) {
@@ -1345,12 +1772,12 @@ class AgentSession {
     // Shared permission bridge for providers that can pause a live turn. Claude
     // reaches it through canUseTool; Codex app-server reaches it through the
     // AskUserQuestion dynamic-tool/server-request flow.
-    const requestPermission = (req: {
+    const requestPermission = async (req: {
       toolName: string;
       input: Record<string, unknown>;
       suggestions?: unknown[];
-    }) =>
-      new Promise<
+    }) => {
+      const decision = await new Promise<
         | {
             behavior: "allow";
             updatedInput?: Record<string, unknown>;
@@ -1368,6 +1795,7 @@ class AgentSession {
           suggestions: req.suggestions ?? [],
           resolve,
         });
+        this.suspendSlot();
         const ev: AgentEvent = {
           type: "permission_request",
           chatId: this.chatId,
@@ -1399,6 +1827,13 @@ class AgentSession {
           );
         }
       });
+      // Back to work: reclaim a slot (the prompt released ours while waiting).
+      if (this.pendingPermissions.size === 0 && this.pendingAttentions.size === 0) {
+        await this.resumeSlot();
+      }
+      return decision;
+    };
+
 
     // Code-editing subagents run their SDK session in an isolated git worktree
     // so their edits don't touch the live main working tree until merged back.
@@ -1412,6 +1847,10 @@ class AgentSession {
     let queuedForUsage = false;
 
     try {
+      // Global cap on concurrent turns. Silent turns (compaction, handoff
+      // notes) are exempt: they chain off a turn that already held a slot.
+      if (!args.silent && !(await this.acquireSlot())) throw SLOT_WAIT_ABORTED;
+
       // Route to the correct runner based on the model provider.
       const provider = args.adoptLive ? "claude" : getModelProvider(args.model);
       if (provider === "cursor") {
@@ -1504,15 +1943,20 @@ class AgentSession {
           console.log(`[session] ClearContext requested by agent${reason ? `: ${reason}` : ""}`);
           this.pendingCompact = true;
         },
+        requestHandoff: (reason) => {
+          console.log(`[session] Handoff requested by agent${reason ? `: ${reason}` : ""}`);
+          this.pendingHandoff = { reason };
+        },
         requestPermission,
-        requestAttentionAck: (req) =>
-          new Promise((resolve) => {
+        requestAttentionAck: async (req) => {
+          const ack = await new Promise<{ feedback?: string; interrupt?: boolean }>((resolve) => {
             this.pendingAttentions.set(req.attentionId, {
               attentionId: req.attentionId,
               message: req.message,
               summary: req.summary,
               resolve,
             });
+            this.suspendSlot();
             const ev: AgentEvent = {
               type: "pending_attention",
               chatId: this.chatId,
@@ -1538,7 +1982,12 @@ class AgentSession {
                 req.message,
               );
             }
-          }),
+          });
+          if (this.pendingPermissions.size === 0 && this.pendingAttentions.size === 0) {
+            await this.resumeSlot();
+          }
+          return ack;
+        },
         abortController: this.abort,
         // Snapshot the target file before any file-modifying tool runs so we
         // can restore it when the user clicks "Revert".  Only active for
@@ -1617,12 +2066,17 @@ class AgentSession {
         queuedForUsage = await this.finalizeFailure(args, deferredErrorMessage);
       }
     } catch (err) {
-      // An unexpected throw from the runner itself (not the in-stream error
-      // path above). Route it through the same handler so a usage limit here is
-      // also re-queued rather than surfaced as a dead end.
-      const message = err instanceof Error ? err.message : String(err);
-      queuedForUsage = await this.finalizeFailure(args, message);
+      // Stopped while still waiting for a concurrency slot: nothing ran.
+      if (err !== SLOT_WAIT_ABORTED) {
+        // An unexpected throw from the runner itself (not the in-stream error
+        // path above). Route it through the same handler so a usage limit here
+        // is also re-queued rather than surfaced as a dead end.
+        const message = err instanceof Error ? err.message : String(err);
+        queuedForUsage = await this.finalizeFailure(args, message);
+      }
     } finally {
+      this.releaseSlot();
+      this.waitingForSlot = false;
       const wasSilent = this.currentTurnSilent;
       const wasAborted = this.abort?.signal.aborted === true;
       this.currentTurnSilent = false;
@@ -1730,12 +2184,22 @@ class AgentSession {
       // Guard: don't re-trigger on the compact turn itself to avoid a loop, and
       // never start a compact turn when we just queued for a usage limit — it
       // would skip the usage check and immediately fail again.
+      // The SDK compacts first, at prefs.autoCompactWindow; this silent
+      // /compact turn is only a backstop ~1.1x above that window (see
+      // tokenEconomy.ts). Silent turns other than /compact itself (keep-alive
+      // pings, handoff notes) never trigger one.
+      const compactThreshold = isClaudeModel(this.lastModel)
+        ? compactBackstopTokens((await readPrefs()).autoCompactWindow)
+        : NON_CLAUDE_COMPACT_TOKEN_THRESHOLD;
+      const handoffRequest = this.pendingHandoff;
+      this.pendingHandoff = undefined;
       const shouldCompact =
         !wasAborted &&
         !queuedForUsage &&
-        (this.lastContextUsedTokens >= AUTO_COMPACT_TOKEN_THRESHOLD ||
-          this.pendingCompact) &&
-        !args.text.startsWith("/compact");
+        !handoffRequest &&
+        (this.lastContextUsedTokens >= compactThreshold || this.pendingCompact) &&
+        !args.text.startsWith("/compact") &&
+        !(args.silent && !args.text.startsWith("/compact"));
       // A background task woke the model while this turn was running. Its
       // output is already buffered, so it goes first — any other turn sent
       // into the same process would swallow it. A pending compact simply
@@ -1744,8 +2208,15 @@ class AgentSession {
       this.pendingAdoption = undefined;
       const adopting = adoption?.live.hasPendingUnsolicitedTurn() === true;
       if (!adopting) this.pendingCompact = false;
+      // Keep-warm clock: a ping re-arms the next ping; anything else is real
+      // activity and restarts the whole window.
+      if (args.keepAlive) this.scheduleKeepWarm(KEEP_WARM_INTERVAL_MS);
+      else this.noteRealActivity();
       if (adopting) {
         this.startBackgroundTurn(adoption!.live, adoption!.notes);
+      } else if (handoffRequest && !wasAborted && !queuedForUsage && !args.silent) {
+        // The agent called Handoff: write the note and open the fresh chat.
+        void this.runAgentRequestedHandoff(handoffRequest.reason);
       } else if (shouldCompact) {
         void this.runTurn({
           text: "/compact",
@@ -1811,7 +2282,10 @@ class AgentSession {
       event.type === "chat_title" ||
       event.type === "chat_replay" ||
       event.type === "user_message_echo" ||
-      event.type === "pending_attention"
+      event.type === "pending_attention" ||
+      event.type === "chat_notice" ||
+      event.type === "chat_cost" ||
+      event.type === "chat_handoff"
     ) {
       return;
     }
@@ -1882,9 +2356,13 @@ class AgentSession {
       "user_message_echo",
       "turn_start",
     ]);
+    // A silent turn (compaction, keep-alive ping, handoff note) must never make
+    // the sidebar flicker to "running" and back — not even for its system_init.
+    // Only a permission request (the user has to act) still surfaces.
     const suppressed =
       ALWAYS_SUPPRESS_TYPES.has(event.type) ||
-      (this.currentTurnSilent && SILENT_SUPPRESS_TYPES.has(event.type));
+      (this.currentTurnSilent &&
+        (SILENT_SUPPRESS_TYPES.has(event.type) || event.type !== "permission_request"));
     if (!suppressed) {
       await this.pushStatusFor(updated);
     }

@@ -12,7 +12,9 @@ import { pruneSnapshotsFrom, restoreFromCheckpoint } from "./snapshots.js";
 import type {
   Attachment,
   ChatBranch,
+  ChatCost,
   ChatEvent,
+  ChatHandoffTo,
   ChatKind,
   ChatRecord,
   ChatStatus,
@@ -248,6 +250,11 @@ export interface NewChatOpts {
   kind?: ChatKind;
   parentChatId?: string;
   task?: string;
+  /** Run in the same isolated worktree as another chat (handoff). */
+  worktreePath?: string;
+  worktreeBranch?: string;
+  context1m?: boolean;
+  handoffFrom?: ChatRecord["handoffFrom"];
 }
 
 export async function createChat(
@@ -271,6 +278,10 @@ export async function createChat(
     ...(opts.kind && opts.kind !== "user" ? { kind: opts.kind } : {}),
     ...(opts.parentChatId ? { parentChatId: opts.parentChatId } : {}),
     ...(opts.task ? { task: opts.task } : {}),
+    ...(opts.worktreePath ? { worktreePath: opts.worktreePath } : {}),
+    ...(opts.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {}),
+    ...(opts.context1m ? { context1m: true } : {}),
+    ...(opts.handoffFrom ? { handoffFrom: opts.handoffFrom } : {}),
   };
   await writeJson(chatFilePath(repoPath, record.id), record);
   const index = await ensureIndexLoaded(repoPath);
@@ -735,6 +746,8 @@ export function toSummary(record: ChatRecord): ChatSummary {
       ? { queuedTurn: { runAfter: record.queuedTurns[0].runAfter } }
       : {}),
     ...(record.queuePaused ? { queuePaused: true } : {}),
+    ...(record.keepWarm ? { keepWarm: true } : {}),
+    ...(record.handoffTo ? { continuedInChatId: record.handoffTo.chatId } : {}),
   };
 }
 
@@ -818,6 +831,52 @@ export async function setModel(
     const record = await readChat(repoPath, chatId);
     if (!record) return null;
     record.model = model as Model;
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
+// Persists the chat's running cost (see ChatCost). The session owns the
+// numbers in memory and writes whole snapshots, so a stale write can never
+// double-count.
+export async function saveChatCost(
+  repoPath: string,
+  chatId: string,
+  cost: ChatCost,
+): Promise<void> {
+  await withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return;
+    record.cost = cost;
+    await writeChat(repoPath, record);
+  });
+}
+
+export async function setKeepWarm(
+  repoPath: string,
+  chatId: string,
+  enabled: boolean,
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return null;
+    if (enabled) record.keepWarm = true;
+    else delete record.keepWarm;
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
+// Links an old chat to the fresh one that continues it (handoff).
+export async function setHandoffTo(
+  repoPath: string,
+  chatId: string,
+  handoffTo: ChatHandoffTo,
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return null;
+    record.handoffTo = handoffTo;
     await writeChat(repoPath, record);
     return record;
   });

@@ -22,6 +22,7 @@ import {
   recoverStaleChat,
   recoverStaleChatsForRepoWithIds,
   setContext1m,
+  setKeepWarm,
   setModel,
   setQueuePaused,
   setStarred,
@@ -73,6 +74,7 @@ import {
 import { getOrchestrator } from "./orchestrator.js";
 import { classifySegment } from "./segmenter.js";
 import { ClaudeUsageError, fetchUsage } from "./usage.js";
+import { turnSlots } from "./turnSlots.js";
 import { fetchCursorUsage } from "./cursorUsage.js";
 import { fetchCursorModels } from "./cursorModels.js";
 import { clearCursorCredsCache } from "./cursorAuth.js";
@@ -810,7 +812,18 @@ app.patch("/api/prefs", async (req, res) => {
       // null clears the override so the model default applies.
       patch.claudeEffort = effort ?? undefined;
     }
-    res.json({ prefs: await patchPrefs(patch) });
+    for (const key of ["maxConcurrentTurns", "keepWarmHours"] as const) {
+      const value = req.body?.[key];
+      if (value === undefined) continue;
+      if (value !== null && !(typeof value === "number" && Number.isFinite(value) && value >= 0)) {
+        return res.status(400).json({ error: `invalid ${key}: ${value}` });
+      }
+      // null clears the override so the default applies.
+      patch[key] = value === null ? undefined : Math.floor(value);
+    }
+    const prefs = await patchPrefs(patch);
+    turnSlots.setMax(prefs.maxConcurrentTurns);
+    res.json({ prefs });
   } catch (err) {
     res.status(500).json({
       error: err instanceof Error ? err.message : String(err),
@@ -930,7 +943,38 @@ app.patch("/api/chats/:chatId", async (req, res) => {
         (await setContext1m(repoPath, req.params.chatId, req.body.context1m)) ??
         record;
     }
+    if (typeof req.body?.keepWarm === "boolean") {
+      record =
+        (await setKeepWarm(repoPath, req.params.chatId, req.body.keepWarm)) ??
+        record;
+    }
+    // Archiving / un-archiving / toggling keep-warm starts or stops its pings.
+    if (
+      typeof req.body?.keepWarm === "boolean" ||
+      typeof req.body?.userMarkedFinished === "boolean"
+    ) {
+      void getSession(repoPath, req.params.chatId).syncKeepWarm().catch(() => {});
+    }
     res.json({ chat: record });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// Continues a chat in a fresh one: writes a handoff note (see handoff.ts),
+// creates the new chat with the note prefilled in its composer, and links both.
+app.post("/api/chats/:chatId/handoff", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const result = await getSession(repoPath, req.params.chatId).handoff();
+    res.json({
+      chat: result.chat,
+      handoffTo: result.handoffTo,
+      notePath: result.notePath,
+      method: result.method,
+    });
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
