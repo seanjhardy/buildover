@@ -264,12 +264,11 @@ export function PreviewChatSidebar({
       {/* Composer */}
       <div className="preview-chat-composer">
         <MessageQueue
-          queue={agent.localQueue}
+          queue={agent.messageQueue}
           usageQueuedTurns={agent.queuedTurns}
           paused={agent.queuePaused}
           onTogglePause={agent.toggleQueuePaused}
           onRemove={agent.removeQueued}
-          onRemoveUsageTurn={agent.removeUsageQueuedTurn}
           onFastTrack={agent.fastTrackQueued}
           onReorder={agent.reorderQueue}
         />

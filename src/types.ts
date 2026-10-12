@@ -441,9 +441,11 @@ export interface QueuedChatTurn {
   text: string;
   model: Model;
   permissionMode: PermissionMode;
-  /** Why this turn is delayed. Older persisted entries predate this field and
-   *  are usage-limit retries. */
-  kind?: "usage_limit" | "scheduled_wakeup";
+  /** Why this turn is queued. "user" is a message the user sent while the
+   *  agent was mid-turn; it runs as soon as the chat is free and its
+   *  user_message is only persisted when it runs. Older persisted entries
+   *  predate this field and are usage-limit retries. */
+  kind?: "usage_limit" | "scheduled_wakeup" | "user";
   attachments?: Attachment[];
   origin?: MessageOrigin;
   originLabel?: string;
@@ -563,6 +565,32 @@ export type ClientMessage =
       type: "set_queue_paused";
       chatId: string;
       paused: boolean;
+    }
+  | {
+      // Holds a message in the chat's server-side queue until the current turn
+      // ends. The server drains it even when no client has the chat open.
+      // `paused` also pauses the queue (long-press send).
+      type: "queue_user_message";
+      chatId: string;
+      repoPath: string;
+      text: string;
+      model: Model;
+      permissionMode: PermissionMode;
+      attachments?: Attachment[];
+      paused?: boolean;
+    }
+  | {
+      // New order for the chat's queued user messages (ids of kind "user").
+      type: "reorder_queued_turns";
+      chatId: string;
+      turnIds: string[];
+    }
+  | {
+      // Moves a queued turn to the front, resumes the queue and interrupts the
+      // in-flight turn so it runs next.
+      type: "fast_track_queued_turn";
+      chatId: string;
+      turnId: string;
     }
   | {
       // Updates the permissionMode of an in-flight turn. The server applies

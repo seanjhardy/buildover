@@ -23,6 +23,7 @@ import {
   readChat,
   rebuildIndex,
   recoverStaleChat,
+  setQueuePaused,
   revertToCheckpoint,
   setTitle,
   shiftQueuedChatTurn,
@@ -142,7 +143,12 @@ function delayUntil(runAfter: string | null): number {
   if (!runAfter) return USAGE_QUEUE_POLL_MS;
   const target = new Date(runAfter).getTime();
   if (!Number.isFinite(target)) return USAGE_QUEUE_POLL_MS;
-  return Math.min(Math.max(0, target - Date.now()) + 2_000, MAX_TIMER_MS);
+  const remaining = target - Date.now();
+  // A turn that is already due (a queued user message, a fast-tracked or
+  // overdue turn) runs now. The grace period only pads future clock waits
+  // such as usage resets, which can land a moment early.
+  if (remaining <= 0) return 0;
+  return Math.min(remaining + 2_000, MAX_TIMER_MS);
 }
 
 export function cancelQueuedTurnDrain(repoPath: string, chatId: string): void {
@@ -187,6 +193,48 @@ export async function scheduleQueuedTurnsForRepo(repoPath: string): Promise<void
   }
 }
 
+// Holds a message the user sent mid-turn in the chat's durable queue. The
+// drainer runs it once the session is free — whether or not any client has
+// the chat open — and the queue survives a server restart.
+export async function queueUserMessage(
+  repoPath: string,
+  chatId: string,
+  args: {
+    text: string;
+    model: Model;
+    permissionMode: PermissionMode;
+    attachments?: Attachment[];
+    paused?: boolean;
+  },
+): Promise<void> {
+  if (args.paused) await setQueuePaused(repoPath, chatId, true);
+  const now = new Date().toISOString();
+  const record = await enqueueChatTurn(repoPath, chatId, {
+    id: makeQueuedTurnId(),
+    text: args.text,
+    model: args.model,
+    permissionMode: args.permissionMode,
+    kind: "user",
+    attachments: args.attachments,
+    createdAt: now,
+    runAfter: now,
+    reason: "Waiting for the current turn to finish.",
+  });
+  if (!record) throw new Error(`Chat ${chatId} not found`);
+  await getSession(repoPath, chatId).pushStatusForRecord(record);
+  // Scheduled even mid-turn: the drainer re-polls while the session is busy,
+  // which covers a turn that ends between this write and its own queue check.
+  if (!record.queuePaused) {
+    scheduleQueuedTurnDrain(repoPath, chatId, record.queuedTurns?.[0]?.runAfter ?? now);
+  }
+}
+
+// Usage-limit retries persisted their user_message when they were queued.
+// Wakeups and queued user messages have not, so runTurn must persist them.
+function queuedTurnAlreadyPersisted(turn: QueuedChatTurn): boolean {
+  return turn.kind !== "scheduled_wakeup" && turn.kind !== "user";
+}
+
 const CODEX_FALLBACK_MODEL = "gpt-5.6-luna";
 const CURSOR_FALLBACK_MODEL = toCursorModelId("composer-2.5");
 
@@ -229,34 +277,40 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
   if (usageBlock) {
     // Claude is exhausted — try running the queued turn via Cursor / Codex.
     // A scheduled wakeup must resume the existing Claude session; moving it
-    // to another provider would discard the loop's working context.
-    const shifted = nextTurn?.kind === "scheduled_wakeup"
-      ? null
-      : await shiftQueuedChatTurn(repoPath, chatId);
-    if (shifted && isClaudeModel(shifted.turn.model)) {
-      const fallback = await resolveClaudeUsageFallback(shifted.turn.model);
-      if (fallback) {
-        console.log(`[usage-queue] Claude blocked, falling back to ${fallback} for ${chatId}`);
-        await session.pushStatusForRecord(shifted.record);
-        void session
-          .runTurn({
-            text: shifted.turn.text,
-            model: fallback,
-            permissionMode: shifted.turn.permissionMode,
-            attachments: shifted.turn.attachments,
-            isRetry: true,
-            origin: shifted.turn.origin,
-            originLabel: shifted.turn.originLabel,
-          })
-          .catch((err) => {
-            console.warn(`[usage-queue] fallback failed for ${chatId}:`, err instanceof Error ? err.message : err);
-          });
-        return;
-      }
+    // to another provider would discard the loop's working context. Only
+    // shift once a fallback is known, so a blocked turn stays queued.
+    const fallback =
+      nextTurn && nextTurn.kind !== "scheduled_wakeup" && isClaudeModel(nextTurn.model)
+        ? await resolveClaudeUsageFallback(nextTurn.model)
+        : null;
+    const shifted = fallback ? await shiftQueuedChatTurn(repoPath, chatId) : null;
+    if (fallback && shifted) {
+      console.log(`[usage-queue] Claude blocked, falling back to ${fallback} for ${chatId}`);
+      await session.pushStatusForRecord(shifted.record);
+      void session
+        .runTurn({
+          text: shifted.turn.text,
+          model: fallback,
+          permissionMode: shifted.turn.permissionMode,
+          attachments: shifted.turn.attachments,
+          isRetry: queuedTurnAlreadyPersisted(shifted.turn),
+          origin: shifted.turn.origin,
+          originLabel: shifted.turn.originLabel,
+        })
+        .catch((err) => {
+          console.warn(`[usage-queue] fallback failed for ${chatId}:`, err instanceof Error ? err.message : err);
+        });
+      return;
     }
-    // No fallback available — wait and retry.
+    // No fallback available — wait and retry. A reset time that has already
+    // passed (a stale usage reading) falls back to polling instead of an
+    // immediate re-drain loop.
+    const resetsAt =
+      usageBlock.resetsAt && new Date(usageBlock.resetsAt).getTime() > Date.now()
+        ? usageBlock.resetsAt
+        : null;
     await session.pushStatusForRecord(record);
-    scheduleQueuedTurnDrain(repoPath, chatId, usageBlock.resetsAt);
+    scheduleQueuedTurnDrain(repoPath, chatId, resetsAt);
     return;
   }
 
@@ -270,9 +324,7 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
       model: shifted.turn.model,
       permissionMode: shifted.turn.permissionMode,
       attachments: shifted.turn.attachments,
-      // Usage-limit turns already persisted their user message when queued.
-      // Wakeup prompts have not, so persist them now as a system-origin turn.
-      isRetry: shifted.turn.kind !== "scheduled_wakeup",
+      isRetry: queuedTurnAlreadyPersisted(shifted.turn),
       origin: shifted.turn.origin,
       originLabel: shifted.turn.originLabel,
     })

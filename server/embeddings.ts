@@ -227,6 +227,11 @@ export interface SearchResult {
 const SCORE_THRESHOLD = 0.25;
 /** Max boost added to the cosine score when a message contains query terms. */
 const KEYWORD_WEIGHT = 0.15;
+/**
+ * Exact matches aren't bound by `limit` — with a common phrase, capping them
+ * hides the very message the user typed verbatim.
+ */
+const EXACT_LIMIT = 50;
 
 function normalize(text: string): string {
   return text.toLowerCase().replace(/\s+/g, " ").trim();
@@ -279,7 +284,7 @@ export async function searchMessages(
   exact.sort((a, b) => b.score - a.score);
   semantic.sort((a, b) => b.rank - a.rank);
   const top = [
-    ...exact.slice(0, limit).map((r) => ({ ...r, exactMatch: true })),
+    ...exact.slice(0, EXACT_LIMIT).map((r) => ({ ...r, exactMatch: true })),
     ...semantic.slice(0, Math.max(0, limit - exact.length)).map((r) => ({ ...r, exactMatch: false })),
   ];
 

@@ -10,15 +10,16 @@ import {
   X,
 } from "lucide-react";
 import type { QueuedChatTurn } from "../types.js";
-import type { LocalQueuedMessage } from "../hooks/useAgent.js";
 
 interface Props {
-  queue: LocalQueuedMessage[];
+  /** Messages the user sent mid-turn (draggable, can be fast-tracked). */
+  queue: QueuedChatTurn[];
+  /** Turns waiting on a clock: scheduled wakeups and usage-limit retries. */
   usageQueuedTurns: QueuedChatTurn[];
   paused: boolean;
   onTogglePause: () => void;
+  /** Removes any queued entry by id. */
   onRemove: (id: string) => void;
-  onRemoveUsageTurn: (id: string) => void;
   onFastTrack: (id: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
 }
@@ -50,7 +51,6 @@ export function MessageQueue({
   paused,
   onTogglePause,
   onRemove,
-  onRemoveUsageTurn,
   onFastTrack,
   onReorder,
 }: Props) {
@@ -108,7 +108,7 @@ export function MessageQueue({
           {queue.length > 0 && (
             <ul className="message-queue-list">
               {queue.map((msg, i) => {
-                const attachmentCount = msg.opts.attachments?.length ?? 0;
+                const attachmentCount = msg.attachments?.length ?? 0;
                 return (
                   <li
                     key={msg.id}
@@ -206,7 +206,7 @@ export function MessageQueue({
                         <button
                           type="button"
                           className="message-queue-action remove"
-                          onClick={() => onRemoveUsageTurn(turn.id)}
+                          onClick={() => onRemove(turn.id)}
                           title="Remove from queue"
                           aria-label="Remove from queue"
                         >
@@ -245,7 +245,7 @@ export function MessageQueue({
                         <button
                           type="button"
                           className="message-queue-action remove"
-                          onClick={() => onRemoveUsageTurn(turn.id)}
+                          onClick={() => onRemove(turn.id)}
                           title="Remove from queue"
                           aria-label="Remove from queue"
                         >

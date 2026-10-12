@@ -434,7 +434,17 @@ export async function enqueueChatTurn(
             queued.kind !== "scheduled_wakeup" || queued.text !== turn.text,
         )
       : (record.queuedTurns ?? []);
-    record.queuedTurns = [...existing, turn];
+    if (turn.kind === "user") {
+      // User messages run as soon as the chat is free, ahead of turns that are
+      // waiting on a clock (wakeups, usage resets), but FIFO among themselves.
+      // The drain timer follows the head's runAfter, so a delayed head would
+      // otherwise hold the user's message back until it fired.
+      const userTurns = existing.filter((queued) => queued.kind === "user");
+      const delayed = existing.filter((queued) => queued.kind !== "user");
+      record.queuedTurns = [...userTurns, turn, ...delayed];
+    } else {
+      record.queuedTurns = [...existing, turn];
+    }
     record.model = turn.model;
     record.permissionMode = turn.permissionMode;
     record.status = computeStatus(record);
@@ -470,6 +480,53 @@ export async function removeQueuedChatTurn(
     if (filtered.length > 0) record.queuedTurns = filtered;
     else delete record.queuedTurns;
     record.status = computeStatus(record);
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
+// Reorders the queued user messages to match `turnIds`. Ids that are missing
+// from the list keep their relative order after the listed ones; delayed turns
+// always stay behind the user messages.
+export async function reorderQueuedChatTurns(
+  repoPath: string,
+  chatId: string,
+  turnIds: string[],
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record?.queuedTurns) return record;
+    const rank = new Map(turnIds.map((id, i) => [id, i]));
+    const userTurns = record.queuedTurns
+      .filter((t) => t.kind === "user")
+      .map((t, i) => ({ t, key: rank.get(t.id) ?? turnIds.length + i }))
+      .sort((a, b) => a.key - b.key)
+      .map(({ t }) => t);
+    const delayed = record.queuedTurns.filter((t) => t.kind !== "user");
+    record.queuedTurns = [...userTurns, ...delayed];
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
+// Moves a queued turn to the head of the queue and resumes the queue, so the
+// drainer runs it next. Returns null when the turn no longer exists.
+export async function fastTrackQueuedChatTurn(
+  repoPath: string,
+  chatId: string,
+  turnId: string,
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    const turn = record?.queuedTurns?.find((t) => t.id === turnId);
+    if (!record || !turn) return null;
+    // A fast-tracked turn runs now, so it no longer waits on its clock.
+    const promoted = { ...turn, runAfter: new Date().toISOString() };
+    record.queuedTurns = [
+      promoted,
+      ...record.queuedTurns!.filter((t) => t.id !== turnId),
+    ];
+    delete record.queuePaused;
     await writeChat(repoPath, record);
     return record;
   });

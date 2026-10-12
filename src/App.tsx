@@ -1363,12 +1363,11 @@ Important rules for commands:
                             )}
                             <div className="composer-dock" style={{ display: (agent.pendingPermission || agent.pendingAttention) ? "none" : undefined }}>
                               <MessageQueue
-                                queue={agent.localQueue}
+                                queue={agent.messageQueue}
                                 usageQueuedTurns={agent.queuedTurns}
                                 paused={agent.queuePaused}
                                 onTogglePause={agent.toggleQueuePaused}
                                 onRemove={agent.removeQueued}
-                                onRemoveUsageTurn={agent.removeUsageQueuedTurn}
                                 onFastTrack={agent.fastTrackQueued}
                                 onReorder={agent.reorderQueue}
                               />

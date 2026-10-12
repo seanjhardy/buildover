@@ -32,6 +32,8 @@ import {
   withComputedStatus,
   toSummary,
   removeQueuedChatTurn,
+  reorderQueuedChatTurns,
+  fastTrackQueuedChatTurn,
   withChatLock,
 } from "./chats.js";
 import {
@@ -63,6 +65,7 @@ import {
   cancelQueuedTurnDrain,
   dropSession,
   getSession,
+  queueUserMessage,
   scheduleQueuedTurnDrain,
   scheduleQueuedTurnsForRepo,
   tryGetSession,
@@ -2540,6 +2543,56 @@ wss.on("connection", (ws: WebSocket) => {
           if (!msg.paused && record.queuedTurns?.length) {
             void scheduleQueuedTurnsForRepo(sub.repoPath).catch(() => {});
           }
+          break;
+        }
+        case "queue_user_message": {
+          await subscribe(msg.repoPath, msg.chatId, false);
+          await queueUserMessage(msg.repoPath, msg.chatId, {
+            text: msg.text,
+            model: msg.model,
+            permissionMode: msg.permissionMode ?? "default",
+            attachments: msg.attachments,
+            paused: msg.paused,
+          }).catch((err) => {
+            send({
+              type: "error",
+              chatId: msg.chatId,
+              message: `Couldn't queue message: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          });
+          break;
+        }
+        case "reorder_queued_turns": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const record = await reorderQueuedChatTurns(
+            sub.repoPath,
+            msg.chatId,
+            msg.turnIds,
+          );
+          if (!record) break;
+          await getSession(sub.repoPath, msg.chatId).pushStatusForRecord(record);
+          break;
+        }
+        case "fast_track_queued_turn": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const record = await fastTrackQueuedChatTurn(
+            sub.repoPath,
+            msg.chatId,
+            msg.turnId,
+          );
+          if (!record?.queuedTurns?.length) break;
+          const session = getSession(sub.repoPath, msg.chatId);
+          await session.pushStatusForRecord(record);
+          // The interrupted turn's cleanup drains the new head; the timer is a
+          // backstop that re-polls until the session is actually free.
+          if (session.isRunning()) session.interrupt();
+          scheduleQueuedTurnDrain(
+            sub.repoPath,
+            msg.chatId,
+            record.queuedTurns[0].runAfter,
+          );
           break;
         }
         case "set_permission_mode": {
