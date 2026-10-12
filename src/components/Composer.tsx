@@ -21,6 +21,7 @@ import {
   effortLevelsFor,
   getModelProvider,
   type Attachment,
+  type ChatCost,
   type ContextUsage,
   type EffortLevel,
   type Model,
@@ -30,6 +31,7 @@ import {
 import { EffortButton } from "./EffortButton.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 import { ContextRing } from "./ContextRing.js";
+import { ChatCostReadout } from "./ChatCostReadout.js";
 import { useTranscription } from "../hooks/useTranscription.js";
 import { fileApi } from "../lib/api.js";
 
@@ -62,6 +64,17 @@ interface Props {
   /** Claude reasoning effort; the slider is hidden when onEffortChange is absent. */
   effort?: EffortLevel;
   onEffortChange?: (level: EffortLevel) => void;
+  /** Running cost / age readout beside the context ring. */
+  chatCost?: ChatCost | null;
+  /** ISO time of the chat's first message (for the readout's duration). */
+  chatStartedAt?: string;
+  keepWarm?: boolean;
+  keepWarmHours?: number;
+  /** Toggles keep-warm; omitted when the model has no prompt cache. */
+  onToggleKeepWarm?: () => void;
+  /** Text to drop into an empty composer once (a handoff note). Never sent
+   *  automatically; the user may edit it first. */
+  prefill?: string | null;
 }
 
 // Hold the send button this long (ms) to enqueue into a paused queue instead
@@ -245,6 +258,12 @@ export function Composer(props: Props) {
     onContext1mChange,
     effort,
     onEffortChange,
+    chatCost,
+    chatStartedAt,
+    keepWarm,
+    keepWarmHours,
+    onToggleKeepWarm,
+    prefill,
     contextUsage,
     repoPath,
     sdkSlashCommands = [],
@@ -335,6 +354,18 @@ export function Composer(props: Props) {
       onDraftChange?.(value);
     }, 300);
   };
+
+  // A handoff chat opens with its note prefilled. Only into an empty composer,
+  // and only when the prefill itself changes (so clearing it stays cleared).
+  const appliedPrefillRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!prefill || appliedPrefillRef.current === prefill) return;
+    appliedPrefillRef.current = prefill;
+    if (text.trim()) return;
+    setText(prefill);
+    saveDraft(prefill);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [prefill]);
 
   const transcription = useTranscription({
     onTranscript: (transcript) => {
@@ -997,6 +1028,14 @@ export function Composer(props: Props) {
             }}
           />
           <ContextRing contextUsage={contextUsage ?? null} />
+          <ChatCostReadout
+            cost={chatCost ?? null}
+            startedAt={chatStartedAt}
+            contextTokens={contextUsage?.usedTokens ?? 0}
+            keepWarm={keepWarm}
+            keepWarmHours={keepWarmHours}
+            onToggleKeepWarm={onToggleKeepWarm}
+          />
         </div>
 
         <div className="composer-bar-right">

@@ -9,6 +9,7 @@
 | `shell.css` | App shell, header, wake word, model selector, connection pill |
 | `chat-messages.css` | Message list, bubbles, thinking/tools blocks, table/chart blocks |
 | `chat-composer.css` | Composer, context ring, queue, mic, popups, attachments |
+| `chat-cost.css` | Cost readout beside the context ring, cold-cache / queue / handoff banners |
 | `chat-permissions.css` | Permission prompts, AskUserQuestion, plan card, mode picker |
 | `mcp.css` | MCP server panel |
 | `utilities.css` | Shared spinner |

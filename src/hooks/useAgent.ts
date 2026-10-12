@@ -6,7 +6,9 @@ import type {
   AgentTask,
   Attachment,
   ChatBranch,
+  ChatCost,
   ChatEvent,
+  ChatHandoffTo,
   ChatRecord,
   ChatStatus,
   ContentBlock,
@@ -50,6 +52,33 @@ interface CachedChat {
   contextUsage?: ContextUsage | null;
   branchInfo: Map<string, BranchInfo>;
   slashCommands: string[];
+  meta?: ChatMeta;
+}
+
+/** Per-chat metadata for the token-cost UI (cost readout, handoff, keep-warm). */
+export interface ChatMeta {
+  /** Running API-equivalent cost incl. silent turns; null before the first result. */
+  cost: ChatCost | null;
+  keepWarm: boolean;
+  /** Set once this chat has been continued in a fresh one. */
+  handoffTo: ChatHandoffTo | null;
+  /** Composer text for a chat created by a handoff (never auto-sent). */
+  handoffPrefill: string | null;
+}
+
+const EMPTY_META: ChatMeta = { cost: null, keepWarm: false, handoffTo: null, handoffPrefill: null };
+
+/** Transient status line from the SDK stream (rate limit / retry). */
+export interface ChatNotice {
+  kind: "rate_limit" | "retry";
+  message: string;
+}
+
+/** Shown while the turn waits for a global concurrency slot. */
+export interface SlotQueueInfo {
+  position: number;
+  running: number;
+  max: number;
 }
 
 // One entry per fork point (keyed by the parentMessageId — the user_message.id
@@ -188,6 +217,14 @@ interface UseAgentReturn {
   chatPermissionMode: PermissionMode | undefined;
   chatContext1m: boolean | undefined;
   contextUsage: ContextUsage | null;
+  /** Cost / keep-warm / handoff metadata for the active chat. */
+  meta: ChatMeta;
+  /** Latest rate-limit / retry notice, cleared when the turn moves on. */
+  notice: ChatNotice | null;
+  /** Non-null while the chat's turn is queued behind the global turn cap. */
+  slotQueue: SlotQueueInfo | null;
+  /** Turns the keep-warm toggle on or off for this chat. */
+  setKeepWarm: (enabled: boolean) => void;
   branchInfo: Map<string, BranchInfo>;
   slashCommands: string[];
   /** Turns waiting on a clock: scheduled wakeups and usage-limit retries. */
@@ -248,6 +285,9 @@ export function useAgent(
   const [contextUsage, setContextUsage] = useState<ContextUsage | null>(null);
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
+  const [meta, setMeta] = useState<ChatMeta>(EMPTY_META);
+  const [notice, setNotice] = useState<ChatNotice | null>(null);
+  const [slotQueue, setSlotQueue] = useState<SlotQueueInfo | null>(null);
   const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>([]);
   // Subagent / shell tasks for this chat (running and recently finished).
   const [backgroundTasks, setBackgroundTasks] = useState<AgentTask[]>([]);
@@ -334,11 +374,16 @@ export function useAgent(
       setBranchInfo(new Map());
       setSlashCommands([]);
       setBackgroundTasks([]);
+      setMeta(EMPTY_META);
+      setNotice(null);
+      setSlotQueue(null);
       return;
     }
 
     // Live-only; the server pushes a fresh snapshot right after the replay.
     setBackgroundTasks([]);
+    setNotice(null);
+    setSlotQueue(null);
 
     // Immediately restore from cache so switching back to a chat is instant,
     // while the server replay still runs in the background to get fresh state.
@@ -365,6 +410,7 @@ export function useAgent(
         setContextUsage(cached.contextUsage ?? null);
         setBranchInfo(cached.branchInfo);
         setSlashCommands(cached.slashCommands ?? []);
+        setMeta(cached.meta ?? EMPTY_META);
       } else {
         setTurns([]);
         setIsStreaming(false);
@@ -380,6 +426,7 @@ export function useAgent(
         setContextUsage(null);
         setBranchInfo(new Map());
         setSlashCommands([]);
+        setMeta(EMPTY_META);
       }
     });
 
@@ -509,6 +556,14 @@ export function useAgent(
       });
     };
 
+    const cachedPatchMeta = (patch: Partial<ChatMeta>) => {
+      setMeta((prev) => {
+        const next = { ...prev, ...patch };
+        updateCache({ meta: next });
+        return next;
+      });
+    };
+
     const cachedSetBranchInfo = (info: Map<string, BranchInfo>) => {
       setBranchInfo(info);
       updateCache({ branchInfo: info });
@@ -615,6 +670,9 @@ export function useAgent(
         setContextUsage: cachedSetContextUsage,
         setBranchInfo: cachedSetBranchInfo,
         setSlashCommands: cachedSetSlashCommands,
+        patchMeta: cachedPatchMeta,
+        setNotice,
+        setSlotQueue,
         setQueuedTurns,
         setQueuePaused,
         requestToToolUseId: requestToToolUseIdRef.current,
@@ -881,6 +939,19 @@ export function useAgent(
     [repoPath],
   );
 
+  const setKeepWarm = useCallback(
+    (enabled: boolean) => {
+      if (!repoPath || !chatId) return;
+      setMeta((prev) => ({ ...prev, keepWarm: enabled }));
+      const cached = chatCache.get(chatId);
+      if (cached) chatCache.set(chatId, { ...cached, meta: { ...(cached.meta ?? EMPTY_META), keepWarm: enabled } });
+      api.patchChat(repoPath, chatId, { keepWarm: enabled }).catch(() => {
+        setMeta((prev) => ({ ...prev, keepWarm: !enabled }));
+      });
+    },
+    [repoPath, chatId],
+  );
+
   const messageQueue = queuedTurns.filter((t) => t.kind === "user");
   const delayedTurns = queuedTurns.filter((t) => t.kind !== "user");
 
@@ -902,6 +973,10 @@ export function useAgent(
     chatPermissionMode,
     chatContext1m,
     contextUsage,
+    meta,
+    notice,
+    slotQueue,
+    setKeepWarm,
     branchInfo,
     slashCommands,
     queuedTurns: delayedTurns,
@@ -944,6 +1019,9 @@ interface Setters {
   setContextUsage: React.Dispatch<React.SetStateAction<ContextUsage | null>>;
   setBranchInfo: (info: Map<string, BranchInfo>) => void;
   setSlashCommands: React.Dispatch<React.SetStateAction<string[]>>;
+  patchMeta: (patch: Partial<ChatMeta>) => void;
+  setNotice: React.Dispatch<React.SetStateAction<ChatNotice | null>>;
+  setSlotQueue: React.Dispatch<React.SetStateAction<SlotQueueInfo | null>>;
   setQueuedTurns: React.Dispatch<React.SetStateAction<QueuedChatTurn[]>>;
   setQueuePaused: React.Dispatch<React.SetStateAction<boolean>>;
   // Map of permission requestId -> tool_use block ID, used to apply
@@ -999,6 +1077,12 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       // Expose this chat's saved permission mode so App.tsx can sync its UI.
       s.setChatPermissionMode(event.record.permissionMode);
       s.setChatContext1m(event.record.context1m);
+      s.patchMeta({
+        cost: event.record.cost ?? null,
+        keepWarm: event.record.keepWarm === true,
+        handoffTo: event.record.handoffTo ?? null,
+        handoffPrefill: event.record.handoffFrom?.prefill ?? null,
+      });
       // Compute branch navigation metadata from the replayed record.
       s.setBranchInfo(computeBranchInfo(event.record));
       break;
@@ -1200,6 +1284,17 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       s.setIsStreaming(false);
       s.setPendingPermission(undefined);
       s.setPendingAttention(undefined);
+      s.setNotice(null);
+      s.setSlotQueue(null);
+      break;
+    case "chat_notice":
+      s.setNotice(event.message ? { kind: event.kind, message: event.message } : null);
+      break;
+    case "chat_cost":
+      s.patchMeta({ cost: event.cost });
+      break;
+    case "chat_handoff":
+      s.patchMeta({ handoffTo: event.handoffTo });
       break;
     case "context_usage":
       s.setContextUsage({
@@ -1214,6 +1309,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       break;
     case "chat_status":
       s.setStatus(event.status);
+      s.setSlotQueue(event.status === "queued" && event.slotQueue ? event.slotQueue : null);
       if (event.sessionId) s.setSessionId(event.sessionId);
       if (event.queuedTurns) s.setQueuedTurns(event.queuedTurns);
       if (event.queuePaused !== undefined) s.setQueuePaused(event.queuePaused);

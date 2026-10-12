@@ -1,0 +1,180 @@
+/* ---- Chat cost readout (next to the context ring) ---- */
+.cost-readout {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 1;
+  min-width: 0;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  color: var(--app-placeholder-foreground, rgba(255, 255, 255, 0.45));
+  cursor: default;
+}
+.cost-readout-text {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cost-readout--warn .cost-readout-text {
+  color: #e8a838;
+}
+.cost-readout-warm {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  height: 20px;
+  padding: 0 4px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: inherit;
+  font-size: 10.5px;
+  cursor: pointer;
+  opacity: 0.55;
+}
+.cost-readout-warm:hover {
+  opacity: 1;
+  background: var(--app-list-hover-background);
+}
+.cost-readout-warm.is-on {
+  opacity: 1;
+  color: var(--app-claude-orange, #d97757);
+}
+.cost-readout-tooltip-warn {
+  color: #e8a838;
+}
+.cost-readout-tooltip-note {
+  margin-top: 7px;
+  color: var(--app-placeholder-foreground, rgba(255, 255, 255, 0.4));
+  font-size: 10.5px;
+}
+/* Narrow composers: keep the ring, drop the readout text. */
+@container composer-bar (max-width: 340px) {
+  .cost-readout {
+    display: none;
+  }
+}
+
+/* ---- Status / warning banners (between the message list and the composer) ---- */
+.chat-banners {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin: var(--app-spacing-medium) 0 0;
+}
+.chat-banner {
+  display: flex;
+  align-items: center;
+  gap: var(--app-spacing-medium);
+  padding: 7px 10px;
+  border: 1px solid var(--app-input-border);
+  border-left-width: 3px;
+  border-radius: var(--corner-radius-medium, 8px);
+  background: var(--app-secondary-background, #1e1e1e);
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  line-height: 1.4;
+}
+.chat-banner--info {
+  border-left-color: #5b8dd9;
+}
+.chat-banner--link {
+  border-left-color: var(--app-claude-orange, #d97757);
+}
+.chat-banner--warn {
+  border-left-color: #e8a838;
+}
+.chat-banner--error {
+  border-left-color: var(--app-error, #e05252);
+}
+.chat-banner-text {
+  flex: 1;
+  min-width: 0;
+}
+.chat-banner-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.chat-banner-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  height: 24px;
+  padding: 0 9px;
+  border: 1px solid var(--app-input-border);
+  border-radius: 12px;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  font-size: 11.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.chat-banner-btn:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.chat-banner-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.chat-banner-btn--primary {
+  border-color: transparent;
+  background: var(--app-claude-orange, #d97757);
+  color: #fff;
+}
+.chat-banner-btn--primary:hover:not(:disabled) {
+  background: var(--app-claude-orange, #d97757);
+  color: #fff;
+  filter: brightness(1.08);
+}
+.chat-banner-btn.is-on {
+  color: var(--app-claude-orange, #d97757);
+  border-color: var(--app-claude-orange, #d97757);
+}
+.chat-banner-dismiss {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--app-placeholder-foreground, rgba(255, 255, 255, 0.45));
+  cursor: pointer;
+}
+.chat-banner-dismiss:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+.chat-banner-link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: var(--app-claude-orange, #d97757);
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.chat-banner-spinner {
+  flex-shrink: 0;
+  animation: chat-banner-spin 0.8s linear infinite;
+}
+@keyframes chat-banner-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+@media (max-width: 640px) {
+  .chat-banner {
+    flex-wrap: wrap;
+  }
+  .chat-banner-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+}

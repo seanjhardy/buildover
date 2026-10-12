@@ -81,3 +81,7 @@ Call `ClearContext` **before** the context gets crowded, not after. Good trigger
 - Mid-investigation, when earlier results are still being referenced.
 - When the context is mostly lean assistant/user messages — only clear when there is actual bulk to remove.
 - Immediately before returning a final answer — compact first only if the history is genuinely large.
+
+### Handoff tool
+
+`ClearContext` keeps the same (still large) conversation. When a task is finished — or a long chat has reached a natural stopping point — call `Handoff({ reason })` instead. After your turn ends, buildover writes a handoff note, saves it under `.buildover/handoffs/`, and opens a fresh chat in the same repo with the note prefilled (the user decides whether to send it). Every later message then re-reads a few hundred tokens instead of the whole history. Don't call it mid-task, and don't write the note yourself.

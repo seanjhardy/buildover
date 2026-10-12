@@ -332,6 +332,8 @@ function recordToSummary(record: ChatRecord): ChatSummary {
     kind: record.kind,
     parentChatId: record.parentChatId,
     task: record.task,
+    keepWarm: record.keepWarm,
+    continuedInChatId: record.handoffTo?.chatId,
   };
 }
 
@@ -370,6 +372,13 @@ function applyEventToList(
                 updatedAt: new Date().toISOString(),
               }
             : c,
+        ),
+      );
+      break;
+    case "chat_handoff":
+      setChats((prev) =>
+        prev.map((c) =>
+          c.id === event.chatId ? { ...c, continuedInChatId: event.handoffTo.chatId } : c,
         ),
       );
       break;

@@ -1,6 +1,7 @@
 import type {
   AppPrefs,
   EffortLevel,
+  ChatHandoffTo,
   ChatRecord,
   ChatSummary,
   CreateProjectRequest,
@@ -242,7 +243,11 @@ export const api = {
   getPrefs: () => getJson<{ prefs: AppPrefs }>(`/api/prefs`).then((r) => r.prefs),
 
   /** `null` clears a pref back to its default. */
-  patchPrefs: (patch: { claudeEffort?: EffortLevel | null }) =>
+  patchPrefs: (patch: {
+    claudeEffort?: EffortLevel | null;
+    maxConcurrentTurns?: number | null;
+    keepWarmHours?: number | null;
+  }) =>
     send<{ prefs: AppPrefs }>("PATCH", `/api/prefs`, patch).then((r) => r.prefs),
 
   /** Start OAuth sign-in for an installed remote MCP server. */
@@ -283,12 +288,32 @@ export const api = {
   patchChat: (
     repoPath: string,
     chatId: string,
-    body: { userMarkedFinished?: boolean; title?: string; model?: string; starred?: boolean; context1m?: boolean },
+    body: {
+      userMarkedFinished?: boolean;
+      title?: string;
+      model?: string;
+      starred?: boolean;
+      context1m?: boolean;
+      keepWarm?: boolean;
+    },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
       repoPath,
       ...body,
     }).then((r) => r.chat),
+
+  /**
+   * Continues a chat in a fresh one: the server writes a handoff note and
+   * creates the new chat (composer prefilled, not sent). Can take a while when
+   * the cache is warm (the agent writes the note) or cold (Haiku does).
+   */
+  handoffChat: (repoPath: string, chatId: string) =>
+    send<{
+      chat: ChatRecord;
+      handoffTo: ChatHandoffTo;
+      notePath: string;
+      method: "warm" | "cold";
+    }>("POST", `/api/chats/${chatId}/handoff`, { repoPath }),
 
   getModels: async () => {
     type ApiModel = {

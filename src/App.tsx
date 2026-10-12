@@ -13,6 +13,7 @@ import { MessageList, type JumpBarHandle } from "./components/MessageList.js";
 import { OrchestratorBar, type OrchestratorWakeTrigger } from "./components/OrchestratorBar.js";
 import { AttentionPrompt, PermissionPrompt } from "./components/PermissionPrompt.js";
 import { ChatSidebar } from "./components/ChatSidebar.js";
+import { ChatBanners } from "./components/ChatBanners.js";
 import { PreviewChatSidebar } from "./components/PreviewChatSidebar.js";
 import { GitGraphView, type GitGraphViewHandle } from "./components/GitGraphView.js";
 import { ActivityBar, type WorkspaceView } from "./components/ActivityBar.js";
@@ -506,6 +507,44 @@ export default function App() {
   useEffect(() => {
     api.getPrefs().then((p) => setClaudeEffort(p.claudeEffort)).catch(() => {});
   }, []);
+  // Keep-warm window (hours) is a global pref; the toggle itself is per chat.
+  const [keepWarmHours, setKeepWarmHours] = useState(0);
+  useEffect(() => {
+    api.getPrefs().then((p) => setKeepWarmHours(p.keepWarmHours ?? 0)).catch(() => {});
+  }, []);
+  const DEFAULT_KEEP_WARM_HOURS = 6;
+  const handleToggleKeepWarm = useCallback(() => {
+    const next = !agent.meta.keepWarm;
+    // First use: pings are off until the pref is set, so turn it on at 6h.
+    if (next && keepWarmHours <= 0) {
+      setKeepWarmHours(DEFAULT_KEEP_WARM_HOURS);
+      api.patchPrefs({ keepWarmHours: DEFAULT_KEEP_WARM_HOURS }).catch(() => {});
+    }
+    agent.setKeepWarm(next);
+  }, [agent.meta.keepWarm, agent.setKeepWarm, keepWarmHours]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // Continue the active chat in a fresh one: the server writes the handoff
+  // note and creates the chat (composer prefilled, never sent).
+  const [handoffBusy, setHandoffBusy] = useState(false);
+  const [handoffError, setHandoffError] = useState<string | null>(null);
+  const handleHandoff = useCallback(async () => {
+    if (!activeRepo || !activeChatId || handoffBusy) return;
+    setHandoffBusy(true);
+    setHandoffError(null);
+    try {
+      const { chat } = await api.handoffChat(activeRepo.path, activeChatId);
+      await chats.reload();
+      setOpenFile(null);
+      setOpenPlan(null);
+      workspace.setActiveChat(chat.id);
+    } catch (err) {
+      setHandoffError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setHandoffBusy(false);
+    }
+  }, [activeRepo, activeChatId, handoffBusy, chats, workspace]);
+  useEffect(() => { setHandoffError(null); }, [activeChatId]);
+
   const effortSaveTimer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const handleEffortChange = useCallback((level: EffortLevel) => {
     setClaudeEffort(level);
@@ -803,6 +842,19 @@ Important rules for commands:
     activeChatId != null
       ? (chats.chats.find((c) => c.id === activeChatId) ?? null)
       : null;
+
+  // Token-cost UI inputs for the active chat.
+  const contextTokens = agent.contextUsage?.usedTokens ?? 0;
+  const chatStartedAt = (() => {
+    for (const t of agent.turns) if (t.kind === "user" && t.ts) return t.ts;
+    return undefined;
+  })();
+  const lastApiAtMs = (() => {
+    const iso = agent.meta.cost?.lastApiAt ?? activeChat?.updatedAt;
+    const ms = iso ? Date.parse(iso) : NaN;
+    return Number.isFinite(ms) ? ms : undefined;
+  })();
+  const hasPromptCache = getModelProvider(model) === "claude";
 
   const hasSidePanels =
     activeSubagents.length > 0 ||
@@ -1349,6 +1401,23 @@ Important rules for commands:
                               onRevert={agent.revertToCheckpoint}
                               chatId={activeChatId ?? undefined}
                             />
+                            <ChatBanners
+                              chatId={activeChatId ?? ""}
+                              model={model}
+                              contextTokens={contextTokens}
+                              lastApiAtMs={lastApiAtMs}
+                              busy={agent.isStreaming || agent.status === "running" || agent.status === "queued"}
+                              notice={agent.notice}
+                              slotQueue={agent.slotQueue}
+                              handoffTo={agent.meta.handoffTo}
+                              onOpenChat={handleSelectChat}
+                              keepWarm={agent.meta.keepWarm}
+                              keepWarmHours={keepWarmHours > 0 ? keepWarmHours : DEFAULT_KEEP_WARM_HOURS}
+                              onToggleKeepWarm={hasPromptCache ? handleToggleKeepWarm : undefined}
+                              onHandoff={() => void handleHandoff()}
+                              handoffBusy={handoffBusy}
+                              handoffError={handoffError}
+                            />
                             {agent.pendingAttention && (
                               <AttentionPrompt
                                 pending={agent.pendingAttention}
@@ -1412,6 +1481,12 @@ Important rules for commands:
                                 onContext1mChange={handleContext1mChange}
                                 effort={claudeEffort}
                                 onEffortChange={handleEffortChange}
+                                chatCost={agent.meta.cost}
+                                chatStartedAt={chatStartedAt}
+                                keepWarm={agent.meta.keepWarm}
+                                keepWarmHours={keepWarmHours > 0 ? keepWarmHours : DEFAULT_KEEP_WARM_HOURS}
+                                onToggleKeepWarm={hasPromptCache ? handleToggleKeepWarm : undefined}
+                                prefill={agent.turns.length === 0 ? agent.meta.handoffPrefill : null}
                               />
                             </div>
                           </div>
