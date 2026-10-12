@@ -94,10 +94,25 @@ export default function App() {
     activeChatId != null && coordinatorChat?.id === activeChatId;
   const plans = usePlans(activeRepo?.path ?? null, coordinatorChat?.id ?? null);
   // Subagents for the active chat, from two sources:
-  //  1. In-transcript Agent/Task tool calls (ephemeral SDK subagents).
+  //  1. In-transcript Agent/Task tool calls (ephemeral SDK subagents), plus
+  //     live subagent / shell tasks from the server — stoppable individually.
   //  2. Real subagent chats spawned by this chat (coordinator's spawn_subagent)
   //     — these are clickable and navigate to the child chat.
-  const transcriptSubagents = useSubagents(agent.turns, agent.isStreaming);
+  const transcriptSubagents = useSubagents(
+    agent.turns,
+    agent.isStreaming,
+    agent.backgroundTasks,
+  );
+  const activeRepoPath = activeRepo?.path ?? null;
+  const loadTaskOutput = useCallback(
+    (taskId: string) => {
+      if (!activeRepoPath || !activeChatId) {
+        return Promise.reject(new Error("No active chat"));
+      }
+      return api.getTaskOutput(activeRepoPath, activeChatId, taskId);
+    },
+    [activeRepoPath, activeChatId],
+  );
   const chatSubagents: SubagentEntry[] = activeChatId != null
     ? chats.chats
         .filter((c) => c.parentChatId === activeChatId)
@@ -1420,6 +1435,8 @@ Important rules for commands:
                                   <SubagentsPanel
                                     subagents={activeSubagents}
                                     onSelectChat={(chatId) => workspace.setActiveChat(chatId)}
+                                    onStopTask={agent.stopBackgroundTask}
+                                    loadTaskOutput={loadTaskOutput}
                                   />
                                 )}
                                 {filesChanged.length > 0 && (
@@ -1448,6 +1465,8 @@ Important rules for commands:
                                   <SubagentsPanel
                                     subagents={activeSubagents}
                                     onSelectChat={(chatId) => workspace.setActiveChat(chatId)}
+                                    onStopTask={agent.stopBackgroundTask}
+                                    loadTaskOutput={loadTaskOutput}
                                     compact={true}
                                   />
                                 )}

@@ -126,6 +126,37 @@ export interface InstalledMcpServer {
   headers?: Record<string, string>;
 }
 
+// ---- Agent tasks (subagents / shell processes) ----
+
+// A unit of work the Claude CLI tracks alongside the main turn: a subagent
+// (Agent tool), a Bash command (foreground or run_in_background), a monitor,
+// etc. Background tasks outlive the turn that started them — the server keeps
+// the CLI process alive until they settle — so they are tracked per chat and
+// pushed live via `background_tasks` events rather than derived from the
+// transcript.
+export interface AgentTask {
+  id: string;
+  /** The tool_use block that started the task, when known. */
+  toolUseId?: string;
+  /** Raw CLI task type, e.g. "local_bash", "local_agent". */
+  taskType: string;
+  description: string;
+  /** Agent type (e.g. "Explore") for subagent tasks. */
+  subagentType?: string;
+  status: "running" | "completed" | "failed" | "stopped";
+  /** False while the spawning tool call is blocking the turn on it. */
+  background: boolean;
+  startedAt: string;
+  endedAt?: string;
+  lastToolName?: string;
+  /** One-line progress / completion summary from the CLI. */
+  summary?: string;
+  totalTokens?: number;
+  toolUses?: number;
+  /** True when the server can serve this task's output file. */
+  hasOutput?: boolean;
+}
+
 // ---- Chats / repos ----
 
 export type ChatStatus =
@@ -516,6 +547,12 @@ export type ClientMessage =
       }
   | { type: "interrupt"; chatId: string }
   | {
+      // Stops a single subagent / shell task without touching the main turn.
+      type: "stop_background_task";
+      chatId: string;
+      taskId: string;
+    }
+  | {
       // Application-level heartbeat. The server replies with a { type: "pong" }
       // frame. Used by the client to detect a silently-dead socket (e.g. after
       // the laptop sleeps or wifi drops) and trigger a reconnect.
@@ -587,7 +624,11 @@ export interface SearchResult {
   chatUpdatedAt: string;
   messageText: string;
   eventIndex: number;
+  /** "agent" = the agent's final message of a turn. */
+  role: "user" | "agent";
   score: number;
+  /** Message contains the query verbatim (case/whitespace-insensitive). */
+  exactMatch: boolean;
   ts: string;
 }
 
@@ -750,6 +791,14 @@ export type AgentEvent =
       type: "plans_updated";
       chatId: string;
       tickets: PlanTicket[];
+    }
+  // Full snapshot of the chat's subagent / shell tasks (running and recently
+  // finished). REPLACE semantics. Live-only: sent on every change and right
+  // after a chat_replay, never persisted.
+  | {
+      type: "background_tasks";
+      chatId: string;
+      tasks: AgentTask[];
     };
 
 // ---- Orchestrator wire protocol ----

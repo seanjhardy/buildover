@@ -3,6 +3,7 @@ import { agentSocket, type Connection } from "../lib/agentSocket.js";
 import { api } from "../lib/api.js";
 import type {
   AgentEvent,
+  AgentTask,
   Attachment,
   ChatBranch,
   ChatEvent,
@@ -210,6 +211,10 @@ function savePaused(chatId: string | null, paused: boolean): void {
 
 interface UseAgentReturn {
   turns: ChatTurn[];
+  /** Subagent / shell tasks for this chat, pushed live by the server. */
+  backgroundTasks: AgentTask[];
+  /** Stops one task without interrupting the main turn. */
+  stopBackgroundTask: (taskId: string) => void;
   /** True once the active chat's authoritative replay has arrived. */
   historyReady: boolean;
   connection: Connection;
@@ -283,6 +288,8 @@ export function useAgent(
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
   const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>([]);
+  // Subagent / shell tasks for this chat (running and recently finished).
+  const [backgroundTasks, setBackgroundTasks] = useState<AgentTask[]>([]);
   // Messages the user sent while the agent was mid-turn.  Held locally,
   // persisted per-chat, and drained one-at-a-time after each turn completes so
   // they never appear in the chat until the agent is actually ready to handle
@@ -405,8 +412,12 @@ export function useAgent(
       setContextUsage(null);
       setBranchInfo(new Map());
       setSlashCommands([]);
+      setBackgroundTasks([]);
       return;
     }
+
+    // Live-only; the server pushes a fresh snapshot right after the replay.
+    setBackgroundTasks([]);
 
     // Immediately restore from cache so switching back to a chat is instant,
     // while the server replay still runs in the background to get fresh state.
@@ -597,6 +608,11 @@ export function useAgent(
       // anyway.
       if (event.chatId !== chatIdRef.current) return;
 
+      if (event.type === "background_tasks") {
+        setBackgroundTasks(event.tasks);
+        return;
+      }
+
       // isStreaming is driven exclusively by the turn counter, which is
       // updated by turn_start / turn_end events.  chat_status and chat_replay
       // also call setIsStreaming, but those signals can be stale (e.g. an
@@ -779,6 +795,13 @@ export function useAgent(
     agentSocket.send({ type: "interrupt", chatId: id });
   }, []);
 
+  // Stops one subagent / shell task, leaving the main turn alone.
+  const stopBackgroundTask = useCallback((taskId: string) => {
+    const id = chatIdRef.current;
+    if (!id) return;
+    agentSocket.send({ type: "stop_background_task", chatId: id, taskId });
+  }, []);
+
   const setQueuePausedAndSync = useCallback((paused: boolean) => {
     setQueuePaused(paused);
     const id = chatIdRef.current;
@@ -916,6 +939,8 @@ export function useAgent(
 
   return {
     turns,
+    backgroundTasks,
+    stopBackgroundTask,
     historyReady:
       replaySynced && replaySyncedChatIdRef.current === chatId,
     connection,

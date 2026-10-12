@@ -1,9 +1,9 @@
 import { useMemo } from "react";
 import type { ChatTurn } from "./useAgent.js";
-import type { ChatStatus } from "../types.js";
+import type { AgentTask, ChatStatus } from "../types.js";
 
 export interface SubagentEntry {
-  /** Unique key — the tool_use id for transcript agents, chat id for chat-backed ones. */
+  /** Unique key — the tool_use id for transcript agents, chat id for chat-backed ones, task id for other tasks. */
   id: string;
   /** Short human label (the Agent tool's `description`, or the chat's task/title). */
   label: string;
@@ -13,22 +13,51 @@ export interface SubagentEntry {
   status: ChatStatus;
   /** Present for subagents that live as real chats — enables click-to-open. */
   chatId?: string;
+  /** Live CLI task backing this entry — enables stop / output. */
+  task?: AgentTask;
+}
+
+function taskStatus(task: AgentTask): ChatStatus {
+  switch (task.status) {
+    case "running":
+      return "running";
+    case "completed":
+      return "agent_done";
+    case "failed":
+      return "error";
+    case "stopped":
+      return "idle";
+  }
+}
+
+function taskTypeLabel(task: AgentTask): string {
+  if (task.subagentType) return task.subagentType;
+  if (task.taskType === "local_bash") return "shell";
+  if (task.taskType === "local_agent") return "agent";
+  return task.taskType.replace(/^local_/, "");
 }
 
 /**
- * Derives in-flight and completed subagents from the chat transcript by
- * scanning for `Agent` / `Task` tool calls (the SDK's delegation tools) and
- * pairing them with their tool_result blocks.
+ * Derives subagents and shell processes for the chat from two sources:
+ *  - `Agent` / `Task` tool calls in the transcript, paired with their
+ *    tool_result blocks.
+ *  - Live tasks pushed by the server, which are authoritative for anything
+ *    they cover. Background agents return a placeholder tool_result straight
+ *    away, so without them they'd show as done while still working.
  *
- * Status mapping:
+ * Transcript status mapping (when no live task covers the call):
  *  - no result yet + chat is streaming  → "running"
  *  - no result yet + chat idle          → "idle" (interrupted / abandoned)
  *  - result with is_error               → "error"
  *  - result                             → "agent_done"
+ *
+ * Shell tasks are listed while running, and afterwards only if they ran in the
+ * background — finished foreground commands are already in the transcript.
  */
 export function useSubagents(
   turns: ChatTurn[],
   isStreaming: boolean,
+  tasks: AgentTask[] = [],
 ): SubagentEntry[] {
   return useMemo(() => {
     const agents: SubagentEntry[] = [];
@@ -80,6 +109,25 @@ export function useSubagents(
       }
     }
 
-    return agents;
-  }, [turns, isStreaming]);
+    for (const task of tasks) {
+      const idx = task.toolUseId ? indexById.get(task.toolUseId) : undefined;
+      if (idx !== undefined) {
+        agents[idx] = { ...agents[idx], status: taskStatus(task), task };
+        continue;
+      }
+      if (task.status !== "running" && !task.background) continue;
+      agents.push({
+        id: task.id,
+        label: task.description || "Task",
+        subagentType: taskTypeLabel(task),
+        status: taskStatus(task),
+        task,
+      });
+    }
+
+    // Running work first; otherwise keep chronological order.
+    const running = agents.filter((a) => a.status === "running");
+    const rest = agents.filter((a) => a.status !== "running");
+    return [...running, ...rest];
+  }, [turns, isStreaming, tasks]);
 }

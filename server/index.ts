@@ -877,6 +877,21 @@ app.get("/api/chats/:chatId", async (req, res) => {
   }
 });
 
+// Tail of a subagent / shell task's output, for the Agents panel.
+app.get("/api/chats/:chatId/tasks/:taskId/output", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    const session = tryGetSession(repoPath, req.params.chatId);
+    const result = await session?.readTaskOutput(req.params.taskId);
+    if (!result) return res.status(404).json({ error: "No output" });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
 app.patch("/api/chats/:chatId", async (req, res) => {
   try {
     const repoPath = readRepoPath(req);
@@ -928,7 +943,8 @@ app.delete("/api/chats/:chatId", async (req, res) => {
     const ok = await deleteChat(repoPath, req.params.chatId);
     if (!ok) return res.status(404).json({ error: "Not found" });
     const session = tryGetSession(repoPath, req.params.chatId);
-    session?.interrupt();
+    // Also kills any subagents / shell commands still running in background.
+    session?.dispose();
     cancelQueuedTurnDrain(repoPath, req.params.chatId);
     dropSession(repoPath, req.params.chatId);
     // Remove embeddings for the deleted chat
@@ -2398,6 +2414,12 @@ wss.on("connection", (ws: WebSocket) => {
         status: hasPendingAttention ? "awaiting_input" : replayed.status,
         sessionId: replayed.sessionId,
       });
+      // Live-only, so it isn't part of the replayed record.
+      send({
+        type: "background_tasks",
+        chatId,
+        tasks: session.backgroundTasks(),
+      });
     } finally {
       entry.replaysInFlight -= 1;
       if (entry.replaysInFlight === 0) {
@@ -2489,6 +2511,19 @@ wss.on("connection", (ws: WebSocket) => {
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
           session.interrupt();
+          break;
+        }
+        case "stop_background_task": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const session = getSession(sub.repoPath, msg.chatId);
+          await session.stopBackgroundTask(msg.taskId).catch((err) => {
+            send({
+              type: "error",
+              chatId: msg.chatId,
+              message: `Couldn't stop task: ${err instanceof Error ? err.message : String(err)}`,
+            });
+          });
           break;
         }
         case "set_queue_paused": {

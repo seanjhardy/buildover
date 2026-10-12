@@ -115,6 +115,42 @@ async function startServers(): Promise<void> {
   ]);
 }
 
+const APP_URL = "http://localhost:5173";
+const APP_ORIGIN = new URL(APP_URL).origin;
+
+function openInBrowser(url: string): void {
+  // WebLinksAddon's default handler calls window.open() with no URL first
+  // (about:blank); only forward real http(s) links to the OS browser.
+  if (url && url !== "about:blank" && /^https?:/i.test(url)) {
+    shell.openExternal(url);
+  }
+}
+
+function isAppUrl(url: string): boolean {
+  try {
+    return new URL(url).origin === APP_ORIGIN;
+  } catch {
+    return false;
+  }
+}
+
+// Links must never load inside buildover — navigating the app window away from
+// the UI effectively kills it. Applies to every webContents (windows, webviews).
+app.on("web-contents-created", (_event: any, contents: any) => {
+  contents.setWindowOpenHandler(({ url }: { url: string }) => {
+    openInBrowser(url);
+    return { action: "deny" };
+  });
+  // Only guard the top-level frame — preview/run iframes may navigate freely.
+  const guardNavigation = (event: any, url: string, _isInPlace: boolean, isMainFrame: boolean) => {
+    if (!(event.isMainFrame ?? isMainFrame) || isAppUrl(url)) return;
+    event.preventDefault();
+    openInBrowser(url);
+  };
+  contents.on("will-navigate", guardNavigation);
+  contents.on("will-redirect", guardNavigation);
+});
+
 function createWindow(): void {
   if (mainWindow) {
     mainWindow.focus();
@@ -138,15 +174,7 @@ function createWindow(): void {
     },
   });
   mainWindow.once("ready-to-show", () => mainWindow.show());
-  mainWindow.webContents.setWindowOpenHandler(({ url }: { url: string }) => {
-    // WebLinksAddon's default handler calls window.open() with no URL first
-    // (about:blank); only forward real http(s) links to the OS browser.
-    if (url && url !== "about:blank" && /^https?:/i.test(url)) {
-      shell.openExternal(url);
-    }
-    return { action: "deny" };
-  });
-  mainWindow.loadURL("http://localhost:5173");
+  mainWindow.loadURL(APP_URL);
   mainWindow.on("closed", () => { mainWindow = null; });
 }
 

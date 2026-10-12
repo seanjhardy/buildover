@@ -1,4 +1,5 @@
-import { runAgentTurn, type RawAgentEvent } from "./agent.js";
+import { open, type FileHandle } from "node:fs/promises";
+import { ClaudeLiveQuery, type RawAgentEvent, type RunArgs } from "./agent.js";
 import { runOpenAIAgentTurn } from "./openaiAgent.js";
 import { runCursorAgentTurn } from "./cursorAgent.js";
 import {
@@ -36,6 +37,7 @@ import { makeCheckpointId, saveSnapshot } from "./snapshots.js";
 import { getUsageLimitBlock, type UsageLimitBlock } from "./usage.js";
 import type {
   AgentEvent,
+  AgentTask,
   Attachment,
   ChatEvent,
   ChatRecord,
@@ -47,6 +49,9 @@ import type {
 import { SUBAGENT_MODEL } from "../src/types.js";
 
 export type Subscriber = (event: AgentEvent) => void;
+
+// Finished subagent / shell tasks kept per chat for the Agents panel.
+const MAX_FINISHED_TASKS = 25;
 
 interface PendingPermission {
   requestId: string;
@@ -323,6 +328,18 @@ class AgentSession {
   // Serialize those writes so permission requests, answers, output and the
   // terminal turn_end can never be reordered on disk.
   private persistenceTail: Promise<void> = Promise.resolve();
+  // The chat's Claude CLI process. Normally lives for one turn, but is kept
+  // alive afterwards while subagents / shell commands it started in the
+  // background are still running (see ClaudeLiveQuery).
+  private live?: ClaudeLiveQuery;
+  // Subagent / shell tasks seen in this server's lifetime, running and
+  // recently finished. Survives the CLI process that ran them so the Agents
+  // panel can still show how they ended.
+  private tasks = new Map<string, AgentTask>();
+  private taskOutputFiles = new Map<string, string>();
+  // A CLI-initiated turn (a background task settled and woke the model) that
+  // arrived while another turn was running. Adopted once the session frees up.
+  private pendingAdoption?: { live: ClaudeLiveQuery; notes: string[] };
 
   constructor(chatId: string, repoPath: string) {
     this.chatId = chatId;
@@ -346,20 +363,23 @@ class AgentSession {
   }
 
   private async prepareStructuralOperation(busyMessage: string): Promise<void> {
-    if (!this.running) return;
+    if (this.running) {
+      // A foreground turn that the user has not stopped is still protected from
+      // destructive history changes. If Stop was already requested, however,
+      // the UI operation should wait for cleanup rather than lose the user's
+      // edit in the narrow abort/finally race. Invisible auto-compaction is also
+      // safe to pre-empt because it has no user-visible output to preserve.
+      if (!this.currentTurnSilent && !this.abort?.signal.aborted) {
+        throw new Error(busyMessage);
+      }
 
-    // A foreground turn that the user has not stopped is still protected from
-    // destructive history changes. If Stop was already requested, however,
-    // the UI operation should wait for cleanup rather than lose the user's
-    // edit in the narrow abort/finally race. Invisible auto-compaction is also
-    // safe to pre-empt because it has no user-visible output to preserve.
-    if (!this.currentTurnSilent && !this.abort?.signal.aborted) {
-      throw new Error(busyMessage);
+      const idle = this.waitUntilIdle();
+      this.interrupt();
+      await idle;
     }
-
-    const idle = this.waitUntilIdle();
-    this.interrupt();
-    await idle;
+    // Background tasks belong to the history being rewritten; a task settling
+    // later would wake the model onto the pre-edit transcript.
+    this.closeLive();
   }
 
   pendingPermissionList(): {
@@ -778,6 +798,139 @@ class AgentSession {
     if (!this.running) void this.healAndBroadcast();
   }
 
+  // Stops the turn and kills every subagent / shell task the chat's CLI
+  // process is running. Used when the chat is deleted.
+  dispose(): void {
+    this.interrupt();
+    this.closeLive();
+  }
+
+  // Kills the chat's CLI process (and its background tasks). Structural
+  // history changes need this: the process holds the pre-edit transcript, and
+  // a task finishing later would otherwise wake it onto the wrong history.
+  private closeLive(): void {
+    this.pendingAdoption = undefined;
+    this.live?.close();
+    this.live = undefined;
+  }
+
+  backgroundTasks(): AgentTask[] {
+    return [...this.tasks.values()].sort((a, b) =>
+      a.startedAt.localeCompare(b.startedAt),
+    );
+  }
+
+  async stopBackgroundTask(taskId: string): Promise<void> {
+    const task = this.tasks.get(taskId);
+    if (!task || task.status !== "running") return;
+    if (this.live && !this.live.isClosed) {
+      // The CLI reports the stop back through the task stream.
+      await this.live.stopTask(taskId);
+      return;
+    }
+    // The process that owned it is gone, so it isn't running any more.
+    this.mergeTasks([
+      { ...task, status: "stopped", endedAt: new Date().toISOString() },
+    ]);
+  }
+
+  // Tail of a task's output file (shell stdout/stderr, or a subagent's
+  // transcript). Only paths reported by the CLI for this chat are readable.
+  async readTaskOutput(
+    taskId: string,
+    maxBytes = 16_384,
+  ): Promise<{ output: string; truncated: boolean } | null> {
+    const path = this.taskOutputFiles.get(taskId);
+    if (!path) return null;
+    let handle: FileHandle | undefined;
+    try {
+      handle = await open(path, "r");
+      const { size } = await handle.stat();
+      const length = Math.min(size, maxBytes);
+      const buf = Buffer.alloc(length);
+      await handle.read(buf, 0, length, size - length);
+      return { output: buf.toString("utf8"), truncated: size > maxBytes };
+    } catch {
+      return null;
+    } finally {
+      await handle?.close();
+    }
+  }
+
+  private mergeTasks(tasks: AgentTask[], live?: ClaudeLiveQuery): void {
+    for (const t of tasks) {
+      this.tasks.set(t.id, t);
+      const path = live?.outputFileFor(t.id);
+      if (path) this.taskOutputFiles.set(t.id, path);
+    }
+    // Keep every running task plus the most recent finished ones.
+    const finished = [...this.tasks.values()]
+      .filter((t) => t.status !== "running")
+      .sort((a, b) => (b.endedAt ?? "").localeCompare(a.endedAt ?? ""));
+    for (const t of finished.slice(MAX_FINISHED_TASKS)) {
+      this.tasks.delete(t.id);
+      this.taskOutputFiles.delete(t.id);
+    }
+    this.broadcast({
+      type: "background_tasks",
+      chatId: this.chatId,
+      tasks: this.backgroundTasks(),
+    });
+  }
+
+  // Sends one Claude turn through the chat's CLI process, starting a new one
+  // when there is none or the existing one can't take this turn.
+  private async runClaudeTurn(turn: RunArgs): Promise<void> {
+    let live = this.live;
+    if (live && !live.canReuse(turn)) {
+      if (live.hasRunningTasks()) {
+        console.warn(
+          `[session] replacing Claude process for ${this.chatId}; its background tasks are stopped`,
+        );
+      }
+      live.close();
+      live = undefined;
+    }
+    if (!live) {
+      const holder: { live?: ClaudeLiveQuery } = {};
+      live = await ClaudeLiveQuery.start(turn, {
+        onTasksChanged: (tasks) => this.mergeTasks(tasks, holder.live),
+        onUnsolicitedTurn: (notes) => {
+          if (holder.live) this.startBackgroundTurn(holder.live, notes);
+        },
+        onClosed: () => {
+          if (this.live === holder.live) this.live = undefined;
+        },
+      });
+      holder.live = live;
+      this.live = live;
+    }
+    await live.runTurn(turn);
+  }
+
+  // The CLI woke the model on its own after a background task settled. Give
+  // that output a turn of its own in the chat, headed by the task summaries.
+  private startBackgroundTurn(live: ClaudeLiveQuery, notes: string[]): void {
+    if (this.running) {
+      this.pendingAdoption = { live, notes };
+      return;
+    }
+    this.runTurn({
+      text: notes.join("\n") || "A background task finished.",
+      // Whatever model the process is running, regardless of the composer.
+      model: live.currentModel,
+      permissionMode: this.currentPermissionMode,
+      origin: "system",
+      originLabel: "Background task",
+      adoptLive: live,
+    }).catch((e) =>
+      console.warn(
+        `[session] background turn failed for ${this.chatId}:`,
+        e instanceof Error ? e.message : e,
+      ),
+    );
+  }
+
   // Walks the persisted chat events, denies any unresolved permission_request
   // and closes any open turn, then broadcasts the recovered status. Safe to
   // call when nothing is wrong — recoverStaleChat returns false in that case.
@@ -839,7 +992,22 @@ class AgentSession {
     // routed via runTurn keeps its origin tag on persist + echo.
     origin?: MessageOrigin;
     originLabel?: string;
+    // Set when this turn wraps output the CLI produced on its own after a
+    // background task settled (see startBackgroundTurn). The turn attaches to
+    // that process instead of sending `text` to the model; `text` is only
+    // the system message shown above it.
+    adoptLive?: ClaudeLiveQuery;
   }): Promise<void> {
+    if (args.adoptLive) {
+      if (!args.adoptLive.hasPendingUnsolicitedTurn()) return;
+      if (this.running) {
+        this.pendingAdoption = {
+          live: args.adoptLive,
+          notes: args.text ? [args.text] : [],
+        };
+        return;
+      }
+    }
     if (this.running) {
       // A turn is already in flight (a normal visible turn, or an invisible
       // auto-compact). Rather than rejecting the message — which would surface
@@ -893,8 +1061,8 @@ class AgentSession {
     // Check usage limit before starting a new turn. When Claude is exhausted
     // we first try Cursor (subscription), then Codex. Only queue when none
     // of the fallbacks are available. Cursor-selected models check Cursor
-    // limits instead of Claude's.
-    if (!args.silent) {
+    // limits instead of Claude's. An adopted background turn has already run.
+    if (!args.silent && !args.adoptLive) {
       if (isCursorModel(args.model)) {
         const cursorBlock = await getCursorUsageLimitBlock();
         if (cursorBlock) {
@@ -1193,7 +1361,7 @@ class AgentSession {
 
     try {
       // Route to the correct runner based on the model provider.
-      const provider = getModelProvider(args.model);
+      const provider = args.adoptLive ? "claude" : getModelProvider(args.model);
       if (provider === "cursor") {
         await runCursorAgentTurn({
           prompt: args.text,
@@ -1265,7 +1433,7 @@ class AgentSession {
             args.text;
         }
       }
-      await runAgentTurn({
+      const claudeTurn: RunArgs = {
         prompt: claudePrompt,
         model: args.model,
         sessionId: claudeSessionId,
@@ -1332,7 +1500,9 @@ class AgentSession {
               }
             }
           : undefined,
-      });
+      };
+      if (args.adoptLive) await args.adoptLive.adoptTurn(claudeTurn);
+      else await this.runClaudeTurn(claudeTurn);
       }
 
       // The SDK runner reports mid-turn API failures as `error` events (it does
@@ -1514,8 +1684,17 @@ class AgentSession {
         (this.lastContextUsedTokens >= AUTO_COMPACT_TOKEN_THRESHOLD ||
           this.pendingCompact) &&
         !args.text.startsWith("/compact");
-      this.pendingCompact = false;
-      if (shouldCompact) {
+      // A background task woke the model while this turn was running. Its
+      // output is already buffered, so it goes first — any other turn sent
+      // into the same process would swallow it. A pending compact simply
+      // waits for the next turn end.
+      const adoption = this.pendingAdoption;
+      this.pendingAdoption = undefined;
+      const adopting = adoption?.live.hasPendingUnsolicitedTurn() === true;
+      if (!adopting) this.pendingCompact = false;
+      if (adopting) {
+        this.startBackgroundTurn(adoption!.live, adoption!.notes);
+      } else if (shouldCompact) {
         void this.runTurn({
           text: "/compact",
           model: this.lastModel,

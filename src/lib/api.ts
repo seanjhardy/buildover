@@ -275,6 +275,11 @@ export const api = {
       `/api/chats/${chatId}?repoPath=${encodeURIComponent(repoPath)}`,
     ).then((r) => r.chat),
 
+  getTaskOutput: (repoPath: string, chatId: string, taskId: string) =>
+    getJson<{ output: string; truncated: boolean }>(
+      `/api/chats/${chatId}/tasks/${encodeURIComponent(taskId)}/output?repoPath=${encodeURIComponent(repoPath)}`,
+    ),
+
   patchChat: (
     repoPath: string,
     chatId: string,

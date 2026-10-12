@@ -11,11 +11,14 @@
  */
 import { listChats, readChat } from "./chats.js";
 import {
+  deleteEmbeddings,
   getAllEmbeddings,
-  getIndexedChatIds,
+  getChatEmbeddingTexts,
+  getIndexedChats,
   markChatIndexed,
   removeChat,
   upsertEmbedding,
+  type MessageRole,
   type StoredEmbedding,
 } from "./searchDb.js";
 import type { ChatRecord } from "../src/types.js";
@@ -101,27 +104,70 @@ export function getIndexStatus(): IndexStatus {
   };
 }
 
-/** Extract all user messages from a chat record. */
-function userMessages(record: ChatRecord): { text: string; eventIndex: number; ts: string }[] {
-  const out: { text: string; eventIndex: number; ts: string }[] = [];
+interface IndexableMessage {
+  text: string;
+  eventIndex: number;
+  role: MessageRole;
+  ts: string;
+}
+
+/**
+ * Extract the searchable messages from a chat record: every user message,
+ * plus the agent's final message of each finished turn. That's the `result`
+ * event's text when present; turns without one (interrupted, some providers)
+ * fall back to the last assistant text block before `turn_end`. Turns still
+ * in progress are skipped.
+ */
+function indexableMessages(record: ChatRecord): IndexableMessage[] {
+  const out: IndexableMessage[] = [];
+  let lastText: IndexableMessage | null = null;
+  let turnDone = false;
   for (let i = 0; i < record.events.length; i++) {
     const ev = record.events[i];
-    if (ev.type === "user_message" && ev.text.trim()) {
-      out.push({ text: ev.text.trim(), eventIndex: i, ts: ev.ts });
+    if (ev.type === "user_message") {
+      // A user message after a finished turn starts the next one (older chats
+      // have no turn_start events).
+      if (turnDone) { lastText = null; turnDone = false; }
+      if (ev.text.trim()) out.push({ text: ev.text.trim(), eventIndex: i, role: "user", ts: ev.ts });
+    } else if (ev.type === "turn_start") {
+      lastText = null;
+      turnDone = false;
+    } else if (ev.type === "assistant" && !turnDone) {
+      const text = ev.content
+        .map((b) => (b.type === "text" ? b.text : ""))
+        .join("\n")
+        .trim();
+      if (text) lastText = { text, eventIndex: i, role: "agent", ts: ev.ts };
+    } else if (ev.type === "result" && !turnDone) {
+      const text = ev.result?.trim();
+      if (text) out.push({ text, eventIndex: i, role: "agent", ts: ev.ts });
+      else if (lastText) out.push(lastText);
+      turnDone = true;
+    } else if (ev.type === "turn_end" && !turnDone) {
+      if (lastText) out.push(lastText);
+      turnDone = true;
     }
   }
   return out;
 }
 
-/** Index a single chat (called after new user messages arrive). */
+/**
+ * Index a single chat. Incremental: only messages that are new or whose text
+ * changed get embedded, and rows for messages no longer in the chat (e.g.
+ * after a checkpoint revert) are dropped.
+ */
 export async function indexChat(repoPath: string, record: ChatRecord): Promise<void> {
-  const messages = userMessages(record);
-  if (messages.length === 0) return;
+  const messages = indexableMessages(record);
+  const existing = getChatEmbeddingTexts(record.id, repoPath);
+  const keep = new Set<string>();
   for (const msg of messages) {
     const id = `${record.id}:${msg.eventIndex}`;
+    keep.add(id);
+    if (existing.get(id) === msg.text) continue;
     const embedding = await generateEmbedding(msg.text);
-    upsertEmbedding({ id, chatId: record.id, repoPath, messageText: msg.text, eventIndex: msg.eventIndex, embedding, ts: msg.ts });
+    upsertEmbedding({ id, chatId: record.id, repoPath, messageText: msg.text, eventIndex: msg.eventIndex, role: msg.role, embedding, ts: msg.ts });
   }
+  deleteEmbeddings([...existing.keys()].filter((id) => !keep.has(id)), repoPath);
   markChatIndexed(record.id, repoPath, messages.length);
 }
 
@@ -130,17 +176,23 @@ export function removeIndexedChat(repoPath: string, chatId: string): void {
   removeChat(chatId, repoPath);
 }
 
-/** Kick off background indexing of all un-indexed chats. No-op if already running. */
+/**
+ * Kick off background indexing of chats that are un-indexed or have been
+ * updated since they were last indexed. No-op if already running.
+ */
 export function ensureIndexedBackground(repoPath: string): void {
   if (_indexing) return;
   _indexing = true;
   (async () => {
     try {
       const allChats = await listChats(repoPath);
-      const indexed = getIndexedChatIds(repoPath);
-      const pending = allChats.filter((c) => !indexed.has(c.id));
+      const indexed = getIndexedChats(repoPath);
+      const pending = allChats.filter((c) => {
+        const indexedAt = indexed.get(c.id);
+        return !indexedAt || new Date(c.updatedAt).getTime() > new Date(indexedAt).getTime();
+      });
       _totalCount = allChats.length;
-      _indexedCount = indexed.size;
+      _indexedCount = allChats.length - pending.length;
       if (pending.length === 0) { _indexing = false; return; }
       console.log(`[embeddings] indexing ${pending.length} chats in background…`);
       for (const summary of pending) {
@@ -165,11 +217,28 @@ export interface SearchResult {
   chatUpdatedAt: string;
   messageText: string;
   eventIndex: number;
+  role: MessageRole;
   score: number;
+  /** Message contains the query verbatim (case/whitespace-insensitive). */
+  exactMatch: boolean;
   ts: string;
 }
 
 const SCORE_THRESHOLD = 0.25;
+/** Max boost added to the cosine score when a message contains query terms. */
+const KEYWORD_WEIGHT = 0.15;
+
+function normalize(text: string): string {
+  return text.toLowerCase().replace(/\s+/g, " ").trim();
+}
+
+/** Fraction of the query's terms (2+ chars) that appear somewhere in the text. */
+function keywordCoverage(normText: string, terms: string[]): number {
+  if (terms.length === 0) return 0;
+  let hits = 0;
+  for (const t of terms) if (normText.includes(t)) hits++;
+  return hits / terms.length;
+}
 
 export async function searchMessages(
   repoPath: string,
@@ -189,10 +258,30 @@ export async function searchMessages(
   const stored: StoredEmbedding[] = getAllEmbeddings(repoPath);
   if (stored.length === 0) return { results: [], status: getIndexStatus() };
 
-  // Score every stored message.
-  const scored = stored.map((e) => ({ ...e, score: cosine(queryVec, e.embedding) }));
-  scored.sort((a, b) => b.score - a.score);
-  const top = scored.slice(0, limit).filter((r) => r.score >= SCORE_THRESHOLD);
+  const normQuery = normalize(query);
+  const terms = [...new Set(normQuery.split(" ").filter((t) => t.length >= 2))];
+
+  // Score every stored message. Exact phrase matches are pinned to the top
+  // (ordered among themselves by embedding similarity); everything else is
+  // ranked by cosine similarity plus a small boost for matching query terms.
+  const exact: (StoredEmbedding & { score: number })[] = [];
+  const semantic: (StoredEmbedding & { score: number; rank: number })[] = [];
+  for (const e of stored) {
+    const score = cosine(queryVec, e.embedding);
+    const normText = normalize(e.messageText);
+    if (normText.includes(normQuery)) {
+      exact.push({ ...e, score });
+    } else {
+      const rank = score + KEYWORD_WEIGHT * keywordCoverage(normText, terms);
+      if (rank >= SCORE_THRESHOLD) semantic.push({ ...e, score, rank });
+    }
+  }
+  exact.sort((a, b) => b.score - a.score);
+  semantic.sort((a, b) => b.rank - a.rank);
+  const top = [
+    ...exact.slice(0, limit).map((r) => ({ ...r, exactMatch: true })),
+    ...semantic.slice(0, Math.max(0, limit - exact.length)).map((r) => ({ ...r, exactMatch: false })),
+  ];
 
   // Resolve chat titles — batch by chat so we only read each file once.
   const chatMeta = new Map<string, { title: string; updatedAt: string }>();
@@ -209,7 +298,9 @@ export async function searchMessages(
         chatUpdatedAt: meta.updatedAt,
         messageText: r.messageText,
         eventIndex: r.eventIndex,
+        role: r.role,
         score: r.score,
+        exactMatch: r.exactMatch,
         ts: r.ts,
       };
     });

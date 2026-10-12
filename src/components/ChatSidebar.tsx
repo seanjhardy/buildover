@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { Bot, User, X } from "lucide-react";
 import { ChatSidebarItem } from "./ChatSidebarItem.js";
 import { searchApi } from "../lib/api.js";
 import type { ChatStatus, ChatSummary, SearchResult } from "../types.js";
@@ -97,6 +97,8 @@ function timeAgo(iso: string): string {
   return "just now";
 }
 
+const EXACT_MATCH_COLOR = "rgb(72, 199, 120)";
+
 function scoreColor(score: number): string {
   const t = Math.min(1, Math.max(0, (score - 0.25) / 0.75));
   // interpolate orange (low) → green (high)
@@ -104,6 +106,38 @@ function scoreColor(score: number): string {
   const g = Math.round(119 + (199 - 119) * t);
   const b = Math.round(87 + (120 - 87) * t);
   return `rgb(${r}, ${g}, ${b})`;
+}
+
+/** Case-insensitive pattern for the query, allowing any whitespace between words. */
+function queryPattern(query: string): string | null {
+  const words = query.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return null;
+  return words.map((w) => w.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")).join("\\s+");
+}
+
+/**
+ * Trim the start of a long message so the first match lands near the top of
+ * the 3-line preview instead of being clamped away.
+ */
+function excerptAroundMatch(text: string, query: string, lead = 60): string {
+  const pattern = queryPattern(query);
+  const idx = pattern ? text.search(new RegExp(pattern, "i")) : -1;
+  if (idx <= lead) return text;
+  const start = text.lastIndexOf(" ", idx - lead);
+  return "…" + text.slice(start >= 0 ? start + 1 : idx - lead);
+}
+
+/** Wrap case-insensitive occurrences of the query (any whitespace between words) in <mark>. */
+function highlightMatch(text: string, query: string): React.ReactNode {
+  const pattern = queryPattern(query);
+  if (!pattern) return text;
+  const parts = text.split(new RegExp(`(${pattern})`, "gi"));
+  // split() with one capture group puts matches at odd indices.
+  return parts.map((part, i) =>
+    i % 2 === 1
+      ? <mark key={i} className="sidebar-search-result-mark">{part}</mark>
+      : part,
+  );
 }
 
 interface SearchResultGroup {
@@ -209,7 +243,12 @@ export function ChatSidebar({
     [searchResults],
   );
 
-  // Debounced semantic search
+  // Search is per-repo — clear it when switching repos.
+  useEffect(() => {
+    setQuery("");
+  }, [repoPath]);
+
+  // Debounced search (exact matches + semantic)
   useEffect(() => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
     const q = query.trim();
@@ -218,18 +257,21 @@ export function ChatSidebar({
       setIsSearching(false);
       return;
     }
+    // Drop responses for a query/repo that has since changed.
+    let cancelled = false;
     setIsSearching(true);
     debounceRef.current = setTimeout(async () => {
       try {
         const { results } = await searchApi.search(repoPath, q);
-        setSearchResults(results);
+        if (!cancelled) setSearchResults(results);
       } catch {
-        setSearchResults([]);
+        if (!cancelled) setSearchResults([]);
       } finally {
-        setIsSearching(false);
+        if (!cancelled) setIsSearching(false);
       }
     }, 350);
     return () => {
+      cancelled = true;
       if (debounceRef.current) clearTimeout(debounceRef.current);
     };
   }, [query, repoPath]);
@@ -331,25 +373,38 @@ export function ChatSidebar({
 
             {groupedSearchResults.map((group) => {
               const topScore = Math.max(...group.results.map((r) => r.score));
+              const hasExact = group.results.some((r) => r.exactMatch);
               return (
                 <button
                   key={group.chatId}
                   type="button"
-                  className={`sidebar-search-result${group.chatId === activeChatId ? " sidebar-search-result--active" : ""}`}
+                  className={`sidebar-search-result${hasExact ? " sidebar-search-result--exact" : ""}${group.chatId === activeChatId ? " sidebar-search-result--active" : ""}`}
                   onClick={() => onSelect(group.chatId)}
                 >
                   <div
                     className="sidebar-search-result-bar"
-                    style={{ background: scoreColor(topScore) }}
+                    style={{ background: hasExact ? EXACT_MATCH_COLOR : scoreColor(topScore) }}
                   />
                   <div className="sidebar-search-result-body">
-                    {group.results.map((r, i) => (
-                      <div key={`${r.chatId}:${r.eventIndex}`}>
-                        {i > 0 && <div className="sidebar-search-result-divider" aria-hidden />}
-                        <div className="sidebar-search-result-text">{r.messageText}</div>
-                      </div>
-                    ))}
+                    {group.results.map((r, i) => {
+                      const isAgent = r.role === "agent";
+                      // Agent replies are long markdown; flatten them so the preview shows prose, not blank lines.
+                      const text = isAgent ? r.messageText.replace(/\s+/g, " ") : r.messageText;
+                      return (
+                        <div key={`${r.chatId}:${r.eventIndex}`}>
+                          {i > 0 && <div className="sidebar-search-result-divider" aria-hidden />}
+                          <div className={`sidebar-search-result-role sidebar-search-result-role--${isAgent ? "agent" : "user"}`}>
+                            {isAgent ? <Bot size={10} strokeWidth={2.2} /> : <User size={10} strokeWidth={2.2} />}
+                            {isAgent ? "Agent" : "You"}
+                          </div>
+                          <div className={`sidebar-search-result-text${isAgent ? " sidebar-search-result-text--agent" : ""}`}>
+                            {r.exactMatch ? highlightMatch(excerptAroundMatch(text, query), query) : text}
+                          </div>
+                        </div>
+                      );
+                    })}
                     <div className="sidebar-search-result-meta">
+                      {hasExact && <span className="sidebar-search-result-badge">Exact</span>}
                       <span className="sidebar-search-result-title">{group.chatTitle}</span>
                       <span className="sidebar-search-result-sep">·</span>
                       <span className="sidebar-search-result-time">{timeAgo(group.chatUpdatedAt)}</span>

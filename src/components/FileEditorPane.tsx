@@ -6,8 +6,11 @@ import {
   useRef,
   useState,
 } from "react";
-import { X, Save, Loader, AlertCircle, Search } from "lucide-react";
+import { X, Save, Loader, AlertCircle, Search, Code, Eye } from "lucide-react";
+import ReactMarkdown, { type Components } from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { fileApi } from "../lib/api.js";
+import { openExternalUrl } from "../lib/openExternalUrl.js";
 import { resolveFileIcon } from "./FileExplorerSidebar.js";
 import {
   getLanguage,
@@ -28,6 +31,8 @@ interface TabState {
   error: string | null;
   scrollTop: number;
   scrollLeft: number;
+  /** Markdown only — show the rendered preview instead of the source editor */
+  preview: boolean;
 }
 
 export interface OpenEditorFile {
@@ -188,6 +193,77 @@ function QuickOpenBar({
   );
 }
 
+// ── Markdown preview ───────────────────────────────────────────────────────────
+
+/** Resolve a link/image target relative to the markdown file's directory.
+ *  Returns a repo-relative path, or null for external / in-page targets. */
+function resolveRepoRelative(fileRelPath: string, target: string): string | null {
+  if (!target || target.startsWith("#") || /^[a-z][a-z0-9+.-]*:/i.test(target) || target.startsWith("//")) {
+    return null;
+  }
+  const clean = decodeURIComponent(target.split(/[?#]/)[0] ?? "");
+  const parts = clean.startsWith("/") ? [] : fileRelPath.split("/").slice(0, -1);
+  for (const seg of clean.split("/")) {
+    if (!seg || seg === ".") continue;
+    if (seg === "..") parts.pop();
+    else parts.push(seg);
+  }
+  return parts.join("/");
+}
+
+function MarkdownPreview({
+  content,
+  relPath,
+  repoPath,
+  onFileOpen,
+}: {
+  content: string;
+  relPath: string;
+  repoPath: string;
+  onFileOpen: (relPath: string) => void;
+}) {
+  const components = useMemo((): Components => ({
+    // Never let a link navigate the app window: external URLs go to the system
+    // browser, relative links open the target file in a new editor tab.
+    a: ({ href, children, node: _node, ...rest }) => (
+      <a
+        {...rest}
+        href={href}
+        onClick={(e) => {
+          e.preventDefault();
+          if (!href) return;
+          if (href.startsWith("#")) {
+            const id = decodeURIComponent(href.slice(1));
+            e.currentTarget.closest(".fe-markdown-wrap")?.querySelector(`[id="${CSS.escape(id)}"]`)?.scrollIntoView();
+            return;
+          }
+          const target = resolveRepoRelative(relPath, href);
+          if (target) onFileOpen(target);
+          else openExternalUrl(href);
+        }}
+      >
+        {children}
+      </a>
+    ),
+    // Serve repo-relative images through the file API.
+    img: ({ src, alt, node: _node, ...rest }) => {
+      const target = typeof src === "string" ? resolveRepoRelative(relPath, src) : null;
+      const resolved = target !== null
+        ? `/api/file/serve?path=${encodeURIComponent(`${repoPath}/${target}`)}`
+        : src;
+      return <img {...rest} src={resolved} alt={alt ?? ""} />;
+    },
+  }), [relPath, repoPath, onFileOpen]);
+
+  return (
+    <div className="fe-markdown-wrap">
+      <div className="file-viewer-markdown">
+        <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>{content}</ReactMarkdown>
+      </div>
+    </div>
+  );
+}
+
 // ── Main component ─────────────────────────────────────────────────────────────
 
 export function FileEditorPane({
@@ -217,6 +293,8 @@ export function FileEditorPane({
       if (tabsRef.current.has(file.path)) continue;
       const tabFilename = file.relPath.split("/").pop() ?? file.relPath;
       const tabIsImage  = isImageFile(tabFilename);
+      // Markdown opens rendered, unless we were asked to jump to a specific line.
+      const tabPreview  = getLanguage(tabFilename) === "markdown" && !file.initialLine;
 
       // Register any initial line jump request
       if (file.initialLine) pendingLineJump.current.set(file.path, file.initialLine);
@@ -229,6 +307,7 @@ export function FileEditorPane({
           content: null, savedContent: null,
           loading: !tabIsImage, error: null,
           scrollTop: 0, scrollLeft: 0,
+          preview: tabPreview,
         });
         return next;
       });
@@ -284,12 +363,25 @@ export function FileEditorPane({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeFilePath, activeTab?.loading, activeTab?.content]);
 
+  const setPreview = useCallback((path: string, preview: boolean) => {
+    setTabs((prev) => {
+      const existing = prev.get(path);
+      if (!existing || existing.preview === preview) return prev;
+      const next = new Map(prev);
+      next.set(path, { ...existing, preview });
+      return next;
+    });
+  }, []);
+
   // ── Handle explicit jump target (search result click on already-open file) ───
   useLayoutEffect(() => {
     if (!jumpTarget) return;
     if (jumpTarget.path !== activeFilePath) return;
     const tab = tabsRef.current.get(jumpTarget.path);
-    if (!tab || tab.loading || !textareaRef.current) return;
+    if (!tab || tab.loading) return;
+    // Line jumps need the source editor — leave preview and retry once it mounts.
+    if (tab.preview) { setPreview(jumpTarget.path, false); return; }
+    if (!textareaRef.current) return;
     const LINE_H = 20;
     const PADDING = 14;
     const visibleRows = Math.floor(textareaRef.current.clientHeight / LINE_H);
@@ -298,7 +390,7 @@ export function FileEditorPane({
     syncHighlightScroll();
     onJumpConsumed?.();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [jumpTarget]);
+  }, [jumpTarget, activeTab?.preview]);
 
   // ── Save scroll position when switching tabs ─────────────────────────────────
   const prevActiveRef = useRef<string | null>(null);
@@ -415,6 +507,8 @@ export function FileEditorPane({
   const lang      = filename ? getLanguage(filename) : "plaintext";
   const langLabel = filename ? getLanguageLabel(filename) : "";
   const isImage   = filename ? isImageFile(filename) : false;
+  const isMarkdown = lang === "markdown";
+  const showPreview = isMarkdown && !!activeTab?.preview && activeTab.content !== null;
 
   const highlightedLines = useMemo(
     () => (activeTab?.content != null ? highlightContent(activeTab.content, lang) : null),
@@ -467,6 +561,16 @@ export function FileEditorPane({
                 </div>
               );
             })}
+            {activeTab && isMarkdown && (
+              <button
+                className="fe-tabs-action"
+                onClick={() => setPreview(activeTab.path, !activeTab.preview)}
+                title={activeTab.preview ? "Edit source" : "Preview markdown"}
+                aria-label={activeTab.preview ? "Edit source" : "Preview markdown"}
+              >
+                {activeTab.preview ? <><Code size={12} />Edit</> : <><Eye size={12} />Preview</>}
+              </button>
+            )}
           </div>
 
           {/* Editor */}
@@ -488,8 +592,17 @@ export function FileEditorPane({
                   />
                 </div>
               )}
+              {/* Rendered markdown */}
+              {!activeTab.loading && !activeTab.error && showPreview && (
+                <MarkdownPreview
+                  content={activeTab.content!}
+                  relPath={activeTab.relPath}
+                  repoPath={repoPath}
+                  onFileOpen={onFileOpen}
+                />
+              )}
               {/* Text / code editor */}
-              {!activeTab.loading && !activeTab.error && !isImage && activeTab.content !== null && (
+              {!activeTab.loading && !activeTab.error && !isImage && !showPreview && activeTab.content !== null && (
                 <div className="fe-editor">
                   <div className="fe-gutter" ref={gutterRef} aria-hidden="true">
                     {lineNumbers.map((n) => <div key={n} className="fe-gutter-row">{n}</div>)}

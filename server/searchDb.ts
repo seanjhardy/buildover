@@ -46,7 +46,20 @@ function initSchema(db: Database.Database): void {
       PRIMARY KEY (id, repo_path)
     );
   `);
+
+  // v2: agent final messages are indexed alongside user messages. Existing
+  // rows are all user messages; forgetting which chats were indexed makes the
+  // background indexer revisit every chat and embed just the agent messages.
+  const cols = db.prepare("PRAGMA table_info(message_embeddings)").all() as { name: string }[];
+  if (!cols.some((c) => c.name === "role")) {
+    db.exec(`
+      ALTER TABLE message_embeddings ADD COLUMN role TEXT NOT NULL DEFAULT 'user';
+      DELETE FROM indexed_chats;
+    `);
+  }
 }
+
+export type MessageRole = "user" | "agent";
 
 // ── Write helpers ─────────────────────────────────────────────────────────────
 
@@ -56,6 +69,7 @@ export function upsertEmbedding(data: {
   repoPath: string;
   messageText: string;
   eventIndex: number;
+  role: MessageRole;
   embedding: Float32Array;
   ts: string;
 }): void {
@@ -64,9 +78,9 @@ export function upsertEmbedding(data: {
   const buf = Buffer.from(data.embedding.buffer);
   db.prepare(`
     INSERT OR REPLACE INTO message_embeddings
-      (id, chat_id, repo_path, message_text, event_index, embedding, ts)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `).run(data.id, data.chatId, data.repoPath, data.messageText, data.eventIndex, buf, data.ts);
+      (id, chat_id, repo_path, message_text, event_index, role, embedding, ts)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+  `).run(data.id, data.chatId, data.repoPath, data.messageText, data.eventIndex, data.role, buf, data.ts);
 }
 
 export function markChatIndexed(chatId: string, repoPath: string, messageCount: number): void {
@@ -89,25 +103,41 @@ export interface StoredEmbedding {
   chatId: string;
   messageText: string;
   eventIndex: number;
+  role: MessageRole;
   embedding: Float32Array;
   ts: string;
 }
 
-export function getIndexedChatIds(repoPath: string): Set<string> {
+/** Indexed chat ids → ISO timestamp of when each was last indexed. */
+export function getIndexedChats(repoPath: string): Map<string, string> {
   const rows = getDb()
-    .prepare("SELECT id FROM indexed_chats WHERE repo_path = ?")
-    .all(repoPath) as { id: string }[];
-  return new Set(rows.map((r) => r.id));
+    .prepare("SELECT id, indexed_at FROM indexed_chats WHERE repo_path = ?")
+    .all(repoPath) as { id: string; indexed_at: string }[];
+  return new Map(rows.map((r) => [r.id, r.indexed_at]));
+}
+
+/** Embedding row id → stored message text, for one chat. */
+export function getChatEmbeddingTexts(chatId: string, repoPath: string): Map<string, string> {
+  const rows = getDb()
+    .prepare("SELECT id, message_text FROM message_embeddings WHERE chat_id = ? AND repo_path = ?")
+    .all(chatId, repoPath) as { id: string; message_text: string }[];
+  return new Map(rows.map((r) => [r.id, r.message_text]));
+}
+
+export function deleteEmbeddings(ids: string[], repoPath: string): void {
+  const stmt = getDb().prepare("DELETE FROM message_embeddings WHERE id = ? AND repo_path = ?");
+  for (const id of ids) stmt.run(id, repoPath);
 }
 
 export function getAllEmbeddings(repoPath: string): StoredEmbedding[] {
   const rows = getDb()
-    .prepare("SELECT id, chat_id, message_text, event_index, embedding, ts FROM message_embeddings WHERE repo_path = ?")
+    .prepare("SELECT id, chat_id, message_text, event_index, role, embedding, ts FROM message_embeddings WHERE repo_path = ?")
     .all(repoPath) as {
       id: string;
       chat_id: string;
       message_text: string;
       event_index: number;
+      role: MessageRole;
       embedding: Buffer;
       ts: string;
     }[];
@@ -121,6 +151,7 @@ export function getAllEmbeddings(repoPath: string): StoredEmbedding[] {
       chatId: r.chat_id,
       messageText: r.message_text,
       eventIndex: r.event_index,
+      role: r.role,
       embedding,
       ts: r.ts,
     };

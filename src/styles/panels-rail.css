@@ -289,6 +289,11 @@
   margin-right: 6px;
 }
 
+.subagents-strip-tooltip-hint {
+  margin-left: 4px;
+  color: var(--app-secondary-foreground);
+}
+
 .subagents-strip-item:hover .subagents-strip-tooltip {
   display: flex;
   align-items: center;
@@ -773,7 +778,7 @@
   flex-direction: column;
   padding: 4px 0;
   overflow-y: auto;
-  max-height: 200px;
+  max-height: 360px;
   -webkit-overflow-scrolling: touch;
   overscroll-behavior: contain;
 }
@@ -822,6 +827,88 @@
   white-space: nowrap;
   font-size: 12px;
   color: var(--app-secondary-foreground);
+}
+
+.subagent-row {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.subagent-item-time {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  color: var(--app-secondary-foreground);
+  opacity: 0.7;
+}
+
+.subagent-item-stop {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small, 4px);
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+}
+
+.subagent-item-stop:hover {
+  color: #f85149;
+  border-color: #f85149;
+}
+
+.subagent-details {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 2px 10px 8px 30px;
+  min-width: 0;
+}
+
+.subagent-details-meta {
+  font-size: 10px;
+  color: var(--app-secondary-foreground);
+  opacity: 0.8;
+}
+
+.subagent-details-summary {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  overflow-wrap: anywhere;
+}
+
+.subagent-output {
+  margin: 0;
+  max-height: 180px;
+  overflow: auto;
+  padding: 6px 8px;
+  border-radius: var(--corner-radius-small, 4px);
+  background: var(--app-input-background);
+  color: var(--app-primary-foreground);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 10.5px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  overscroll-behavior: contain;
+}
+
+.subagent-output-truncated {
+  opacity: 0.6;
+  font-style: italic;
+}
+
+.subagent-output-empty {
+  font-size: 10px;
+  font-style: italic;
+  color: var(--app-secondary-foreground);
+  opacity: 0.7;
 }
 
 /* ---- Plans Panel (coordinator ticket board, right rail) ---- */

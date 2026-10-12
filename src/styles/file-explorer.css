@@ -881,6 +881,31 @@
   color: var(--app-primary-foreground);
 }
 
+/* Right-aligned action in the tab bar (e.g. markdown Preview / Edit toggle) */
+.fe-tabs-action {
+  position: sticky;
+  right: 0;
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-shrink: 0;
+  padding: 0 12px;
+  border: none;
+  border-left: 1px solid var(--app-primary-border-color);
+  background: var(--app-secondary-background);
+  color: var(--app-secondary-foreground);
+  font-size: 11px;
+  font-family: var(--app-monospace-font-family);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+}
+
+.fe-tabs-action:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
 /* ── Editor area ──────────────────────────────────────────────── */
 
 .fe-editor-wrap {
@@ -1062,6 +1087,18 @@
 
 .fe-save-btn:hover {
   background: rgba(255, 255, 255, 0.22);
+}
+
+/* ── Markdown preview in editor pane ─────────────────────────────────────── */
+/* Typography comes from .file-viewer-markdown (file-viewer.css). */
+.fe-markdown-wrap {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.fe-markdown-wrap .file-viewer-markdown {
+  margin: 0 auto;
 }
 
 /* ── Image preview in editor pane ────────────────────────────────────────── */

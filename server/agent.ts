@@ -2,6 +2,8 @@ import {
   query,
   type CanUseTool,
   type McpSdkServerConfigWithInstance,
+  type Query,
+  type SDKUserMessage,
 } from "@anthropic-ai/claude-agent-sdk";
 import {
   createCustomToolsServer,
@@ -14,6 +16,7 @@ import {
   EFFORT_LEVELS,
   effortLevelsFor,
   type AgentEvent,
+  type AgentTask,
   type Attachment,
   type ContentBlock,
   type EffortLevel,
@@ -52,7 +55,7 @@ export type RawAgentEvent = DistOmit<
   "chatId"
 >;
 
-interface RunArgs {
+export interface RunArgs {
   prompt: string;
   model: Model;
   sessionId?: string;
@@ -92,6 +95,8 @@ interface RunArgs {
   // agent wants to compact history; the session schedules a /compact turn
   // after the current turn ends (same path as auto-compact).
   requestCompact: RequestCompact;
+  // Aborting this stops the current turn only. Background tasks keep running;
+  // ClaudeLiveQuery.close() is what tears the whole CLI process down.
   abortController?: AbortController;
   // Optional hook called just before a file-modifying tool (Write, Edit,
   // MultiEdit) executes.  The session uses this to snapshot the target file's
@@ -117,36 +122,834 @@ function resolveEffort(model: Model, preferred: EffortLevel | undefined): Effort
   return [...supported].reverse().find((l) => EFFORT_LEVELS.indexOf(l) <= ceiling);
 }
 
-// Runs one user-turn through the SDK, normalizing messages into our wire
-// format and emitting them via `emit`. Returns the (possibly new) session id.
-export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
-  const {
-    prompt,
-    model,
-    sessionId,
-    resumeSessionAt,
-    cwd,
-    permissionMode,
-    getPermissionMode,
-    attachments,
-    emit,
-    requestPermission,
-    requestAttentionAck,
-    abortController,
-  } = args;
+// Tools that must always surface a UI prompt regardless of permission mode,
+// because they are user-interaction checkpoints, not dangerous operations.
+// Note: RequestUserAttention is intentionally absent — it blocks inside its
+// own MCP tool handler (via requestAttentionAck), not via the permission
+// system. Routing it through requestPermission would deadlock because the
+// client ignores permission_request events for this tool.
+const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"]);
 
-  const effort = resolveEffort(model, (await readPrefs()).claudeEffort);
+// Tool names that modify files — we snapshot before these run.
+const FILE_MODIFYING_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 
-  // Collect all assistant messages so getCurrentTodos can scan for TodoWrite calls
-  const allMessages: any[] = [];
+// After a turn ends with nothing running, the CLI is given a short grace
+// period before its input is closed (letting it exit). A task that settled
+// moments before can still wake the model in that window, and a follow-up
+// message from the user reuses the warm process.
+const IDLE_WIND_DOWN_MS = 5_000;
+// A soft interrupt normally lands within a second. If the CLI hasn't closed
+// the turn by then, fall back to killing the process outright.
+const INTERRUPT_FALLBACK_MS = 5_000;
+// Grace before trusting background_tasks_changed over a missing
+// task_notification.
+const LEVEL_RECONCILE_MS = 2_000;
 
-  // Helper to extract current todos from conversation history (same logic as useTodos hook)
-  const getCurrentTodos = () => {
-    // Walk messages in reverse to find the latest TodoWrite call
-    for (let i = allMessages.length - 1; i >= 0; i--) {
-      const msg = allMessages[i];
-      if (msg.type !== "assistant") continue;
+export interface LiveQueryHooks {
+  // Full task snapshot, sent whenever any task changes.
+  onTasksChanged: (tasks: AgentTask[]) => void;
+  // The CLI started a turn on its own — a background task settled and it woke
+  // the model to handle the result. `notes` are the task summaries that
+  // triggered it. The session should call adoptTurn() once it is free.
+  onUnsolicitedTurn: (notes: string[]) => void;
+  // The CLI process exited (input closed, close() called, or it crashed).
+  onClosed: () => void;
+}
 
+interface TurnSink {
+  emit: (event: RawAgentEvent) => void;
+  resolve: () => void;
+  interrupted: boolean;
+}
+
+// Push-based prompt stream. The CLI stays alive for as long as this iterable
+// is open, which is what lets background tasks outlive the turn that started
+// them.
+class InputQueue implements AsyncIterable<SDKUserMessage> {
+  private items: SDKUserMessage[] = [];
+  private wake: (() => void) | null = null;
+  private ended = false;
+
+  get isEnded(): boolean {
+    return this.ended;
+  }
+
+  push(message: SDKUserMessage): void {
+    if (this.ended) return;
+    this.items.push(message);
+    this.wake?.();
+  }
+
+  end(): void {
+    this.ended = true;
+    this.wake?.();
+  }
+
+  async *[Symbol.asyncIterator](): AsyncIterator<SDKUserMessage> {
+    while (true) {
+      if (this.items.length > 0) {
+        yield this.items.shift()!;
+        continue;
+      }
+      if (this.ended) return;
+      await new Promise<void>((resolve) => (this.wake = resolve));
+      this.wake = null;
+    }
+  }
+}
+
+const OUTPUT_PATH_RE = /written to: (\S+?\.output)\b/;
+
+function clip(text: unknown, max = 300): string {
+  const s = String(text ?? "").trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+// The line shown in the chat above a turn the CLI started because this task
+// settled. Shell summaries already read well ('Background command "…"
+// completed (exit code 0)'); a subagent's is just its final message.
+function describeSettledTask(t: AgentTask): string {
+  if (t.taskType !== "local_agent") return t.summary || `${t.description} ${t.status}`;
+  const head = `Agent "${t.description}" ${t.status}`;
+  return clip(t.summary ? `${head}: ${t.summary}` : head, 500);
+}
+
+// One Claude CLI process for a chat, carrying one or more turns. Each turn
+// ends at the SDK's `result`; the process is kept alive afterwards only while
+// subagents / shell commands it started in the background are still running,
+// and winds down on its own once they settle.
+export class ClaudeLiveQuery {
+  readonly cwd: string;
+  private readonly input = new InputQueue();
+  private readonly abort = new AbortController();
+  private readonly stream: Query;
+  // The latest turn's args. SDK callbacks (canUseTool, custom tools) read
+  // through this so work done by background tasks after a turn has ended
+  // still reaches the session.
+  private args: RunArgs;
+  private model: Model;
+  private permissionMode: PermissionMode;
+  private sessionId?: string;
+  private sink: TurnSink | null = null;
+  // Output of a CLI-initiated turn, held until the session adopts it.
+  private buffered: any[] = [];
+  private bufferedInit: any = null;
+  private unsolicitedPending = false;
+  // Summaries of tasks that settled while no turn was open.
+  private notes: string[] = [];
+  private readonly tasks = new Map<string, AgentTask>();
+  private readonly outputFiles = new Map<string, string>();
+  // tool_use id → output path, parsed from background Bash tool results.
+  private readonly outputPathsByToolUse = new Map<string, string>();
+  // Assistant messages across every turn, scanned for the latest TodoWrite.
+  private readonly assistantMessages: any[] = [];
+  private idleTimer?: NodeJS.Timeout;
+  private closed = false;
+  private lastPublished = "";
+
+  static async start(args: RunArgs, hooks: LiveQueryHooks): Promise<ClaudeLiveQuery> {
+    const effort = resolveEffort(args.model, (await readPrefs()).claudeEffort);
+    return new ClaudeLiveQuery(args, effort, hooks);
+  }
+
+  private constructor(
+    args: RunArgs,
+    effort: EffortLevel | undefined,
+    private readonly hooks: LiveQueryHooks,
+  ) {
+    this.args = args;
+    this.model = args.model;
+    this.permissionMode = args.permissionMode;
+    this.sessionId = args.sessionId;
+    this.cwd = args.cwd ?? process.cwd();
+
+    const customToolsServer = createCustomToolsServer(
+      (req) => this.args.requestAttentionAck(req),
+      (reason) => this.args.requestCompact(reason),
+      this.cwd,
+      () => this.currentTodos(),
+    );
+
+    const canUseTool: CanUseTool = async (toolName, input) => {
+      const turn = this.args;
+      // Snapshot the target file before any file-modifying tool executes so we
+      // can restore it on revert.  Do this regardless of permission mode so even
+      // auto-approved edits are covered.
+      if (turn.onBeforeFileTool && FILE_MODIFYING_TOOLS.has(toolName)) {
+        await turn.onBeforeFileTool(toolName, input).catch(() => {
+          // Best-effort: a snapshot failure must never block the agent turn.
+        });
+      }
+
+      // RequestUserAttention is always auto-allowed at the canUseTool stage.
+      // The MCP tool handler blocks the turn itself by awaiting requestAttentionAck,
+      // which only resolves when the client sends an attention_ack WebSocket message.
+      if (toolName === "RequestUserAttention") {
+        return { behavior: "allow", updatedInput: input };
+      }
+
+      // In bypassPermissions mode, the SDK still calls canUseTool for every
+      // tool when the callback is supplied — so the mode alone won't suppress
+      // prompts. Short-circuit here to honor the user's choice.
+      // Exception: ExitPlanMode must always go through the permission UI so
+      // its plan is shown to the user.
+      const currentMode = turn.getPermissionMode?.() ?? turn.permissionMode;
+      if (currentMode === "bypassPermissions" && !ALWAYS_PROMPT_TOOLS.has(toolName)) {
+        return { behavior: "allow", updatedInput: input };
+      }
+      const decision = await turn.requestPermission({
+        toolName,
+        input,
+        suggestions: [],
+      });
+      if (decision.behavior === "allow") {
+        return {
+          behavior: "allow",
+          updatedInput: decision.updatedInput ?? input,
+        };
+      }
+      return {
+        behavior: "deny",
+        message: decision.message ?? "Denied by user",
+        interrupt: decision.interrupt,
+      };
+    };
+
+    // SDK requires `canUseTool` to be paired with `stream-json` input, which
+    // the push-based InputQueue provides.
+    this.stream = query({
+      prompt: this.input,
+      options: {
+        model: args.model,
+        cwd: this.cwd,
+        resume: args.sessionId,
+        // Truncated resume after an edit / branch-switch / revert: cut the
+        // resumed history at this message uuid and fork into a new session so
+        // the abandoned branch's session file stays intact for future branch
+        // switches. The forked session's id arrives via system_init and
+        // replaces record.sessionId (which also clears the one-shot marker).
+        ...(args.sessionId && args.resumeSessionAt
+          ? { resumeSessionAt: args.resumeSessionAt, forkSession: true }
+          : {}),
+        permissionMode: args.permissionMode,
+        canUseTool,
+        includePartialMessages: false,
+        // Adaptive-thinking models (Opus 4.8+) default to `display: 'omitted'`,
+        // which returns thinking blocks with an empty `thinking` string (only a
+        // signature for multi-turn continuity). That surfaced as an empty
+        // "Thinking" dropdown in the UI. Request `summarized` so the thinking
+        // content is actually included. Harmless on older/non-adaptive models —
+        // they return their thinking either way.
+        thinking: { type: "adaptive", display: "summarized" },
+        // User-chosen effort from the composer slider; omitted → model default.
+        ...(effort ? { effort } : {}),
+        ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
+        // One-line progress summaries for running subagents, shown on their
+        // row in the Agents panel.
+        agentProgressSummaries: true,
+        // The claude_code preset exposes the harness's native TaskCreate/
+        // TaskUpdate/TaskList tools and periodically nudges the model to use
+        // them for progress tracking. We render progress from our own TodoWrite
+        // tool (see useTodos / TodoPanel), so disable the Task tools to stop the
+        // model defaulting to them — otherwise the sidebar never populates.
+        disallowedTools: [
+          "TaskCreate",
+          "TaskUpdate",
+          "TaskList",
+          "TaskGet",
+          "TaskOutput",
+          "TaskStop",
+        ],
+        // Owned by this query (not the turn) so stopping a turn doesn't take
+        // background tasks down with it; close() aborts it.
+        abortController: this.abort,
+        // Every chat gets a base instruction steering progress tracking to our
+        // TodoWrite tool (rendered in the sidebar via useTodos/TodoPanel). The
+        // native Task tools are disabled above, so without this the model would
+        // simply stop tracking progress. Coordinator/subagent chats get extra
+        // role instructions appended on top.
+        systemPrompt: {
+          type: "preset" as const,
+          preset: "claude_code" as const,
+          append: [TODO_TRACKING_INSTRUCTION, args.systemPromptAppend]
+            .filter(Boolean)
+            .join("\n\n"),
+        },
+        // Register custom tools (e.g. RequestUserAttention) so the SDK
+        // knows about them and routes them through canUseTool → requestPermission.
+        mcpServers: {
+          "buildover-custom-tools": customToolsServer,
+          // Coordination tools for coordinator/subagent chats.
+          ...(args.extraMcpServers ?? {}),
+          // User-installed servers from mcp-servers.json — re-read whenever a
+          // CLI process starts so installs/removals take effect without a
+          // server restart.
+          ...toSdkMcpConfig(readInstalledServers()),
+        },
+      },
+    });
+
+    void this.consume();
+  }
+
+  get isClosed(): boolean {
+    return this.closed;
+  }
+
+  get currentModel(): Model {
+    return this.model;
+  }
+
+  // Whether the next turn for this chat can be sent into this process rather
+  // than spawning a fresh one. A truncated resume (fork / revert) or a
+  // different cwd or session needs a new process.
+  canReuse(args: RunArgs): boolean {
+    return (
+      !this.closed &&
+      !this.input.isEnded &&
+      (args.cwd ?? process.cwd()) === this.cwd &&
+      !args.resumeSessionAt &&
+      args.sessionId === this.sessionId
+    );
+  }
+
+  hasRunningTasks(): boolean {
+    for (const t of this.tasks.values()) if (t.status === "running") return true;
+    return false;
+  }
+
+  hasPendingUnsolicitedTurn(): boolean {
+    return this.unsolicitedPending;
+  }
+
+  taskList(): AgentTask[] {
+    return [...this.tasks.values()];
+  }
+
+  outputFileFor(taskId: string): string | undefined {
+    return this.outputFiles.get(taskId);
+  }
+
+  async stopTask(taskId: string): Promise<void> {
+    if (this.closed) return;
+    await this.stream.stopTask(taskId);
+  }
+
+  // Tears the CLI down immediately, killing every task it is running.
+  close(): void {
+    if (this.closed) return;
+    clearTimeout(this.idleTimer);
+    this.input.end();
+    this.abort.abort();
+  }
+
+  // Sends a user message as a new turn. Resolves (with the possibly-new
+  // session id) once the CLI reports the turn's result.
+  async runTurn(args: RunArgs): Promise<string | undefined> {
+    if (!this.canReuse(args)) throw new Error("Claude process is no longer reusable");
+    this.args = args;
+    await this.applyTurnSettings(args);
+    const sink = this.openSink(args);
+    // A CLI-initiated turn the session never got round to adopting folds into
+    // this one rather than being dropped.
+    this.flushBuffered();
+    this.input.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: renderPromptWithAttachments(args.prompt, args.attachments),
+      },
+      parent_tool_use_id: null,
+      session_id: this.sessionId ?? "",
+    });
+    await sink;
+    return this.sessionId;
+  }
+
+  // Attaches a session turn to output the CLI produced on its own (see
+  // onUnsolicitedTurn). Resolves at that turn's result.
+  async adoptTurn(args: RunArgs): Promise<string | undefined> {
+    if (!this.unsolicitedPending) return this.sessionId;
+    this.args = args;
+    const sink = this.openSink(args);
+    this.flushBuffered();
+    await sink;
+    return this.sessionId;
+  }
+
+  private async applyTurnSettings(args: RunArgs): Promise<void> {
+    if (args.model !== this.model) {
+      await this.stream.setModel(args.model).catch((err) =>
+        console.warn("[agent] setModel failed:", err instanceof Error ? err.message : err),
+      );
+      this.model = args.model;
+    }
+    if (args.permissionMode !== this.permissionMode) {
+      await this.stream.setPermissionMode(args.permissionMode).catch((err) =>
+        console.warn("[agent] setPermissionMode failed:", err instanceof Error ? err.message : err),
+      );
+      this.permissionMode = args.permissionMode;
+    }
+  }
+
+  private openSink(args: RunArgs): Promise<void> {
+    clearTimeout(this.idleTimer);
+    this.unsolicitedPending = false;
+    this.notes = [];
+    return new Promise<void>((resolve) => {
+      const sink: TurnSink = { emit: args.emit, resolve, interrupted: false };
+      this.sink = sink;
+      args.emit({ type: "turn_start" });
+      const signal = args.abortController?.signal;
+      if (signal) {
+        const onAbort = () => this.interruptTurn(sink);
+        if (signal.aborted) onAbort();
+        else signal.addEventListener("abort", onAbort, { once: true });
+      }
+      // The process may have died while the buffered output was waiting.
+      if (this.closed && this.buffered.length === 0) this.endTurn(sink);
+    });
+  }
+
+  private flushBuffered(): void {
+    const pending = this.buffered.splice(0);
+    for (const message of pending) this.route(message);
+    if (this.closed && this.sink) this.endTurn(this.sink);
+  }
+
+  // Stops the current turn only. interrupt() aborts the in-flight model call
+  // and any foreground tools, but leaves background tasks running.
+  private interruptTurn(sink: TurnSink): void {
+    if (this.sink !== sink) return;
+    sink.interrupted = true;
+    this.stream.interrupt().catch(() => {});
+    setTimeout(() => {
+      if (this.sink === sink) {
+        console.warn("[agent] interrupt did not end the turn — killing the CLI");
+        this.close();
+      }
+    }, INTERRUPT_FALLBACK_MS);
+  }
+
+  private endTurn(sink: TurnSink): void {
+    if (this.sink !== sink) return;
+    this.sink = null;
+    // A turn can't end while its own foreground tool calls are still running,
+    // so anything still marked as foreground-running settled without a
+    // notification reaching us.
+    let changed = false;
+    for (const t of this.tasks.values()) {
+      if (t.status === "running" && !t.background) {
+        t.status = sink.interrupted ? "stopped" : "completed";
+        t.endedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) this.publishTasks();
+    sink.emit({ type: "turn_end" });
+    sink.resolve();
+    this.scheduleWindDown();
+  }
+
+  // Closes the input (letting the CLI exit) once nothing is left for it to do.
+  private scheduleWindDown(): void {
+    clearTimeout(this.idleTimer);
+    if (this.closed || this.sink || this.unsolicitedPending) return;
+    if (this.hasRunningTasks()) return;
+    this.idleTimer = setTimeout(() => {
+      if (!this.sink && !this.unsolicitedPending && !this.hasRunningTasks()) {
+        this.input.end();
+      }
+    }, IDLE_WIND_DOWN_MS);
+  }
+
+  private async consume(): Promise<void> {
+    let failure: unknown;
+    try {
+      for await (const message of this.stream as AsyncIterable<any>) {
+        this.route(message);
+      }
+    } catch (err) {
+      failure = err;
+    } finally {
+      this.closed = true;
+      clearTimeout(this.idleTimer);
+      const sink = this.sink;
+      if (failure && !this.isAbortLike(failure, sink)) {
+        const message = failure instanceof Error ? failure.message : String(failure);
+        if (sink) {
+          console.error("[agent] Claude turn error:", failure);
+          sink.emit({ type: "error", message });
+        } else {
+          console.warn("[agent] Claude process exited with an error between turns:", message);
+        }
+      }
+      // A CLI-initiated turn still waiting to be adopted keeps its buffered
+      // output; openSink/flushBuffered end it once replayed.
+      if (sink) this.endTurn(sink);
+      // Anything still running died with the process.
+      let changed = false;
+      for (const t of this.tasks.values()) {
+        if (t.status === "running") {
+          t.status = "stopped";
+          t.endedAt = new Date().toISOString();
+          changed = true;
+        }
+      }
+      if (changed) this.publishTasks();
+      this.hooks.onClosed();
+    }
+  }
+
+  // AbortErrors are intentional interruptions (user clicked stop, a forced
+  // close, or a deliberate input close). Don't surface them as chat errors.
+  // The SDK reports a user-initiated stop as a plain Error with the message
+  // "Claude Code process aborted by user" (not an AbortError), and a CLI whose
+  // input we closed after an interrupted turn can exit non-zero.
+  private isAbortLike(err: unknown, sink: TurnSink | null): boolean {
+    const message = err instanceof Error ? err.message : String(err);
+    return (
+      this.abort.signal.aborted ||
+      sink?.interrupted === true ||
+      (!sink && this.input.isEnded) ||
+      /aborted by user/i.test(message) ||
+      (err instanceof Error && err.name === "AbortError") ||
+      (typeof DOMException !== "undefined" &&
+        err instanceof DOMException &&
+        err.name === "AbortError")
+    );
+  }
+
+  private route(message: any): void {
+    if (message.type === "system" && this.handleTaskMessage(message)) return;
+    if (message.type === "user") this.noteOutputPaths(message.message?.content);
+
+    // A background subagent's own transcript streams through here too. It
+    // belongs to that task, not to whichever turn happens to be open (or to a
+    // turn of its own); the task row in the Agents panel tracks its progress.
+    if (message.parent_tool_use_id && (!this.sink || this.isBackgroundToolUse(message.parent_tool_use_id))) {
+      return;
+    }
+
+    if (this.sink) {
+      this.dispatch(this.sink, message);
+      return;
+    }
+
+    // No turn is open, so the CLI started one by itself — normally a background
+    // task settled and it woke the model. Buffer the output until the session
+    // adopts it as a turn of its own.
+    if (this.unsolicitedPending) {
+      this.buffered.push(message);
+      return;
+    }
+    if (message.type === "system" && message.subtype === "init") {
+      this.bufferedInit = message;
+      return;
+    }
+    if (message.type === "assistant") {
+      clearTimeout(this.idleTimer);
+      this.unsolicitedPending = true;
+      if (this.bufferedInit) this.buffered.push(this.bufferedInit);
+      this.bufferedInit = null;
+      this.buffered.push(message);
+      this.hooks.onUnsolicitedTurn(this.notes.splice(0));
+      return;
+    }
+    // A CLI turn with no output (e.g. acknowledging a stopped task).
+    if (message.type === "result") {
+      this.bufferedInit = null;
+      this.scheduleWindDown();
+    }
+  }
+
+  private dispatch(sink: TurnSink, message: any): void {
+    const emit = sink.emit;
+    switch (message.type) {
+      case "system": {
+        if (message.subtype === "init") {
+          this.sessionId = message.session_id ?? this.sessionId;
+          emit({
+            type: "system_init",
+            sessionId: this.sessionId ?? "",
+            tools: message.tools ?? [],
+            mcpServers: message.mcp_servers ?? [],
+            cwd: message.cwd,
+            model: message.model,
+            permissionMode: message.permissionMode,
+            slashCommands: message.slash_commands ?? [],
+          });
+        }
+        break;
+      }
+
+      case "assistant": {
+        const content = normalizeContent(message.message?.content ?? []);
+        // Store assistant messages so currentTodos can scan for TodoWrite calls
+        this.assistantMessages.push({ type: "assistant", message: message.message, content });
+        emit({
+          type: "assistant",
+          uuid: message.uuid ?? cryptoRandomId(),
+          sessionId: message.session_id ?? this.sessionId ?? "",
+          content,
+        });
+        // Emit an intermediate context_usage update so the ring moves during
+        // long multi-step turns instead of only updating at the final result.
+        // Each assistant message carries per-iteration usage from BetaMessage.
+        const iterUsage = message.message?.usage as
+          | {
+              input_tokens?: number;
+              output_tokens?: number;
+              cache_read_input_tokens?: number;
+              cache_creation_input_tokens?: number;
+            }
+          | undefined;
+        if (iterUsage) {
+          // Determine context window size based on model family and context1m flag.
+          // Models can have date suffixes (e.g., claude-sonnet-4-5-20250929)
+          let contextWindowSize = 200_000; // default for haiku
+          const modelLower = this.model.toLowerCase();
+          if (modelLower.includes("opus")) {
+            contextWindowSize = 1_000_000;
+          } else if (modelLower.includes("sonnet")) {
+            contextWindowSize = this.args.context1m ? 1_000_000 : 200_000;
+          }
+          const inputTokens = iterUsage.input_tokens ?? 0;
+          const outputTokens = iterUsage.output_tokens ?? 0;
+          const cacheReadTokens = iterUsage.cache_read_input_tokens ?? 0;
+          const cacheWriteTokens = iterUsage.cache_creation_input_tokens ?? 0;
+          // Exclude outputTokens: they are generated tokens, not context window
+          // consumption. The context window limit is an input constraint only.
+          const usedTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
+          const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
+          emit({
+            type: "context_usage",
+            usedTokens,
+            contextWindowSize,
+            pct,
+            inputTokens,
+            outputTokens,
+            cacheReadTokens,
+            cacheWriteTokens,
+          });
+        }
+        break;
+      }
+
+      case "user": {
+        const content = normalizeContent(message.message?.content ?? []);
+        if (content.some((c) => c.type === "tool_result")) {
+          emit({
+            type: "user_tool_results",
+            uuid: message.uuid ?? cryptoRandomId(),
+            sessionId: message.session_id ?? this.sessionId ?? "",
+            content,
+          });
+        }
+        break;
+      }
+
+      case "result": {
+        this.sessionId = message.session_id ?? this.sessionId;
+        emit({
+          type: "result",
+          sessionId: this.sessionId ?? "",
+          subtype: message.subtype ?? "success",
+          durationMs: message.duration_ms ?? 0,
+          totalCostUsd: message.total_cost_usd,
+          numTurns: message.num_turns ?? 0,
+          result: message.result,
+        });
+        // NOTE: We intentionally do NOT emit context_usage from the result event.
+        // The SDK's result.usage is the *cumulative sum* of tokens across all
+        // agentic sub-turns (every API call Claude made during this user turn).
+        // That sum can be many times larger than the actual context window in use
+        // at any single moment — emitting it here caused a jarring jump to
+        // hundreds of thousands of tokens at the end of multi-step tasks.
+        // The per-assistant-message context_usage emits above are accurate
+        // per-API-call measurements and are sufficient for tracking context pressure.
+        this.endTurn(sink);
+        break;
+      }
+
+      default:
+        break;
+    }
+  }
+
+  // Folds the CLI's task lifecycle messages into the task map. Returns false
+  // for system messages that aren't about tasks.
+  private handleTaskMessage(m: any): boolean {
+    const now = new Date().toISOString();
+    switch (m.subtype) {
+      case "task_started": {
+        // Ambient tasks are housekeeping (watchers etc.), not user-visible work.
+        if (m.ambient || m.skip_transcript) return true;
+        const existing = this.tasks.get(m.task_id);
+        this.tasks.set(m.task_id, {
+          ...existing,
+          id: m.task_id,
+          toolUseId: m.tool_use_id,
+          taskType: m.task_type ?? existing?.taskType ?? "task",
+          description: clip(m.description ?? existing?.description),
+          subagentType: m.subagent_type,
+          status: "running",
+          background: m.is_backgrounded ?? existing?.background ?? true,
+          startedAt: existing?.startedAt ?? now,
+        });
+        const path = m.tool_use_id ? this.outputPathsByToolUse.get(m.tool_use_id) : undefined;
+        if (path) this.setOutputFile(m.task_id, path);
+        break;
+      }
+      case "task_progress": {
+        const t = this.tasks.get(m.task_id);
+        if (!t) return true;
+        if (m.last_tool_name) t.lastToolName = m.last_tool_name;
+        if (m.summary) t.summary = clip(m.summary, 200);
+        if (m.usage) {
+          t.totalTokens = m.usage.total_tokens;
+          t.toolUses = m.usage.tool_uses;
+        }
+        break;
+      }
+      case "task_updated": {
+        const t = this.tasks.get(m.task_id);
+        if (!t) return true;
+        const p = m.patch ?? {};
+        if (p.description) t.description = clip(p.description);
+        if (typeof p.is_backgrounded === "boolean") t.background = p.is_backgrounded;
+        if (p.status) {
+          t.status =
+            p.status === "completed"
+              ? "completed"
+              : p.status === "failed"
+                ? "failed"
+                : p.status === "killed"
+                  ? "stopped"
+                  : "running";
+          if (t.status !== "running") t.endedAt = p.end_time ? new Date(p.end_time).toISOString() : now;
+        }
+        if (p.error) t.summary = clip(p.error, 200);
+        break;
+      }
+      case "task_notification": {
+        const t = this.tasks.get(m.task_id);
+        if (!t) return true;
+        t.status = m.status === "completed" ? "completed" : m.status === "failed" ? "failed" : "stopped";
+        t.endedAt ??= now;
+        if (m.summary) t.summary = clip(m.summary, 200);
+        if (m.usage) {
+          t.totalTokens = m.usage.total_tokens;
+          t.toolUses = m.usage.tool_uses;
+        }
+        if (m.output_file) this.setOutputFile(m.task_id, m.output_file);
+        // Foreground tasks here belong to a background subagent; its own
+        // notification covers them.
+        if (!this.sink && t.background) this.notes.push(describeSettledTask(t));
+        break;
+      }
+      case "background_tasks_changed": {
+        // Level signal: reconcile against the authoritative live set so a
+        // missed edge event can't leave a row spinning forever.
+        const live = new Set<string>();
+        for (const entry of m.tasks ?? []) {
+          if (entry.ambient) continue;
+          live.add(entry.task_id);
+          if (!this.tasks.has(entry.task_id)) {
+            this.tasks.set(entry.task_id, {
+              id: entry.task_id,
+              taskType: entry.task_type ?? "task",
+              description: clip(entry.description),
+              status: "running",
+              background: true,
+              startedAt: now,
+            });
+          }
+        }
+        const missing = [...this.tasks.values()]
+          .filter((t) => t.status === "running" && t.background && !live.has(t.id))
+          .map((t) => t.id);
+        if (missing.length > 0) {
+          // The level usually lands just before the task's own notification,
+          // which carries the real outcome (completed / stopped / failed).
+          // Only fall back to "completed" if that never arrives.
+          setTimeout(() => {
+            let changed = false;
+            for (const id of missing) {
+              const t = this.tasks.get(id);
+              if (t?.status === "running") {
+                t.status = "completed";
+                t.endedAt = new Date().toISOString();
+                changed = true;
+              }
+            }
+            if (changed) {
+              this.publishTasks();
+              if (!this.sink) this.scheduleWindDown();
+            }
+          }, LEVEL_RECONCILE_MS);
+        }
+        break;
+      }
+      default:
+        return false;
+    }
+    this.publishTasks();
+    if (!this.sink) this.scheduleWindDown();
+    return true;
+  }
+
+  private noteOutputPaths(content: unknown): void {
+    if (!Array.isArray(content)) return;
+    for (const block of content) {
+      if (block?.type !== "tool_result" || !block.tool_use_id) continue;
+      const text =
+        typeof block.content === "string"
+          ? block.content
+          : Array.isArray(block.content)
+            ? block.content.map((c: any) => c?.text ?? "").join("\n")
+            : "";
+      const match = OUTPUT_PATH_RE.exec(text);
+      if (!match) continue;
+      this.outputPathsByToolUse.set(block.tool_use_id, match[1]);
+      for (const t of this.tasks.values()) {
+        if (t.toolUseId === block.tool_use_id) {
+          this.setOutputFile(t.id, match[1]);
+          this.publishTasks();
+        }
+      }
+    }
+  }
+
+  private isBackgroundToolUse(toolUseId: string): boolean {
+    for (const t of this.tasks.values()) {
+      if (t.toolUseId === toolUseId) return t.background;
+    }
+    return false;
+  }
+
+  private setOutputFile(taskId: string, path: string): void {
+    const t = this.tasks.get(taskId);
+    // A subagent's output file is its raw JSONL transcript; its summary is
+    // the readable result.
+    if (t?.taskType === "local_agent") return;
+    this.outputFiles.set(taskId, path);
+    if (t) t.hasOutput = true;
+  }
+
+  private publishTasks(): void {
+    const tasks = this.taskList().map((t) => ({ ...t }));
+    // Edge and level messages often describe the same change.
+    const snapshot = JSON.stringify(tasks);
+    if (snapshot === this.lastPublished) return;
+    this.lastPublished = snapshot;
+    this.hooks.onTasksChanged(tasks);
+  }
+
+  // Latest TodoWrite list across every turn (same logic as the useTodos hook).
+  private currentTodos(): any[] {
+    for (let i = this.assistantMessages.length - 1; i >= 0; i--) {
+      const msg = this.assistantMessages[i];
       const content = msg.message?.content ?? msg.content ?? [];
       for (let j = content.length - 1; j >= 0; j--) {
         const block = content[j];
@@ -160,305 +963,7 @@ export async function runAgentTurn(args: RunArgs): Promise<string | undefined> {
       }
     }
     return [];
-  };
-
-  const customToolsServer = createCustomToolsServer(
-    requestAttentionAck,
-    args.requestCompact,
-    cwd,
-    getCurrentTodos
-  );
-
-  const finalPromptContent = renderPromptWithAttachments(prompt, attachments);
-
-  // Tools that must always surface a UI prompt regardless of permission mode,
-  // because they are user-interaction checkpoints, not dangerous operations.
-  // Note: RequestUserAttention is intentionally absent — it blocks inside its
-  // own MCP tool handler (via requestAttentionAck), not via the permission
-  // system. Routing it through requestPermission would deadlock because the
-  // client ignores permission_request events for this tool.
-  const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"]);
-
-  // Tool names that modify files — we snapshot before these run.
-  const FILE_MODIFYING_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
-
-  const canUseTool: CanUseTool = async (toolName, input) => {
-    // Snapshot the target file before any file-modifying tool executes so we
-    // can restore it on revert.  Do this regardless of permission mode so even
-    // auto-approved edits are covered.
-    if (args.onBeforeFileTool && FILE_MODIFYING_TOOLS.has(toolName)) {
-      await args.onBeforeFileTool(toolName, input).catch(() => {
-        // Best-effort: a snapshot failure must never block the agent turn.
-      });
-    }
-
-    // RequestUserAttention is always auto-allowed at the canUseTool stage.
-    // The MCP tool handler blocks the turn itself by awaiting requestAttentionAck,
-    // which only resolves when the client sends an attention_ack WebSocket message.
-    if (toolName === "RequestUserAttention") {
-      return { behavior: "allow", updatedInput: input };
-    }
-
-    // In bypassPermissions mode, the SDK still calls canUseTool for every
-    // tool when the callback is supplied — so the mode alone won't suppress
-    // prompts. Short-circuit here to honor the user's choice.
-    // Exception: ExitPlanMode must always go through the permission UI so
-    // its plan is shown to the user.
-    const currentMode = getPermissionMode?.() ?? permissionMode;
-    if (currentMode === "bypassPermissions" && !ALWAYS_PROMPT_TOOLS.has(toolName)) {
-      return { behavior: "allow", updatedInput: input };
-    }
-    const decision = await requestPermission({
-      toolName,
-      input,
-      suggestions: [],
-    });
-    if (decision.behavior === "allow") {
-      return {
-        behavior: "allow",
-        updatedInput: decision.updatedInput ?? input,
-      };
-    }
-    return {
-      behavior: "deny",
-      message: decision.message ?? "Denied by user",
-      interrupt: decision.interrupt,
-    };
-  };
-
-  // SDK requires `canUseTool` to be paired with `stream-json` input. We pass
-  // the prompt as an async iterable to satisfy that.
-  const promptIterable = (async function* () {
-    yield {
-      type: "user" as const,
-      message: { role: "user" as const, content: finalPromptContent },
-      parent_tool_use_id: null,
-      session_id: sessionId ?? "",
-    };
-  })();
-
-  const stream = query({
-    prompt: promptIterable,
-    options: {
-      model,
-      cwd: cwd ?? process.cwd(),
-      resume: sessionId,
-      // Truncated resume after an edit / branch-switch / revert: cut the
-      // resumed history at this message uuid and fork into a new session so
-      // the abandoned branch's session file stays intact for future branch
-      // switches. The forked session's id arrives via system_init and
-      // replaces record.sessionId (which also clears the one-shot marker).
-      ...(sessionId && resumeSessionAt
-        ? { resumeSessionAt, forkSession: true }
-        : {}),
-      permissionMode,
-      canUseTool,
-      includePartialMessages: false,
-      // Adaptive-thinking models (Opus 4.8+) default to `display: 'omitted'`,
-      // which returns thinking blocks with an empty `thinking` string (only a
-      // signature for multi-turn continuity). That surfaced as an empty
-      // "Thinking" dropdown in the UI. Request `summarized` so the thinking
-      // content is actually included. Harmless on older/non-adaptive models —
-      // they return their thinking either way.
-      thinking: { type: "adaptive", display: "summarized" },
-      // User-chosen effort from the composer slider; omitted → model default.
-      ...(effort ? { effort } : {}),
-      ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
-      // The claude_code preset exposes the harness's native TaskCreate/
-      // TaskUpdate/TaskList tools and periodically nudges the model to use
-      // them for progress tracking. We render progress from our own TodoWrite
-      // tool (see useTodos / TodoPanel), so disable the Task tools to stop the
-      // model defaulting to them — otherwise the sidebar never populates.
-      disallowedTools: [
-        "TaskCreate",
-        "TaskUpdate",
-        "TaskList",
-        "TaskGet",
-        "TaskOutput",
-        "TaskStop",
-      ],
-      // Pass the controller so the SDK terminates its CLI subprocess on
-      // abort; relying on stream.interrupt() alone left the turn running.
-      abortController,
-      // Every chat gets a base instruction steering progress tracking to our
-      // TodoWrite tool (rendered in the sidebar via useTodos/TodoPanel). The
-      // native Task tools are disabled above, so without this the model would
-      // simply stop tracking progress. Coordinator/subagent chats get extra
-      // role instructions appended on top.
-      systemPrompt: {
-        type: "preset" as const,
-        preset: "claude_code" as const,
-        append: [TODO_TRACKING_INSTRUCTION, args.systemPromptAppend]
-          .filter(Boolean)
-          .join("\n\n"),
-      },
-      // Register custom tools (e.g. RequestUserAttention) so the SDK
-      // knows about them and routes them through canUseTool → requestPermission.
-      mcpServers: {
-        "buildover-custom-tools": customToolsServer,
-        // Coordination tools for coordinator/subagent chats.
-        ...(args.extraMcpServers ?? {}),
-        // User-installed servers from mcp-servers.json — re-read on every
-        // turn so installs/removals take effect without a server restart.
-        ...toSdkMcpConfig(readInstalledServers()),
-      },
-    },
-  });
-
-  let currentSessionId = sessionId;
-  emit({ type: "turn_start" });
-
-  if (abortController) {
-    abortController.signal.addEventListener("abort", () => {
-      try {
-        // Belt-and-braces: the SDK's Query exposes interrupt() too.
-        // interrupt() returns a Promise that rejects with AbortError once
-        // the controller is already aborted — swallow that to avoid an
-        // unhandled rejection crashing the process.
-        const p = (stream as any).interrupt?.();
-        if (p && typeof p.then === "function") p.catch(() => {});
-      } catch {}
-    });
   }
-
-  try {
-    for await (const message of stream as AsyncIterable<any>) {
-      switch (message.type) {
-        case "system": {
-          if (message.subtype === "init") {
-            currentSessionId = message.session_id ?? currentSessionId;
-            emit({
-              type: "system_init",
-              sessionId: currentSessionId ?? "",
-              tools: message.tools ?? [],
-              mcpServers: message.mcp_servers ?? [],
-              cwd: message.cwd,
-              model: message.model,
-              permissionMode: message.permissionMode,
-              slashCommands: message.slash_commands ?? [],
-            });
-          }
-          break;
-        }
-
-        case "assistant": {
-          const content = normalizeContent(message.message?.content ?? []);
-          // Store assistant messages so getCurrentTodos can scan for TodoWrite calls
-          allMessages.push({ type: "assistant", message: message.message, content });
-          emit({
-            type: "assistant",
-            uuid: message.uuid ?? cryptoRandomId(),
-            sessionId: message.session_id ?? currentSessionId ?? "",
-            content,
-          });
-          // Emit an intermediate context_usage update so the ring moves during
-          // long multi-step turns instead of only updating at the final result.
-          // Each assistant message carries per-iteration usage from BetaMessage.
-          const iterUsage = message.message?.usage as
-            | {
-                input_tokens?: number;
-                output_tokens?: number;
-                cache_read_input_tokens?: number;
-                cache_creation_input_tokens?: number;
-              }
-            | undefined;
-          if (iterUsage) {
-            // Determine context window size based on model family and context1m flag.
-            // Models can have date suffixes (e.g., claude-sonnet-4-5-20250929)
-            let contextWindowSize = 200_000; // default for haiku
-            const modelLower = args.model.toLowerCase();
-            if (modelLower.includes("opus")) {
-              contextWindowSize = 1_000_000;
-            } else if (modelLower.includes("sonnet")) {
-              contextWindowSize = args.context1m ? 1_000_000 : 200_000;
-            }
-            const inputTokens = iterUsage.input_tokens ?? 0;
-            const outputTokens = iterUsage.output_tokens ?? 0;
-            const cacheReadTokens = iterUsage.cache_read_input_tokens ?? 0;
-            const cacheWriteTokens = iterUsage.cache_creation_input_tokens ?? 0;
-            // Exclude outputTokens: they are generated tokens, not context window
-            // consumption. The context window limit is an input constraint only.
-            const usedTokens = inputTokens + cacheReadTokens + cacheWriteTokens;
-            const pct = Math.min(100, (usedTokens / contextWindowSize) * 100);
-            emit({
-              type: "context_usage",
-              usedTokens,
-              contextWindowSize,
-              pct,
-              inputTokens,
-              outputTokens,
-              cacheReadTokens,
-              cacheWriteTokens,
-            });
-          }
-          break;
-        }
-
-        case "user": {
-          const content = normalizeContent(message.message?.content ?? []);
-          if (content.some((c) => c.type === "tool_result")) {
-            emit({
-              type: "user_tool_results",
-              uuid: message.uuid ?? cryptoRandomId(),
-              sessionId: message.session_id ?? currentSessionId ?? "",
-              content,
-            });
-          }
-          break;
-        }
-
-        case "result": {
-          currentSessionId = message.session_id ?? currentSessionId;
-          emit({
-            type: "result",
-            sessionId: currentSessionId ?? "",
-            subtype: message.subtype ?? "success",
-            durationMs: message.duration_ms ?? 0,
-            totalCostUsd: message.total_cost_usd,
-            numTurns: message.num_turns ?? 0,
-            result: message.result,
-          });
-          // NOTE: We intentionally do NOT emit context_usage from the result event.
-          // The SDK's result.usage is the *cumulative sum* of tokens across all
-          // agentic sub-turns (every API call Claude made during this user turn).
-          // That sum can be many times larger than the actual context window in use
-          // at any single moment — emitting it here caused a jarring jump to
-          // hundreds of thousands of tokens at the end of multi-step tasks.
-          // The per-assistant-message context_usage emits above are accurate
-          // per-API-call measurements and are sufficient for tracking context pressure.
-          break;
-        }
-
-        default:
-          break;
-      }
-    }
-  } catch (err) {
-    // AbortErrors are intentional interruptions (user clicked stop, or force-forwarded
-    // a queued message). Don't emit them as visible error events in the chat.
-    // The SDK reports a user-initiated stop as a plain Error with the message
-    // "Claude Code process aborted by user" (not an AbortError), so also treat
-    // that message — and any error thrown while our controller is aborted — as an abort.
-    const errMessage = err instanceof Error ? err.message : String(err);
-    const isAbort =
-      abortController?.signal.aborted === true ||
-      /aborted by user/i.test(errMessage) ||
-      (err instanceof Error && err.name === "AbortError") ||
-      (typeof DOMException !== "undefined" &&
-        err instanceof DOMException &&
-        err.name === "AbortError");
-    if (!isAbort) {
-      console.error("[agent] runAgentTurn error:", err);
-      emit({
-        type: "error",
-        message: errMessage,
-      });
-    }
-  } finally {
-    emit({ type: "turn_end" });
-  }
-
-  return currentSessionId;
 }
 
 function normalizeContent(blocks: any[]): ContentBlock[] {
