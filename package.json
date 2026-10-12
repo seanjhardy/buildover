@@ -12,6 +12,7 @@
     "build": "bash add-to-dock.sh",
     "build:web": "tsc -b && vite build",
     "preview": "vite preview",
+    "tokens": "node scripts/token-report.mjs",
     "electron:compile": "tsc -p electron/tsconfig.json && mv dist-electron/main.js dist-electron/main.cjs && mv dist-electron/preload.js dist-electron/preload.cjs",
     "electron:dev:only": "wait-on http://localhost:5173 && cross-env ELECTRON_IS_DEV=1 ./node_modules/.bin/electron dist-electron/main.cjs",
     "electron:dev": "concurrently -n server,client,electron -c yellow,cyan,magenta \"npm:dev:server\" \"npm:dev:client\" \"npm:electron:dev:only\"",

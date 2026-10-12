@@ -13,6 +13,11 @@ import {
 import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
 import { readPrefs } from "./prefs.js";
 import {
+  DEFAULT_AUTO_COMPACT_WINDOW,
+  TOKEN_SAVING_AGENTS,
+  downscaleImageReads,
+} from "./tokenEconomy.js";
+import {
   EFFORT_LEVELS,
   effortLevelsFor,
   type AgentEvent,
@@ -248,13 +253,16 @@ export class ClaudeLiveQuery {
   private lastPublished = "";
 
   static async start(args: RunArgs, hooks: LiveQueryHooks): Promise<ClaudeLiveQuery> {
-    const effort = resolveEffort(args.model, (await readPrefs()).claudeEffort);
-    return new ClaudeLiveQuery(args, effort, hooks);
+    const prefs = await readPrefs();
+    const effort = resolveEffort(args.model, prefs.claudeEffort);
+    const autoCompactWindow = prefs.autoCompactWindow ?? DEFAULT_AUTO_COMPACT_WINDOW;
+    return new ClaudeLiveQuery(args, effort, autoCompactWindow, hooks);
   }
 
   private constructor(
     args: RunArgs,
     effort: EffortLevel | undefined,
+    autoCompactWindow: number,
     private readonly hooks: LiveQueryHooks,
   ) {
     this.args = args;
@@ -344,6 +352,12 @@ export class ClaudeLiveQuery {
         // User-chosen effort from the composer slider; omitted → model default.
         ...(effort ? { effort } : {}),
         ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
+        // Every call re-reads the whole context, so cost scales with its size.
+        // Compact well before the 1M window (see tokenEconomy.ts).
+        settings: { autoCompactWindow },
+        // Read-only search / web research on Haiku 5.5 instead of the main model.
+        agents: TOKEN_SAVING_AGENTS,
+        hooks: { PreToolUse: [{ matcher: "Read", hooks: [downscaleImageReads] }] },
         // One-line progress summaries for running subagents, shown on their
         // row in the Agents panel.
         agentProgressSummaries: true,

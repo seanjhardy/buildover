@@ -39,6 +39,9 @@ export function defaultEffortFor(model: string): EffortLevel {
 /** Fallback model list used before the /api/models response arrives. */
 export const MODELS: ModelOption[] = [
   { id: "claude-fable-5-1", label: "Claude Fable 5.1", provider: "claude" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5", provider: "claude" },
+  { id: "claude-sonnet-5-5", label: "Claude Sonnet 5.5", provider: "claude" },
+  { id: "claude-haiku-5-5", label: "Claude Haiku 5.5", provider: "claude" },
   { id: "claude-opus-5", label: "Claude Opus 5", provider: "claude" },
   { id: "claude-sonnet-5", label: "Claude Sonnet 5", provider: "claude" },
   { id: "claude-opus-4-8", label: "Claude Opus 4.8", provider: "claude" },
@@ -59,11 +62,11 @@ export function getModelProvider(model: string): ModelProvider {
 }
 
 /**
- * Subagents always run on Haiku 4.5 — fast and cheap, suited to the focused,
- * well-scoped work a coordinator hands off. Enforced by chat kind in runTurn,
+ * Subagents always run on Haiku 5.5 — fast and cheap (a tenth of Haiku 4.5's
+ * price), suited to the focused, well-scoped work a coordinator hands off. Enforced by chat kind in runTurn,
  * so it holds regardless of who spawned the subagent or how a turn is resumed.
  */
-export const SUBAGENT_MODEL: Model = "claude-haiku-4-5";
+export const SUBAGENT_MODEL: Model = "claude-haiku-5-5";
 
 export type PermissionMode =
   | "default"
@@ -260,6 +263,8 @@ export interface AppPrefs {
   lastProjectLocation?: string;
   /** Reasoning effort for Claude turns. Unset → the model's default. */
   claudeEffort?: EffortLevel;
+  /** Token count at which Claude chats auto-compact. Unset → 200k. */
+  autoCompactWindow?: number;
 }
 
 export interface ChatSummary {

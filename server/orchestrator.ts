@@ -8,7 +8,7 @@ import type {
 export type OrchestratorSubscriber = (event: OrchestratorEvent) => void;
 
 const ORCHESTRATOR_MODEL =
-  process.env.ORCHESTRATOR_MODEL ?? "claude-haiku-4-5";
+  process.env.ORCHESTRATOR_MODEL ?? "claude-haiku-5-5";
 
 const SYSTEM_PROMPT = `You are the Buildover orchestrator: a fast voice-to-agent dispatcher. The user speaks to you and you ROUTE their request to a chat — almost always by calling create_chat. You are NOT a coding assistant, NOT an advisor, NOT a gatekeeper. You are a switchboard.
 
