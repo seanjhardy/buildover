@@ -24,6 +24,9 @@ const run = promisify(execFile);
 export const WARM_CACHE_MAX_AGE_MS = 55 * 60_000;
 
 export const HANDOFF_MODEL = "claude-haiku-5-5";
+// The OAuth direct-API path rate-limits (429) Haiku 5.5 for some accounts
+// even when idle; Haiku 4.5 still answers there.
+export const HANDOFF_FALLBACK_MODEL = "claude-haiku-4-5";
 // Haiku 5.5 always thinks, and thinking tokens count against max_tokens.
 const HANDOFF_MAX_TOKENS = 6_000;
 // ~100k tokens of transcript text at most.
@@ -135,14 +138,25 @@ function workingDirectory(record: ChatRecord, repoPath: string): string {
 export async function writeNoteWithHaiku(record: ChatRecord, repoPath: string): Promise<string> {
   const transcript = renderTranscript(record);
   if (!transcript.trim()) throw new Error("This chat has no messages to hand off.");
-  const { text } = await complete({
-    model: HANDOFF_MODEL,
-    systemPrompt:
-      "You write handoff notes that let a fresh coding agent continue another agent's work. You are given a condensed transcript of that conversation (tool results omitted).",
-    userPrompt: `Chat title: ${record.title}\nWorking directory: ${workingDirectory(record, repoPath)}\n\n<transcript>\n${transcript}\n</transcript>\n\n${NOTE_INSTRUCTIONS}\n\nReply with the note only.`,
-    maxTokens: HANDOFF_MAX_TOKENS,
-    timeoutMs: 180_000,
-  });
+  const request = (model: string) =>
+    complete({
+      model,
+      systemPrompt:
+        "You write handoff notes that let a fresh coding agent continue another agent's work. You are given a condensed transcript of that conversation (tool results omitted).",
+      userPrompt: `Chat title: ${record.title}\nWorking directory: ${workingDirectory(record, repoPath)}\n\n<transcript>\n${transcript}\n</transcript>\n\n${NOTE_INSTRUCTIONS}\n\nReply with the note only.`,
+      maxTokens: HANDOFF_MAX_TOKENS,
+      timeoutMs: 180_000,
+    });
+  let text: string;
+  try {
+    ({ text } = await request(HANDOFF_MODEL));
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    // Rate-limited, unavailable or overloaded: try the older Haiku.
+    if (!/^Anthropic (404|429|529)\b/.test(message)) throw err;
+    console.warn(`[handoff] ${HANDOFF_MODEL} failed (${message.slice(0, 80)}), retrying with ${HANDOFF_FALLBACK_MODEL}`);
+    ({ text } = await request(HANDOFF_FALLBACK_MODEL));
+  }
   const note = text.trim();
   if (!note) throw new Error("The note writer returned nothing.");
   return note;
