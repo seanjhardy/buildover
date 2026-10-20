@@ -35,9 +35,10 @@ import type {
   RepoInfo,
 } from "../types.js";
 
-// Column width and the card floor live in CSS (--grid-cards-across /
-// --grid-card-min on .grid-board) so they track the board's own width rather
-// than anything measured here.
+// Two chats per column, always. Column width and the card floor live in CSS
+// (--grid-cards-across / --grid-card-min on .grid-board) so they track the
+// board's own width rather than anything measured here.
+const ROWS = 2;
 const POLL_MS = 3000;
 
 /** App-wide Composer prefs (model list, effort, thinking, keep-warm window),
@@ -209,9 +210,16 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
     }
   }, []);
 
-  // One row of columns, as wide as the CSS allows, scrolling sideways past
-  // whatever fits beside the Master panel.
+  // Two rows tall, growing sideways: chats pair up into columns and the board
+  // scrolls by the column. Filling column-major (not across the top row) is
+  // what keeps the layout stable — a new chat appends to the end instead of
+  // re-flowing every card into a wider row.
   const n = entries.length;
+  const columns = useMemo(() => {
+    const out: GridChatEntry[][] = [];
+    for (let i = 0; i < entries.length; i += ROWS) out.push(entries.slice(i, i + ROWS));
+    return out;
+  }, [entries]);
   // The last entry renders in the rightmost cell, which sits under the
   // floating orchestrator mic FAB — its composer send button needs to dodge it.
   const cornerId = entries.length > 0 ? entries[entries.length - 1].chatId : null;
@@ -432,7 +440,15 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
           >
             <div className={`grid-board-wrap${boardScrolled ? " grid-board-wrap--scrolled" : ""}`}>
               <div className="grid-board" ref={boardRef}>
-                {entries.map(renderCard)}
+                {columns.map((column) => (
+                  <div className="grid-column" key={column[0].chatId}>
+                    {column.map(renderCard)}
+                    {/* Odd count: hold the empty lower slot so the rows stay
+                        level. A lone chat is the exception — it gets the whole
+                        board rather than half of it. */}
+                    {column.length < ROWS && n > 1 && <div className="grid-slot-empty" />}
+                  </div>
+                ))}
               </div>
               {/* Cards dissolving under the Master panel's edge. */}
               <div className="grid-board-fade" />

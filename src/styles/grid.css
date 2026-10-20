@@ -195,8 +195,8 @@
    One continuous surface: the board paints the grid lines and 1px gaps let
    them show through, so the cards themselves carry no border, no radius and
    no outer padding — they butt straight up against each other and the
-   window edges. One row of full-height columns that scrolls sideways: a chat
-   is always a whole column, never a half-height cell. */
+   window edges. Two rows tall, always: the grid grows sideways by the column
+   and scrolls horizontally, and the vertical dimension never scrolls. */
 
 .grid-board {
   /* "Three across beside the Master" — the column width is a share of the
@@ -218,13 +218,34 @@
   overscroll-behavior-x: contain;
 }
 
-.grid-board > .grid-card {
+/* A column: two stacked chats, and the unit the board scrolls by. */
+.grid-column {
   /* A percentage basis resolves against the scroll container's own width, not
      the scrolled content, so this stays "a third of what you can see". The 2px
      is the two gaps between the three visible columns. flex-grow fills the
-     board when there are fewer than three chats; flex-shrink 0 holds the floor
-     once the row overflows, which is what makes the board scroll. */
+     board when there are fewer than three columns; flex-shrink 0 holds the
+     floor once the row overflows, which is what makes the board scroll. */
   flex: 1 0 max(var(--grid-card-min), calc((100% - 2px) / var(--grid-cards-across)));
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  min-width: 0;
+  min-height: 0;
+}
+
+.grid-column > .grid-card {
+  flex: 1 1 0;
+  min-height: 0;
+}
+
+/* Odd number of chats: the last column's lower slot stays empty rather than
+   stretching its neighbour to double height, so the two-row rhythm holds and
+   adding the next chat moves nothing. Painted in the page background so it
+   reads as an empty cell, not as a block of grid line. */
+.grid-slot-empty {
+  flex: 1 1 0;
+  min-height: 0;
+  background: var(--app-primary-background);
 }
 
 /* Wrapper for the board and its left-edge fade: the fade has to sit outside
