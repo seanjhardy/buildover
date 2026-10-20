@@ -1,0 +1,682 @@
+/* ============================================================ */
+/* Grid Page — cross-repo board of grid-created chats           */
+/* ============================================================ */
+
+.grid-page {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--app-primary-background);
+}
+
+/* ── Header ── */
+
+.grid-page-header {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 42px;
+  padding: 0 12px 0 16px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  gap: 10px;
+}
+
+.grid-page-title {
+  margin: 0;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.grid-page-actions {
+  position: relative;
+}
+
+.grid-new-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 28px;
+  padding: 0 10px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 6px;
+  background: var(--app-secondary-background);
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.grid-new-btn:hover {
+  background: var(--app-list-hover-background);
+}
+
+.grid-new-btn:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+
+/* Holds the "+" menu and, to its left, the "Recent chats" flyout. */
+.grid-new-menus {
+  position: absolute;
+  top: 34px;
+  right: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: row-reverse;
+  align-items: flex-start;
+  gap: 6px;
+}
+
+.grid-new-menu {
+  min-width: 200px;
+  max-height: 320px;
+  overflow-y: auto;
+  padding: 4px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 8px;
+  background: var(--app-primary-background);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.25);
+}
+
+.grid-new-menu-label {
+  padding: 6px 8px;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+}
+
+.grid-new-menu-empty {
+  padding: 8px;
+  font-size: 12px;
+  color: var(--app-secondary-foreground);
+}
+
+.grid-new-menu-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--app-primary-foreground);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.grid-new-menu-item:hover:not(:disabled) {
+  background: var(--app-list-hover-background);
+}
+
+.grid-new-menu-divider {
+  height: 1px;
+  margin: 4px 2px;
+  background: var(--app-primary-border-color);
+}
+
+.grid-new-menu-recent {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.grid-new-menu-recent.active {
+  background: var(--app-list-hover-background);
+}
+
+.grid-new-menu-chevron {
+  margin-left: auto;
+  color: var(--app-secondary-foreground);
+}
+
+.grid-recent-menu {
+  width: 280px;
+  max-height: 420px;
+}
+
+.grid-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.grid-recent-item:disabled {
+  cursor: default;
+  opacity: 0.6;
+}
+
+.grid-recent-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+
+.grid-recent-repo {
+  font-size: 12px;
+  font-weight: 500;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grid-recent-title {
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.grid-recent-meta {
+  flex-shrink: 0;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+}
+
+/* ── Empty state ── */
+
+.grid-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 40px;
+  color: var(--app-secondary-foreground);
+  font-size: 13px;
+  line-height: 1.6;
+}
+
+/* ── Board ──
+   One continuous surface: the board paints the grid lines and 1px gaps let
+   them show through, so the cards themselves carry no border, no radius and
+   no outer padding — they butt straight up against each other and the
+   window edges. Rows are capped at two, so the board only ever scrolls
+   sideways (cards shrink to MIN_CARD_W first). */
+
+.grid-board {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 0;
+  background: var(--app-primary-border-color);
+  overflow-x: auto;
+  overflow-y: hidden;
+}
+
+.grid-board-rows {
+  display: grid;
+  grid-auto-rows: 1fr;
+  gap: 1px;
+  min-height: 0;
+  width: 100%;
+  /* grid-template-columns + flex are set inline from the item count. */
+}
+
+.grid-board-lastrow {
+  display: flex;
+  gap: 1px;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
+}
+
+.grid-board-lastrow > .grid-card {
+  flex: 1;
+  min-width: 300px; /* matches MIN_CARD_W */
+}
+
+/* ── Card ── */
+
+.grid-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 0;
+  background: var(--app-primary-background);
+  transition: box-shadow 0.15s ease, background 0.15s ease;
+}
+
+.grid-card:hover {
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+/* Awaiting input: a dim inset edge plus a tinted header, instead of a solid
+   orange ring around every card. */
+.grid-card--attention {
+  box-shadow: inset 0 0 0 1px
+    color-mix(in srgb, var(--app-claude-orange) 32%, transparent);
+}
+
+.grid-card--attention .grid-card-head {
+  background: color-mix(in srgb, var(--app-claude-orange) 9%, transparent);
+}
+
+.grid-card-head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+  cursor: grab;
+  touch-action: none;
+}
+
+.grid-card-head:active {
+  cursor: grabbing;
+}
+
+.grid-card--dragging {
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+  cursor: grabbing;
+}
+
+/* The card a drag is hovering: these two will trade places on drop. */
+.grid-card--swap-target {
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--app-claude-orange) 45%, transparent);
+  background: color-mix(in srgb, var(--app-claude-orange) 5%, var(--app-primary-background));
+}
+
+.grid-card-grip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 18px;
+  height: 22px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: grab;
+  touch-action: none;
+}
+
+
+.grid-card-status {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.grid-card-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  outline: none;
+}
+
+.grid-card-title:hover,
+.grid-card-title:focus-visible {
+  text-decoration: underline;
+  color: var(--app-claude-orange);
+}
+
+.grid-card-done {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  flex-shrink: 0;
+  border: none;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--app-secondary-foreground);
+  cursor: pointer;
+}
+
+.grid-card-done:hover {
+  background: var(--app-success, #3fb950);
+  color: #fff;
+}
+
+.grid-card-repo {
+  padding: 6px 10px 0;
+  font-size: 11px;
+  color: color-mix(in srgb, var(--app-claude-orange) 70%, var(--app-secondary-foreground));
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Live transcript, rendered by the same MessageList as the full chat view. */
+.grid-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The full chat view reserves a big top gap for its floating header; inside a
+   grid card there's no such header, so pull the transcript's top padding back
+   to something sensible while leaving the message rendering itself untouched. */
+.grid-card-body .message-list-content {
+  padding: 12px;
+  gap: 14px;
+}
+
+/* ── Inline chat bubble + mini-composer (bottom-left, hover-reveal) ── */
+
+.grid-card-bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-width: 132px;
+  height: 36px;
+  padding: 0 18px;
+  border: none;
+  border-radius: 999px;
+  background: var(--app-claude-orange);
+  color: #fff;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.55), 0 2px 4px rgba(0, 0, 0, 0.4);
+  /* Hidden: faded out and dropped a little; slides up into place on hover. */
+  opacity: 0;
+  transform: translate(-50%, 8px);
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease, background 0.12s ease;
+}
+
+.grid-card:hover .grid-card-bubble {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.grid-card-bubble:hover {
+  background: var(--app-claude-clay-button-orange);
+}
+
+/* Bottom dock: banners, question / permission prompts, the message queue and
+   the real Composer — the same stack the full chat view puts under its
+   transcript. It sits in the card's flow so it never covers the latest
+   messages. */
+.grid-card-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.grid-card-dock > .permission {
+  padding: 10px 12px;
+}
+
+.grid-card-composer {
+  padding: 0;
+}
+
+.grid-card-composer-slot {
+  padding-bottom: 0;
+}
+
+.grid-card-composer-slot--hidden {
+  display: none;
+}
+
+/* Square, seam-free composer: a single top rule separates it from the
+   transcript, and the orb edge-light / glass blur are dropped — a gridful of
+   glowing orange rings was the whole problem. */
+.grid-card-dock .composer {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--app-primary-border-color);
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.22);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+.grid-card-dock .composer::after,
+.grid-card-dock .message-queue::after {
+  display: none;
+}
+
+.grid-card-dock .composer:focus-within {
+  border-top-color: color-mix(
+    in srgb,
+    var(--app-claude-orange) 30%,
+    var(--app-primary-border-color)
+  );
+}
+
+/* Queue docks onto the composer like the full view (the composer sits in a
+   wrapper here, so the stock adjacency rule doesn't reach it). */
+.grid-card-dock .message-queue {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid var(--app-primary-border-color);
+  border-radius: 0;
+  background: rgba(0, 0, 0, 0.22);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+/* Queue above the composer: one shared rule between them, none below. */
+.grid-card-dock .message-queue + .grid-card-composer-slot > .composer {
+  border-top: 0;
+}
+
+/* The bottom-right card sits under the floating mic FAB (bottom:24 right:24,
+   42px). Pull the composer's right-hand controls inward so send never hides
+   behind it. */
+.grid-card-composer--corner .composer-bar {
+  padding-right: 44px;
+}
+
+/* Keyboard selection (arrow keys): a ring outside the card, so it reads
+   distinctly from the attention glow. */
+.grid-card--selected {
+  box-shadow: inset 0 0 0 2px
+    color-mix(in srgb, var(--app-claude-orange) 60%, transparent);
+}
+
+/* ============================================================ */
+/* Master agent — permanent chat pinned left of the grid board   */
+/* ============================================================ */
+
+/* The grid page is now a row: master bar, then the board. */
+.grid-layout {
+  flex: 1;
+  display: flex;
+  flex-direction: row;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.master-panel {
+  flex: 0 0 33%;
+  min-width: 300px;
+  max-width: 640px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--app-primary-border-color);
+  background: var(--app-primary-background);
+}
+
+.master-panel--collapsed {
+  flex: 0 0 auto;
+  min-width: 0;
+  width: 38px;
+  align-items: center;
+  gap: 10px;
+  padding-top: 7px;
+}
+
+/* Vertical "Master" label beside the expand button. */
+.master-collapsed-label {
+  writing-mode: vertical-rl;
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  color: var(--app-secondary-foreground, #8b8b8b);
+  text-transform: uppercase;
+}
+
+.master-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  height: 42px;
+  padding: 0 8px 0 12px;
+  border-bottom: 1px solid var(--app-primary-border-color);
+}
+
+.master-head-icon {
+  color: #d9a93a;
+  flex-shrink: 0;
+}
+
+.master-head-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+
+.master-head-status {
+  display: inline-flex;
+  align-items: center;
+}
+
+/* Pushes the collapse button to the right edge. */
+.master-head .master-collapse-btn {
+  margin-left: auto;
+}
+
+.master-collapse-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-secondary-foreground, #8b8b8b);
+  cursor: pointer;
+}
+
+.master-collapse-btn:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* Flex column, not a scroller: MessageList owns bottom pinning and must be the
+   only scroll container, exactly as in the full chat view and the grid cards. */
+.master-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* No floating header in the Master panel, so drop the big top gap the full chat
+   view reserves for one (same reasoning as .grid-card-body above). */
+.master-body .message-list-content {
+  padding: 12px;
+  gap: 14px;
+}
+
+.master-dock {
+  flex-shrink: 0;
+  padding: 0 8px 8px;
+}
+
+.master-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  font-size: 12px;
+  color: var(--app-secondary-foreground, #8b8b8b);
+  text-align: center;
+}
+
+/* ── Warm pill (prompt-cache warmth; also used on grid cards) ── */
+
+.warm-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  flex-shrink: 0;
+  height: 18px;
+  padding: 0 5px;
+  border: 1px solid transparent;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--app-secondary-foreground, #8b8b8b);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: default;
+}
+
+button.warm-pill {
+  cursor: pointer;
+}
+
+button.warm-pill:hover {
+  border-color: var(--app-primary-border-color);
+}
+
+.warm-pill--warm {
+  color: #e08a4a;
+  background: rgba(224, 138, 74, 0.12);
+}
+
+.warm-pill--expiring {
+  color: #d9a93a;
+  background: rgba(217, 169, 58, 0.12);
+}
+
+.warm-pill--cold {
+  color: #6f8ea8;
+  background: rgba(111, 142, 168, 0.12);
+}
+
+/* Keep-warm pings are on: a small dot after the countdown. */
+.warm-pill--pinned {
+  border-color: currentColor;
+}
+
+.warm-pill-dot {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.warm-pill-label {
+  font-size: 10px;
+}
