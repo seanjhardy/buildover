@@ -195,41 +195,70 @@
    One continuous surface: the board paints the grid lines and 1px gaps let
    them show through, so the cards themselves carry no border, no radius and
    no outer padding — they butt straight up against each other and the
-   window edges. Rows are capped at two, so the board only ever scrolls
-   sideways (cards shrink to MIN_CARD_W first). */
+   window edges. One row of full-height columns that scrolls sideways: a chat
+   is always a whole column, never a half-height cell. */
 
 .grid-board {
+  /* "Three across beside the Master" — the column width is a share of the
+     space left over next to the Master panel, not a fixed number, so it
+     tracks the window and the panel's collapsed state. --grid-card-min is the
+     floor: once a third of the space is narrower than this, columns stop
+     shrinking and the board scrolls instead, showing fewer of them. */
+  --grid-cards-across: 3;
+  --grid-card-min: 360px;
   flex: 1;
   min-height: 0;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
   gap: 1px;
   padding: 0;
   background: var(--app-primary-border-color);
   overflow-x: auto;
   overflow-y: hidden;
+  overscroll-behavior-x: contain;
 }
 
-.grid-board-rows {
-  display: grid;
-  grid-auto-rows: 1fr;
-  gap: 1px;
+.grid-board > .grid-card {
+  /* A percentage basis resolves against the scroll container's own width, not
+     the scrolled content, so this stays "a third of what you can see". The 2px
+     is the two gaps between the three visible columns. flex-grow fills the
+     board when there are fewer than three chats; flex-shrink 0 holds the floor
+     once the row overflows, which is what makes the board scroll. */
+  flex: 1 0 max(var(--grid-card-min), calc((100% - 2px) / var(--grid-cards-across)));
+}
+
+/* Wrapper for the board and its left-edge fade: the fade has to sit outside
+   the scroll container so it stays pinned to the Master panel's edge. */
+.grid-board-wrap {
+  position: relative;
+  flex: 1;
+  min-width: 0;
   min-height: 0;
-  width: 100%;
-  /* grid-template-columns + flex are set inline from the item count. */
-}
-
-.grid-board-lastrow {
   display: flex;
-  gap: 1px;
-  flex: 1;
-  min-height: 0;
-  width: 100%;
 }
 
-.grid-board-lastrow > .grid-card {
-  flex: 1;
-  min-width: 300px; /* matches MIN_CARD_W */
+/* Cards passing under the Master panel. Same treatment as .chat-sidebar-fade
+   (src/styles/file-viewer.css) — the fade that appears along the chat
+   sidebar's edge when a file slides the chat view behind it: identical width,
+   gradient, easing and z-index, so the two read as one effect. Anchored to the
+   board's left edge, which is the Master panel's right wall whether the panel
+   is expanded or collapsed, and shown only while something is actually
+   underneath it. */
+.grid-board-fade {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: 120px;
+  background: linear-gradient(to right, var(--app-primary-background) 0%, transparent 100%);
+  z-index: 20;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+.grid-board-wrap--scrolled .grid-board-fade {
+  opacity: 1;
 }
 
 /* ── Card ── */
