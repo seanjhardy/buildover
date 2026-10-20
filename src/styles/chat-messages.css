@@ -1311,3 +1311,77 @@
   word-break: break-word;
   line-height: 1.5;
 }
+
+/* ---- Collapsed activity ("used n tools") ---- */
+/* High-level transcripts (the Master chat) stand a whole stretch of tool
+   calls, thinking and intermediate chatter up as one clickable line. */
+.activity-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.activity-group-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  align-self: flex-start;
+  max-width: 100%;
+  padding: 2px 8px 2px 4px;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--app-secondary-foreground, #8b8b8b);
+  font-family: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.activity-group-line:hover {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+.activity-group-chevron {
+  flex-shrink: 0;
+  transition: transform 120ms ease;
+}
+
+.activity-group--open .activity-group-chevron {
+  transform: rotate(90deg);
+}
+
+.activity-group-label {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* Pulses while this stretch is the work currently in flight, so a collapsed
+   row still reads as "busy" rather than as a frozen panel. */
+.activity-group-live {
+  flex-shrink: 0;
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--app-claude-orange, #d97757);
+  animation: activity-group-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes activity-group-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.25; }
+}
+
+.activity-group-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding-left: 10px;
+  border-left: 1px solid var(--app-primary-border-color);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .activity-group-chevron { transition: none; }
+  .activity-group-live { animation: none; }
+}

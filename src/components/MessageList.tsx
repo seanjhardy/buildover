@@ -8,7 +8,10 @@ import {
   useState,
 } from "react";
 import type { BranchInfo, ChatTurn } from "../hooks/useAgent.js";
-import type { Attachment } from "../types.js";
+import type { Attachment, ChatKind, ContentBlock } from "../types.js";
+import { condenseTranscript } from "../lib/condenseTranscript.js";
+import type { CondensedRow } from "../lib/condenseTranscript.js";
+import { ActivityGroup } from "./ActivityGroup.js";
 import { AssistantMessage } from "./AssistantMessage.js";
 import { UserMessage } from "./UserMessage.js";
 import { SystemMessage } from "./SystemMessage.js";
@@ -19,6 +22,7 @@ import { TimestampDivider } from "./TimestampDivider.js";
 const BOTTOM_EPSILON = 2;
 const INITIAL_HISTORY_ITEMS = 60;
 const HISTORY_BATCH_SIZE = 60;
+const EMPTY_KEYS: ReadonlySet<string> = new Set();
 
 // Data the MessageJumpBar needs to navigate the rendered message list.
 export interface JumpBarHandle {
@@ -40,6 +44,9 @@ interface Props {
   scrollRef?: React.RefObject<HTMLDivElement>;
   jumpBarRef?: React.RefObject<JumpBarHandle | null>;
   chatId?: string;
+  /** Master chats render as high-level context: conclusions plus collapsed
+   *  "used n tools" rows. Every other kind keeps the verbose transcript. */
+  chatKind?: ChatKind;
   branchInfo?: Map<string, BranchInfo>;
   onForkMessage?: (
     userMessageId: string,
@@ -53,7 +60,7 @@ interface Props {
 type RenderedTurn = Exclude<ChatTurn, { kind: "tool_results" }>;
 type MessageItem = RenderedTurn | { kind: "__streaming__" };
 
-function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scrollRef, jumpBarRef, chatId, branchInfo, onForkMessage, onSwitchBranch, onRevert }: Props) {
+function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scrollRef, jumpBarRef, chatId, chatKind, branchInfo, onForkMessage, onSwitchBranch, onRevert }: Props) {
   // The scroll container div. Also exposed to the jump bar.
   const containerRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
@@ -72,6 +79,16 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
     start: number;
     expanded: boolean;
   }>({ chatId, start: 0, expanded: false });
+
+  // Collapsed-by-default is the whole point, so this starts empty on every
+  // mount and resets per chat — it is never persisted into a setting.
+  const [openActivity, setOpenActivity] = useState<{
+    chatId?: string;
+    keys: ReadonlySet<string>;
+  }>({ chatId, keys: new Set() });
+  // Expanding mid-history must not shove the transcript under the reader, so
+  // the clicked row's offset is restored after the taller content paints.
+  const pendingActivityAnchorRef = useRef<{ key: string; top: number } | null>(null);
 
   // Keep tool results immutable. AssistantMessage is memoized and compares the
   // result entries it uses; mutating one shared map made old and new props point
@@ -126,6 +143,55 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
     ? Math.min(historyWindow.start, tailStart)
     : tailStart;
   const visibleItems = items.slice(historyStart);
+
+  // High-level mode. The streaming pulse is appended after the rows so the
+  // "working" affordance reads the same here as in a verbose transcript.
+  const condensed = chatKind === "master";
+  const condensedRows = useMemo(() => {
+    if (!condensed) return null;
+    return condenseTranscript(
+      visibleItems.filter((item): item is RenderedTurn => item.kind !== "__streaming__"),
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [condensed, turns, historyStart, isStreaming]);
+
+  const openActivityKeys =
+    openActivity.chatId === chatId ? openActivity.keys : EMPTY_KEYS;
+
+  const toggleActivity = useCallback(
+    (key: string) => {
+      const el = containerRef.current;
+      // Only an unpinned reader needs anchoring; a pinned one is re-pinned by
+      // the ResizeObserver below, which is the behaviour they asked for.
+      if (el && !isPinnedRef.current) {
+        const node = el.querySelector<HTMLElement>(`[data-activity-key="${key}"]`);
+        pendingActivityAnchorRef.current = node
+          ? { key, top: node.getBoundingClientRect().top - el.getBoundingClientRect().top }
+          : null;
+      } else {
+        pendingActivityAnchorRef.current = null;
+      }
+      setOpenActivity((prev) => {
+        const keys = new Set(prev.chatId === chatId ? prev.keys : []);
+        if (keys.has(key)) keys.delete(key);
+        else keys.add(key);
+        return { chatId, keys };
+      });
+    },
+    [chatId],
+  );
+
+  // Restore the clicked row to the same offset it had before the toggle.
+  useLayoutEffect(() => {
+    const el = containerRef.current;
+    const pending = pendingActivityAnchorRef.current;
+    if (!el || !pending) return;
+    pendingActivityAnchorRef.current = null;
+    const node = el.querySelector<HTMLElement>(`[data-activity-key="${pending.key}"]`);
+    if (!node) return;
+    const top = node.getBoundingClientRect().top - el.getBoundingClientRect().top;
+    el.scrollTop += top - pending.top;
+  }, [openActivity]);
 
   const findRenderedMessage = (id: string): HTMLElement | undefined => {
     const el = containerRef.current;
@@ -345,7 +411,13 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
     }
   }, [turns, isStreaming, chatId]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  const renderItem = (item: MessageItem) => {
+  // `key`/`content` are supplied in high-level mode, where one assistant turn
+  // can contribute more than one visible row.
+  const renderItem = (
+    item: MessageItem,
+    key?: string,
+    content?: ContentBlock[],
+  ) => {
     if (item.kind === "__streaming__") {
       return (
         <div key="__streaming__" className="thinking-pulse" aria-label="thinking">
@@ -390,8 +462,8 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
     if (item.kind === "assistant") {
       return (
         <AssistantMessage
-          key={item.id}
-          content={item.content}
+          key={key ?? item.id}
+          content={content ?? item.content}
           toolResults={toolResults}
           cwd={cwd}
         />
@@ -451,7 +523,30 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
             aria-hidden="true"
           />
         )}
-        {visibleItems.map(renderItem)}
+        {condensedRows
+          ? condensedRows.map((row: CondensedRow, i) =>
+              row.kind === "activity" ? (
+                <ActivityGroup
+                  key={row.key}
+                  row={row}
+                  expanded={openActivityKeys.has(row.key)}
+                  live={isStreaming && i === condensedRows.length - 1}
+                  onToggle={toggleActivity}
+                  toolResults={toolResults}
+                  cwd={cwd}
+                />
+              ) : (
+                renderItem(row.turn, row.key, row.content)
+              ),
+            )
+          : visibleItems.map((item) => renderItem(item))}
+        {condensedRows && isStreaming && (
+          <div className="thinking-pulse" aria-label="thinking">
+            <span />
+            <span />
+            <span />
+          </div>
+        )}
       </div>
     </div>
   );

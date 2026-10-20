@@ -1400,6 +1400,7 @@ Important rules for commands:
                               onSwitchBranch={agent.switchBranch}
                               onRevert={agent.revertToCheckpoint}
                               chatId={activeChatId ?? undefined}
+                              chatKind={activeChat?.kind}
                             />
                             <ChatBanners
                               chatId={activeChatId ?? ""}

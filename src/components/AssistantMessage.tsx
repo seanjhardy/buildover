@@ -2,6 +2,10 @@ import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { ContentBlock } from "../types.js";
+// Presentational tools render inline as rich content (SVG, table, chart). Their
+// "tool call" is just the transport for data, so they are never folded into a
+// "N tools called" group — nor into a condensed "used n tools" row.
+import { isPresentationalTool } from "../lib/condenseTranscript.js";
 import { ThinkingBlock } from "./ThinkingBlock.js";
 import { ToolUseBlock } from "./ToolUseBlock.js";
 import { ToolGroup } from "./ToolGroup.js";
@@ -27,18 +31,6 @@ type Row =
       tools: Extract<ContentBlock, { type: "tool_use" }>[];
       key: string;
     };
-
-// Presentational tools render inline as rich content (SVG, table, chart).
-// Their "tool call" is just the transport for data. They must never get
-// folded into a "N tools called" group and always render as standalone blocks.
-function isPresentationalTool(name: string): boolean {
-  return (
-    name === "RenderSVG" || name.endsWith("__RenderSVG") ||
-    name === "RenderTable" || name.endsWith("__RenderTable") ||
-    name === "RenderChart" || name.endsWith("__RenderChart") ||
-    name === "Render3DModel" || name.endsWith("__Render3DModel")
-  );
-}
 
 // Walks the content array and packs consecutive tool_use blocks into groups.
 // Presentational tools (e.g. RenderSVG) break the run so they always render
