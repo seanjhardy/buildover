@@ -62,6 +62,12 @@
   flex-direction: column;
   gap: 6px;
   margin: var(--app-spacing-medium) 0 0;
+  /* This strip has homes of wildly different widths — the full chat column,
+     a grid card, the Master panel — so its breakpoint has to track the column
+     it sits in. A viewport media query cannot: the window stays wide while
+     the column is 300px, which is how the banner came to squash its own text
+     down to one word per line. */
+  container: chat-banners / inline-size;
 }
 .chat-banner {
   display: flex;
@@ -169,12 +175,52 @@
     transform: rotate(360deg);
   }
 }
-@media (max-width: 640px) {
-  .chat-banner {
+/* Wide column: one row, full prose, full button labels. */
+.chat-banner-msg--short,
+.chat-banner-btn-abbr {
+  display: none;
+}
+
+/* Too narrow for prose beside its buttons: give the message the full width and
+   drop the actions onto their own row. Only the banner that *has* actions
+   stacks — the icon-and-text notices already wrap correctly. The message
+   switches to its short form, which keeps the token count and the cost (the
+   reason the banner exists) and sheds only the sentence around them. */
+@container chat-banners (max-width: 560px) {
+  .chat-banner--actions {
+    flex-wrap: wrap;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .chat-banner--actions .chat-banner-text {
+    flex: 1 1 100%;
+  }
+  .chat-banner--actions .chat-banner-msg--full {
+    display: none;
+  }
+  .chat-banner--actions .chat-banner-msg--short {
+    display: inline;
+  }
+  .chat-banner--actions .chat-banner-actions {
+    width: 100%;
     flex-wrap: wrap;
   }
-  .chat-banner-actions {
-    width: 100%;
-    justify-content: flex-end;
+  /* Keeps the dismiss at the far edge rather than crowding the buttons. */
+  .chat-banner--actions .chat-banner-dismiss {
+    margin-left: auto;
+  }
+}
+
+/* Narrower than the full button labels can sit side by side. */
+@container chat-banners (max-width: 360px) {
+  .chat-banner--actions .chat-banner-btn-full {
+    display: none;
+  }
+  .chat-banner--actions .chat-banner-btn-abbr {
+    display: inline;
+  }
+  .chat-banner--actions .chat-banner-btn {
+    height: 22px;
+    padding: 0 8px;
   }
 }

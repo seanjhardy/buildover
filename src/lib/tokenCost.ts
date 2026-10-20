@@ -46,6 +46,9 @@ export interface ChatWarning {
    *  the other kind of warning) produces a new key and shows again. */
   key: string;
   message: string;
+  /** Same warning for a narrow column: keeps the token count and the cost —
+   *  the whole point of the banner — and drops only the sentence around them. */
+  shortMessage: string;
 }
 
 /**
@@ -73,6 +76,7 @@ export function chatWarning(input: {
       kind: "cold",
       key: `cold:${lastApiAtMs}`,
       message: `Prompt cache expired (idle ${formatDuration(idleMs)}). Your next message re-sends ~${formatTokensRounded(contextTokens)} tokens (≈${formatUsd(coldCost)}).`,
+      shortMessage: `Cache expired · ~${formatTokensRounded(contextTokens)} tokens (≈${formatUsd(coldCost)})`,
     };
   }
   if (contextTokens > LARGE_CONTEXT_TOKENS) {
@@ -81,6 +85,7 @@ export function chatWarning(input: {
       kind: "large",
       key: "large",
       message: `Large chat: each message re-reads ~${formatTokensRounded(contextTokens)} tokens${warm === null ? "" : ` (≈${formatUsd(warm)}+ per call)`}.`,
+      shortMessage: `Large chat · ~${formatTokensRounded(contextTokens)} tokens${warm === null ? "" : ` (≈${formatUsd(warm)}+/call)`}`,
     };
   }
   return null;

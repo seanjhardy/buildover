@@ -135,8 +135,14 @@ export function ChatBanners(props: Props) {
         </div>
       )}
       {showWarning && warning && (
-        <div className={`chat-banner chat-banner--${warning.kind === "cold" ? "warn" : "info"}`} role="status">
-          <span className="chat-banner-text">{warning.message}</span>
+        <div
+          className={`chat-banner chat-banner--actions chat-banner--${warning.kind === "cold" ? "warn" : "info"}`}
+          role="status"
+        >
+          <span className="chat-banner-text">
+            <span className="chat-banner-msg chat-banner-msg--full">{warning.message}</span>
+            <span className="chat-banner-msg chat-banner-msg--short">{warning.shortMessage}</span>
+          </span>
           <div className="chat-banner-actions">
             <button
               type="button"
@@ -149,7 +155,10 @@ export function ChatBanners(props: Props) {
                   <Loader2 size={12} className="chat-banner-spinner" /> Writing note…
                 </>
               ) : (
-                "Continue in fresh chat"
+                <>
+                  <span className="chat-banner-btn-full">Continue in fresh chat</span>
+                  <span className="chat-banner-btn-abbr">Fresh chat</span>
+                </>
               )}
             </button>
             {warning.kind === "cold" && onToggleKeepWarm && (
@@ -160,7 +169,9 @@ export function ChatBanners(props: Props) {
                 onClick={onToggleKeepWarm}
                 title="Ping every 55 min so the prompt cache never expires again"
               >
-                <Flame size={12} /> Keep warm {keepWarmHours}h
+                <Flame size={12} />
+                <span className="chat-banner-btn-full">Keep warm {keepWarmHours}h</span>
+                <span className="chat-banner-btn-abbr">{keepWarmHours}h</span>
               </button>
             )}
             <button type="button" className="chat-banner-dismiss" onClick={dismiss} aria-label="Dismiss">

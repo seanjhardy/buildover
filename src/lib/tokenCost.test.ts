@@ -42,6 +42,8 @@ describe("chatWarning", () => {
       w?.message,
       "Prompt cache expired (idle 2h 10m). Your next message re-sends ~180k tokens (≈$1.44).",
     );
+    // The narrow form still carries the number Sean is being warned about.
+    assert.equal(w?.shortMessage, "Cache expired · ~180k tokens (≈$1.44)");
   });
 
   it("does not warn when idle under an hour or context is small", () => {
@@ -53,6 +55,7 @@ describe("chatWarning", () => {
     const w = chatWarning({ model, contextTokens: 170_000, lastApiAtMs: NOW - 5 * MIN, now: NOW });
     assert.equal(w?.kind, "large");
     assert.equal(w?.message, "Large chat: each message re-reads ~170k tokens (≈$0.03+ per call).");
+    assert.equal(w?.shortMessage, "Large chat · ~170k tokens (≈$0.03+/call)");
   });
 
   it("prefers the cold-cache warning when both apply", () => {
