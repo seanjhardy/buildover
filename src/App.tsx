@@ -25,6 +25,7 @@ import { FileEditorPane, type OpenEditorFile } from "./components/FileEditorPane
 import { CreatePrForm } from "./components/CreatePrForm.js";
 import { RepoTabs } from "./components/RepoTabs.js";
 import { MarketPanel } from "./components/MarketPanel.js";
+import { GridPanel } from "./components/GridPanel.js";
 import { SchedulePanel } from "./components/SchedulePanel.js";
 import { TodoPanel } from "./components/TodoPanel.js";
 import { FilesPanel } from "./components/FilesPanel.js";
@@ -132,7 +133,20 @@ export default function App() {
   );
 
   // Dock badge + native macOS notifications for agent status changes.
-  useNotifications(allRepoChats);
+  // Clicking a notification switches to that repo tab and opens the chat.
+  const openChatFromNotification = useCallback(
+    ({ repoPath, chatId }: NotificationTarget) => {
+      if (!workspace.openRepos.some((r) => r.path === repoPath)) return;
+      setMarketOpen(false);
+      setHomeOpen(false);
+      markRepoTabSeen(repoPath);
+      workspace.setActiveRepo(repoPath);
+      workspace.setActiveChat(chatId);
+      setActiveView("chat");
+    },
+    [workspace, markRepoTabSeen],
+  );
+  useNotifications(allRepoChats, activeRepo?.path ?? null, activeChatId, openChatFromNotification);
 
   // Self-update checker — polls /api/self/status every 10 minutes.
   const selfUpdate = useSelfUpdate();
@@ -210,6 +224,14 @@ export default function App() {
       : null;
     if (chat?.model) setModel(chat.model);
   }, [activeChatId, chats.chats]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Name the open chat in the window title so activity trackers (Operator's
+  // Schedule probe reads it via Accessibility) can tell which chat Sean is in.
+  const activeChatTitle = activeChatId != null
+    ? chats.chats.find((c) => c.id === activeChatId)?.title
+    : undefined;
+  useEffect(() => {
+    document.title = [activeChatTitle, activeRepo?.name, "buildover"].filter(Boolean).join(" · ");
+  }, [activeChatTitle, activeRepo?.name]);
   // Once the coordinator chat is confirmed loaded, validate the active chat ID.
   // If activeChatId is stale (e.g. chats were wiped since last session, or the
   // repo path was reused for a new project) or null (first visit to this repo),
@@ -278,6 +300,7 @@ export default function App() {
   }, [activeRepo?.path]); // eslint-disable-line react-hooks/exhaustive-deps
   const [marketOpen, setMarketOpen] = useState(false);
   const [homeOpen, setHomeOpen] = useState(false);
+  const [gridOpen, setGridOpen] = useState(false);
   // Mobile only: the chat-list/activity-bar slide-out drawer. On desktop the
   // sidebar is always docked and this state is simply ignored by the CSS.
   const [drawerOpen, setDrawerOpen] = useState(false);
@@ -473,12 +496,15 @@ export default function App() {
 
   // ── Permission mode persistence & per-chat sync ────────────────────────────
 
-  // Persist the user's chosen permission mode so it survives page reloads.
-  useEffect(() => {
+  // Persist only modes the user picks. Opening a chat syncs the composer to
+  // that chat's saved mode (below); writing that to storage too would make an
+  // old "Ask before edits" chat silently become the default for every new one.
+  const choosePermissionMode = useCallback((mode: PermissionMode) => {
+    setPermissionMode(mode);
     try {
-      localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, permissionMode);
+      localStorage.setItem(PERMISSION_MODE_STORAGE_KEY, mode);
     } catch { /* ignore */ }
-  }, [permissionMode]);
+  }, []);
 
   // When the active chat changes (chat_replay arrives), sync the UI permission
   // mode to match whatever was saved for that specific chat.
@@ -507,21 +533,22 @@ export default function App() {
   useEffect(() => {
     api.getPrefs().then((p) => setClaudeEffort(p.claudeEffort)).catch(() => {});
   }, []);
-  // Keep-warm window (hours) is a global pref; the toggle itself is per chat.
-  const [keepWarmHours, setKeepWarmHours] = useState(0);
+  // Thinking summaries cost ~1–3s before each reply starts, so they're opt-in.
+  const [thinkingSummaries, setThinkingSummaries] = useState(false);
   useEffect(() => {
-    api.getPrefs().then((p) => setKeepWarmHours(p.keepWarmHours ?? 0)).catch(() => {});
+    api.getPrefs().then((p) => setThinkingSummaries(!!p.thinkingSummaries)).catch(() => {});
   }, []);
-  const DEFAULT_KEEP_WARM_HOURS = 6;
-  const handleToggleKeepWarm = useCallback(() => {
-    const next = !agent.meta.keepWarm;
-    // First use: pings are off until the pref is set, so turn it on at 6h.
-    if (next && keepWarmHours <= 0) {
-      setKeepWarmHours(DEFAULT_KEEP_WARM_HOURS);
-      api.patchPrefs({ keepWarmHours: DEFAULT_KEEP_WARM_HOURS }).catch(() => {});
-    }
-    agent.setKeepWarm(next);
-  }, [agent.meta.keepWarm, agent.setKeepWarm, keepWarmHours]); // eslint-disable-line react-hooks/exhaustive-deps
+  const handleThinkingSummariesChange = useCallback((enabled: boolean) => {
+    setThinkingSummaries(enabled);
+    api.patchPrefs({ thinkingSummaries: enabled }).catch(() => {});
+  }, []);
+  // Warmth is a per-chat budget now: the pill buys hours, the long-press stops
+  // warming. There is no global window pref left to seed.
+  const handleStopKeepWarm = useCallback(() => {
+    agent.setKeepWarm(false);
+  }, [agent.setKeepWarm]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  // App-wide Composer prefs shared with every grid card's Composer.
 
   // Continue the active chat in a fresh one: the server writes the handoff
   // note and creates the chat (composer prefilled, never sent).
@@ -723,6 +750,19 @@ Important rules for commands:
   const handleRename = useCallback((id: string, title: string) => {
     void chats.rename(id, title);
   }, [chats]);
+
+  const handleFork = useCallback(async (id: string) => {
+    if (!activeRepo) return;
+    try {
+      const { chat } = await api.forkChat(activeRepo.path, id);
+      await chats.reload();
+      setOpenFile(null);
+      setOpenPlan(null);
+      workspace.setActiveChat(chat.id);
+    } catch (err) {
+      window.alert(`Fork failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }, [activeRepo, chats, workspace]);
 
   // Stable callback so Composer receives the same function reference across
   // renders and the debounced draft notification doesn't re-trigger unnecessarily.
@@ -958,15 +998,17 @@ Important rules for commands:
         <RepoTabs
           openRepos={workspace.openRepos}
           activeRepoPath={
-            marketOpen || homeOpen ? null : (workspace.activeRepo?.path ?? null)
+            marketOpen || homeOpen || gridOpen ? null : (workspace.activeRepo?.path ?? null)
           }
           recents={workspace.recents}
           onHome={() => {
             setMarketOpen(false);
+            setGridOpen(false);
             setHomeOpen(true);
           }}
           onSelect={(path) => {
             setMarketOpen(false);
+            setGridOpen(false);
             setHomeOpen(false);
             markRepoTabSeen(path);
             // startTransition keeps the current repo's UI visible while React
@@ -980,6 +1022,7 @@ Important rules for commands:
           onClose={workspace.closeRepo}
           onOpen={async (path) => {
             setMarketOpen(false);
+            setGridOpen(false);
             setHomeOpen(false);
             await workspace.openRepo(path);
           }}
@@ -990,11 +1033,43 @@ Important rules for commands:
           homeActive={homeOpen}
           onMarket={() => {
             setHomeOpen(false);
+            setGridOpen(false);
             setMarketOpen((v) => !v);
+          }}
+          gridActive={gridOpen}
+          onGrid={() => {
+            setHomeOpen(false);
+            setMarketOpen(false);
+            setGridOpen((v) => !v);
           }}
         />
 
-        {marketOpen ? (
+        {gridOpen ? (
+          <GridPanel
+            openRepos={workspace.openRepos}
+            recents={workspace.recents}
+            settings={{
+              availableModels,
+              onRefreshModels: loadModels,
+              thinkingSummaries,
+              onThinkingSummariesChange: handleThinkingSummariesChange,
+              effort: claudeEffort,
+              onEffortChange: handleEffortChange,
+            }}
+            onOpenChat={async (path, chatId) => {
+              setMarketOpen(false);
+              setHomeOpen(false);
+              if (!workspace.openRepos.some((r) => r.path === path)) {
+                await workspace.openRepo(path);
+              }
+              setGridOpen(false);
+              markRepoTabSeen(path);
+              workspace.setActiveRepo(path);
+              workspace.setActiveChat(chatId);
+              setActiveView("chat");
+            }}
+          />
+        ) : marketOpen ? (
           <MarketPanel onClose={() => setMarketOpen(false)} />
         ) : (homeOpen || !activeRepo) ? (
           <EmptyWorkspace
@@ -1014,7 +1089,7 @@ Important rules for commands:
           <div
             className={`workspace${openFile ? " workspace--file-open" : ""}${openPlanTicket ? " workspace--plan-open" : ""}${drawerOpen ? " workspace--drawer-open" : ""}`}
             style={{
-              display: (marketOpen || homeOpen) ? "none" : undefined,
+              display: (marketOpen || homeOpen || gridOpen) ? "none" : undefined,
               '--sidebar-width': `${sidebarWidth}px`,
             } as React.CSSProperties}
           >
@@ -1092,6 +1167,7 @@ Important rules for commands:
                   onDeleteChat={handleDeleteChat}
                   onToggleStar={handleToggleStar}
                   onRename={handleRename}
+                  onFork={handleFork}
                   chatDrafts={chatDrafts}
                   repoPath={activeRepo.path}
                   onClosePreview={closePreview}
@@ -1100,7 +1176,7 @@ Important rules for commands:
                   model={model}
                   permissionMode={permissionMode}
                   onPermissionModeChange={(m) => {
-                    setPermissionMode(m);
+                    choosePermissionMode(m);
                     agent.setPermissionMode(m);
                   }}
                   onModelChange={handleModelChange}
@@ -1118,6 +1194,7 @@ Important rules for commands:
                   onDelete={handleDeleteChat}
                   onToggleStar={handleToggleStar}
                   onRename={handleRename}
+                  onFork={handleFork}
                   repoPath={activeRepo.path}
                   chatDrafts={chatDrafts}
                   onOpenGraph={() => setGitGraphOpen(true)}
@@ -1412,9 +1489,8 @@ Important rules for commands:
                               slotQueue={agent.slotQueue}
                               handoffTo={agent.meta.handoffTo}
                               onOpenChat={handleSelectChat}
-                              keepWarm={agent.meta.keepWarm}
-                              keepWarmHours={keepWarmHours > 0 ? keepWarmHours : DEFAULT_KEEP_WARM_HOURS}
-                              onToggleKeepWarm={hasPromptCache ? handleToggleKeepWarm : undefined}
+                              keepWarmUntil={agent.meta.keepWarmUntil}
+                              onKeepWarm={hasPromptCache ? agent.addKeepWarmHours : undefined}
                               onHandoff={() => void handleHandoff()}
                               handoffBusy={handoffBusy}
                               handoffError={handoffError}
@@ -1439,6 +1515,7 @@ Important rules for commands:
                                 onTogglePause={agent.toggleQueuePaused}
                                 onRemove={agent.removeQueued}
                                 onFastTrack={agent.fastTrackQueued}
+                                onSteer={agent.steerQueued}
                                 onReorder={agent.reorderQueue}
                               />
                               <Composer
@@ -1465,7 +1542,7 @@ Important rules for commands:
                                 model={model}
                                 permissionMode={permissionMode}
                                 onPermissionModeChange={(m) => {
-                                  setPermissionMode(m);
+                                  choosePermissionMode(m);
                                   // Push the change to the in-flight turn so toggling
                                   // bypass mid-turn auto-resolves pending prompts and
                                   // suppresses future ones.
@@ -1480,13 +1557,18 @@ Important rules for commands:
                                 sdkSlashCommands={agent.slashCommands}
                                 context1m={context1m}
                                 onContext1mChange={handleContext1mChange}
+                                thinkingSummaries={thinkingSummaries}
+                                onThinkingSummariesChange={handleThinkingSummariesChange}
                                 effort={claudeEffort}
                                 onEffortChange={handleEffortChange}
                                 chatCost={agent.meta.cost}
                                 chatStartedAt={chatStartedAt}
-                                keepWarm={agent.meta.keepWarm}
-                                keepWarmHours={keepWarmHours > 0 ? keepWarmHours : DEFAULT_KEEP_WARM_HOURS}
-                                onToggleKeepWarm={hasPromptCache ? handleToggleKeepWarm : undefined}
+                                warm={{
+                                  lastApiAtMs,
+                                  keepWarmUntil: agent.meta.keepWarmUntil,
+                                  onAddHours: hasPromptCache ? agent.addKeepWarmHours : undefined,
+                                  onDisable: handleStopKeepWarm,
+                                }}
                                 prefill={agent.turns.length === 0 ? agent.meta.handoffPrefill : null}
                               />
                             </div>
