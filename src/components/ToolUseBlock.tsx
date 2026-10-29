@@ -3,6 +3,7 @@ import { TableBlock } from "./TableBlock.js";
 import { ChartBlock } from "./ChartBlock.js";
 import type { ChartDataset } from "./ChartBlock.js";
 import { ModelBlock } from "./ModelBlock.js";
+import { ImageBlock } from "./ImageBlock.js";
 import { AskUserQuestionBlock } from "./AskUserQuestionBlock.js";
 import { FileOperationBlock } from "./FileOperationBlock.js";
 import { BashCommandBlock } from "./BashCommandBlock.js";
@@ -22,13 +23,14 @@ interface Props {
 // Returns the presentational type for tools that render inline as rich
 // content instead of the standard collapsed/expanded tool card. Handles
 // both the bare name and the MCP-prefixed form (`mcp__<server>__<tool>`).
-type PresentationalType = "svg" | "table" | "chart" | "model";
+type PresentationalType = "svg" | "table" | "chart" | "model" | "image";
 function getPresentationalType(name: string): PresentationalType | null {
   if (name === "RenderSVG" || name.endsWith("__RenderSVG")) return "svg";
   if (name === "RenderTable" || name.endsWith("__RenderTable")) return "table";
   if (name === "RenderChart" || name.endsWith("__RenderChart")) return "chart";
   if (name === "Render3DModel" || name.endsWith("__Render3DModel"))
     return "model";
+  if (name === "ShowImage" || name.endsWith("__ShowImage")) return "image";
   return null;
 }
 
@@ -99,6 +101,21 @@ export function ToolUseBlock({ name, input, result, cwd }: Props) {
           caption={typeof i.caption === "string" ? i.caption : undefined}
         />
       );
+    }
+
+    if (presentational === "image") {
+      const paths = Array.isArray(i.paths)
+        ? (i.paths as unknown[]).filter((p): p is string => typeof p === "string")
+        : [];
+      if (paths.length > 0) {
+        return (
+          <ImageBlock
+            paths={paths}
+            caption={typeof i.caption === "string" ? i.caption : undefined}
+            result={result}
+          />
+        );
+      }
     }
 
     if (presentational === "model") {

@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import {
   query,
   type CanUseTool,
@@ -12,6 +13,7 @@ import {
   type RequestHandoff,
 } from "./customTools.js";
 import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
+import { updateToolsCache } from "./mcp-tools-cache.js";
 import { readPrefs } from "./prefs.js";
 import { DEFAULT_AUTO_COMPACT_WINDOW } from "./tokenEconomy.js";
 import {
@@ -19,6 +21,7 @@ import {
   effortLevelsFor,
   type AgentEvent,
   type AgentTask,
+  type AppPrefs,
   type Attachment,
   type ContentBlock,
   type EffortLevel,
@@ -33,6 +36,10 @@ import {
 // progress at all once the Task tools disappear.
 const TODO_TRACKING_INSTRUCTION = `Track progress using the TodoWrite tool, not the Task tools. Maintain a todo list for any multi-step work: add items as you plan, mark exactly one item in_progress while you work on it, and mark it completed as soon as it is done. This list is rendered in the user's sidebar, so keep it current.`;
 
+// Also appended to every chat: when to reach for ShowImage, which displays an
+// image to the user without it entering the model's context.
+const SHOW_IMAGE_INSTRUCTION = `To show the user an image you don't need to look at yourself (a screenshot, render or plot they asked to see), call the ShowImage tool with its absolute path. It renders inline in the chat and never enters your context, so it costs no image tokens; only Read an image when you need to inspect it.`;
+
 // The agent emits events without a chatId — the session wraps emit() to tag
 // each one before broadcasting / persisting. This keeps agent.ts unaware of
 // session identity. Distributive Omit so each union member loses chatId
@@ -45,6 +52,7 @@ export type RawAgentEvent = DistOmit<
       type:
         | "system_init"
         | "assistant"
+        | "assistant_partial"
         | "user_tool_results"
         | "result"
         | "error"
@@ -116,6 +124,10 @@ export interface RunArgs {
   // Additional in-process MCP servers for this turn (e.g. the
   // "buildover-agents" coordination toolset for coordinator/subagent chats).
   extraMcpServers?: Record<string, McpSdkServerConfigWithInstance>;
+  // When set, overrides CLAUDE_CONFIG_DIR for the CLI subprocess so the turn
+  // runs under a non-primary Claude account (see claudeAccounts.ts). Omitted
+  // for the primary account, which keeps its existing environment untouched.
+  claudeConfigDir?: string;
 }
 
 // Clamps the preferred effort to the highest level the model supports at or
@@ -139,17 +151,37 @@ const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "AskUserQuestion"]);
 // Tool names that modify files — we snapshot before these run.
 const FILE_MODIFYING_TOOLS = new Set(["Write", "Edit", "MultiEdit"]);
 
-// After a turn ends with nothing running, the CLI is given a short grace
-// period before its input is closed (letting it exit). A task that settled
-// moments before can still wake the model in that window, and a follow-up
-// message from the user reuses the warm process.
-const IDLE_WIND_DOWN_MS = 5_000;
+// After a turn ends with nothing running, the CLI is kept alive for a while
+// before its input is closed (letting it exit). A follow-up message sent in
+// that window goes straight to the model; one sent after it pays a cold start
+// (hooks, plugins, every MCP server reconnecting, transcript reload), which
+// is several seconds. A task that settles in the window can still wake the
+// model.
+const IDLE_WIND_DOWN_MS = 15 * 60_000;
+// Each idle CLI holds a few hundred MB, so only the most recently used ones
+// stay warm; older idle ones are wound down early.
+const MAX_IDLE_PROCESSES = 4;
+const idleProcesses = new Set<ClaudeLiveQuery>();
+
+// Lets idle processes exit so the next turn starts one that picks up changed
+// config (e.g. installed MCP servers, which are read at process start).
+export function windDownIdleProcesses(): void {
+  for (const p of [...idleProcesses]) p.windDownNow();
+}
 // A soft interrupt normally lands within a second. If the CLI hasn't closed
 // the turn by then, fall back to killing the process outright.
 const INTERRUPT_FALLBACK_MS = 5_000;
 // Grace before trusting background_tasks_changed over a missing
 // task_notification.
 const LEVEL_RECONCILE_MS = 2_000;
+type ThinkingDisplay = "summarized" | "omitted";
+
+function thinkingDisplay(prefs: AppPrefs): ThinkingDisplay {
+  return prefs.thinkingSummaries ? "summarized" : "omitted";
+}
+
+// Minimum gap between assistant_partial updates for one block.
+const PARTIAL_THROTTLE_MS = 80;
 
 export interface LiveQueryHooks {
   // Full task snapshot, sent whenever any task changes.
@@ -157,7 +189,9 @@ export interface LiveQueryHooks {
   // The CLI started a turn on its own — a background task settled and it woke
   // the model to handle the result. `notes` are the task summaries that
   // triggered it. The session should call adoptTurn() once it is free.
-  onUnsolicitedTurn: (notes: string[]) => void;
+  // `steered` is set when the turn is a steered message (see steer()) that
+  // the CLI ran on its own because the turn it was sent into ended first.
+  onUnsolicitedTurn: (notes: string[], steered: boolean) => void;
   // The CLI process exited (input closed, close() called, or it crashed).
   onClosed: () => void;
 }
@@ -211,6 +245,24 @@ function clip(text: unknown, max = 300): string {
   return s.length > max ? `${s.slice(0, max - 1)}…` : s;
 }
 
+// A backgrounded Agent/Task tool returns an immediate "launched in the
+// background" placeholder tool_result; the real result arrives later. We must
+// not treat the placeholder as the task finishing.
+function isBackgroundLaunchPlaceholder(content: unknown): boolean {
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((c: any) => (typeof c === "string" ? c : (c?.text ?? ""))).join("\n")
+        : "";
+  const t = text.toLowerCase();
+  return (
+    t.includes("async agent launched") ||
+    t.includes("working in the background") ||
+    t.includes("running in the background")
+  );
+}
+
 // The line shown in the chat above a turn the CLI started because this task
 // settled. Shell summaries already read well ('Background command "…"
 // completed (exit code 0)'); a subagent's is just its final message.
@@ -226,6 +278,9 @@ function describeSettledTask(t: AgentTask): string {
 // and winds down on its own once they settle.
 export class ClaudeLiveQuery {
   readonly cwd: string;
+  // The Claude account this process runs under; a turn for another account
+  // needs a new process (see canReuse).
+  private readonly claudeConfigDir: string | undefined;
   private readonly input = new InputQueue();
   private readonly abort = new AbortController();
   private readonly stream: Query;
@@ -234,19 +289,33 @@ export class ClaudeLiveQuery {
   // still reaches the session.
   private args: RunArgs;
   private model: Model;
+  private effort: EffortLevel | undefined;
+  private thinkingDisplay: ThinkingDisplay;
   private permissionMode: PermissionMode;
   private sessionId?: string;
   private sink: TurnSink | null = null;
+  // False until the first turn is sent. That turn is the one this process was
+  // started for, so it may carry a truncated resume that canReuse rejects.
+  private used = false;
+  // Set between a Stop and the CLI's result for the stopped turn.
+  private draining: { promise: Promise<void>; resolve: () => void } | null = null;
   // Output of a CLI-initiated turn, held until the session adopts it.
   private buffered: any[] = [];
   private bufferedInit: any = null;
   private unsolicitedPending = false;
   // Summaries of tasks that settled while no turn was open.
   private notes: string[] = [];
+  // Uuids of steered messages the CLI hasn't folded into a turn yet.
+  private readonly unfoldedSteers = new Set<string>();
   private readonly tasks = new Map<string, AgentTask>();
   private readonly outputFiles = new Map<string, string>();
   // tool_use id → output path, parsed from background Bash tool results.
   private readonly outputPathsByToolUse = new Map<string, string>();
+  // tool_use ids of Agent/Task subagents we track from the tool_use block
+  // itself, because the CLI does not reliably emit task_* lifecycle messages
+  // for them. Keyed in `tasks` by tool_use id; a real task_started with the
+  // same tool_use_id supersedes the synthesized entry.
+  private readonly syntheticAgentTaskIds = new Set<string>();
   // Assistant messages across every turn, scanned for the latest TodoWrite.
   private readonly assistantMessages: any[] = [];
   private idleTimer?: NodeJS.Timeout;
@@ -258,22 +327,57 @@ export class ClaudeLiveQuery {
   // again (or the turn ends).
   private noticeActive = false;
   private warningShown = false;
+  // The text / thinking block being streamed right now.
+  private partial: {
+    id: string;
+    blockType: "text" | "thinking";
+    text: string;
+    lastEmit: number;
+    timer?: NodeJS.Timeout;
+  } | null = null;
+  private partialMessageId = "";
 
   static async start(args: RunArgs, hooks: LiveQueryHooks): Promise<ClaudeLiveQuery> {
     const prefs = await readPrefs();
     const effort = resolveEffort(args.model, prefs.claudeEffort);
     const autoCompactWindow = prefs.autoCompactWindow ?? DEFAULT_AUTO_COMPACT_WINDOW;
-    return new ClaudeLiveQuery(args, effort, autoCompactWindow, hooks);
+    return new ClaudeLiveQuery(args, effort, thinkingDisplay(prefs), autoCompactWindow, hooks);
+  }
+
+  private markActive(): void {
+    idleProcesses.delete(this);
+  }
+
+  private markIdle(): void {
+    idleProcesses.delete(this);
+    idleProcesses.add(this);
+    for (const p of idleProcesses) {
+      if (idleProcesses.size <= MAX_IDLE_PROCESSES) break;
+      p.windDownNow();
+    }
+  }
+
+  // Closes the input of an idle process now rather than at the timer.
+  windDownNow(): void {
+    idleProcesses.delete(this);
+    clearTimeout(this.idleTimer);
+    if (!this.sink && !this.unsolicitedPending && !this.hasRunningTasks()) {
+      this.input.end();
+    }
   }
 
   private constructor(
     args: RunArgs,
     effort: EffortLevel | undefined,
+    display: ThinkingDisplay,
     autoCompactWindow: number,
     private readonly hooks: LiveQueryHooks,
   ) {
     this.args = args;
+    this.claudeConfigDir = args.claudeConfigDir;
     this.model = args.model;
+    this.effort = effort;
+    this.thinkingDisplay = display;
     this.permissionMode = args.permissionMode;
     this.sessionId = args.sessionId;
     this.cwd = args.cwd ?? process.cwd();
@@ -349,14 +453,19 @@ export class ClaudeLiveQuery {
           : {}),
         permissionMode: args.permissionMode,
         canUseTool,
-        includePartialMessages: false,
-        // Adaptive-thinking models (Opus 4.8+) default to `display: 'omitted'`,
-        // which returns thinking blocks with an empty `thinking` string (only a
-        // signature for multi-turn continuity). That surfaced as an empty
-        // "Thinking" dropdown in the UI. Request `summarized` so the thinking
-        // content is actually included. Harmless on older/non-adaptive models —
-        // they return their thinking either way.
-        thinking: { type: "adaptive", display: "summarized" },
+        ...(args.claudeConfigDir
+          ? { env: { ...process.env, CLAUDE_CONFIG_DIR: args.claudeConfigDir } }
+          : {}),
+        // Streams text / thinking as it is generated (see handleStreamEvent),
+        // so the chat shows output as soon as the model starts rather than
+        // once each whole block is done.
+        includePartialMessages: true,
+        // Adaptive-thinking models (Opus 4.8+) only ever return a summary of
+        // their thinking, and only when asked: `summarized` holds the reply
+        // back ~1–3s while the summary is written, so it is opt-in (see
+        // thinkingDisplay). `omitted` returns empty thinking blocks, which the
+        // UI hides.
+        thinking: { type: "adaptive", display },
         // User-chosen effort from the composer slider; omitted → model default.
         ...(effort ? { effort } : {}),
         ...(args.context1m ? { betas: ["context-1m-2025-08-07" as const] } : {}),
@@ -393,7 +502,7 @@ export class ClaudeLiveQuery {
         systemPrompt: {
           type: "preset" as const,
           preset: "claude_code" as const,
-          append: [TODO_TRACKING_INSTRUCTION, args.systemPromptAppend]
+          append: [TODO_TRACKING_INSTRUCTION, SHOW_IMAGE_INSTRUCTION, args.systemPromptAppend]
             .filter(Boolean)
             .join("\n\n"),
         },
@@ -431,7 +540,8 @@ export class ClaudeLiveQuery {
       !this.input.isEnded &&
       (args.cwd ?? process.cwd()) === this.cwd &&
       !args.resumeSessionAt &&
-      args.sessionId === this.sessionId
+      args.sessionId === this.sessionId &&
+      args.claudeConfigDir === this.claudeConfigDir
     );
   }
 
@@ -460,6 +570,7 @@ export class ClaudeLiveQuery {
   // Tears the CLI down immediately, killing every task it is running.
   close(): void {
     if (this.closed) return;
+    idleProcesses.delete(this);
     clearTimeout(this.idleTimer);
     this.input.end();
     this.abort.abort();
@@ -468,8 +579,13 @@ export class ClaudeLiveQuery {
   // Sends a user message as a new turn. Resolves (with the possibly-new
   // session id) once the CLI reports the turn's result.
   async runTurn(args: RunArgs): Promise<string | undefined> {
-    if (!this.canReuse(args)) throw new Error("Claude process is no longer reusable");
+    await this.settled();
+    const usable = this.used ? this.canReuse(args) : !this.closed && !this.input.isEnded;
+    if (!usable) throw new Error("Claude process is no longer reusable");
+    this.used = true;
     this.args = args;
+    // Anything still unfolded runs in this turn's prompt batch.
+    this.unfoldedSteers.clear();
     await this.applyTurnSettings(args);
     const sink = this.openSink(args);
     // A CLI-initiated turn the session never got round to adopting folds into
@@ -486,6 +602,32 @@ export class ClaudeLiveQuery {
     });
     await sink;
     return this.sessionId;
+  }
+
+  // Whether steer() can deliver into the turn that is running right now.
+  canSteer(): boolean {
+    return !!this.sink && !this.draining && !this.closed && !this.input.isEnded;
+  }
+
+  // Sends a message into the running turn without stopping it. The CLI folds
+  // it in after the current tool round; if the turn finishes first, the CLI
+  // runs it as a turn of its own (adopted via onUnsolicitedTurn).
+  steer(prompt: string, attachments?: Attachment[]): boolean {
+    if (!this.canSteer()) return false;
+    const uuid = randomUUID();
+    this.unfoldedSteers.add(uuid);
+    this.input.push({
+      type: "user",
+      message: {
+        role: "user",
+        content: renderPromptWithAttachments(prompt, attachments),
+      },
+      parent_tool_use_id: null,
+      session_id: this.sessionId ?? "",
+      priority: "next",
+      uuid,
+    } as SDKUserMessage);
+    return true;
   }
 
   // Attaches a session turn to output the CLI produced on its own (see
@@ -506,6 +648,23 @@ export class ClaudeLiveQuery {
       );
       this.model = args.model;
     }
+    // The process can outlive a change to the composer's effort slider or
+    // thinking-summaries toggle.
+    const prefs = await readPrefs();
+    const display = thinkingDisplay(prefs);
+    if (display !== this.thinkingDisplay) {
+      await this.stream.setMaxThinkingTokens(null, display).catch((err) =>
+        console.warn("[agent] setMaxThinkingTokens failed:", err instanceof Error ? err.message : err),
+      );
+      this.thinkingDisplay = display;
+    }
+    const effort = resolveEffort(args.model, prefs.claudeEffort);
+    if (effort !== this.effort) {
+      await this.stream.applyFlagSettings({ effortLevel: effort ?? null }).catch((err) =>
+        console.warn("[agent] applyFlagSettings failed:", err instanceof Error ? err.message : err),
+      );
+      this.effort = effort;
+    }
     if (args.permissionMode !== this.permissionMode) {
       await this.stream.setPermissionMode(args.permissionMode).catch((err) =>
         console.warn("[agent] setPermissionMode failed:", err instanceof Error ? err.message : err),
@@ -516,6 +675,7 @@ export class ClaudeLiveQuery {
 
   private openSink(args: RunArgs): Promise<void> {
     clearTimeout(this.idleTimer);
+    this.markActive();
     this.unsolicitedPending = false;
     this.notes = [];
     return new Promise<void>((resolve) => {
@@ -541,21 +701,91 @@ export class ClaudeLiveQuery {
 
   // Stops the current turn only. interrupt() aborts the in-flight model call
   // and any foreground tools, but leaves background tasks running.
+  // The turn ends for the session straight away so Stop feels instant; the
+  // CLI's remaining output for it is drained (dropped) until its result, and
+  // the next turn waits for that via settled().
   private interruptTurn(sink: TurnSink): void {
     if (this.sink !== sink) return;
     sink.interrupted = true;
     this.stream.interrupt().catch(() => {});
-    setTimeout(() => {
-      if (this.sink === sink) {
-        console.warn("[agent] interrupt did not end the turn — killing the CLI");
-        this.close();
+    if (!this.closed) {
+      let done!: () => void;
+      const drain = new Promise<void>((resolve) => (done = resolve));
+      this.draining = { promise: drain, resolve: done };
+      setTimeout(() => {
+        if (this.draining?.promise === drain) {
+          console.warn("[agent] interrupt did not end the turn — killing the CLI");
+          this.close();
+          this.finishDrain();
+        }
+      }, INTERRUPT_FALLBACK_MS);
+    }
+    this.endTurn(sink);
+  }
+
+  private finishDrain(): void {
+    const drain = this.draining;
+    this.draining = null;
+    drain?.resolve();
+  }
+
+  // Resolves once a stopped turn's leftover output has been drained (or the
+  // CLI was killed for not stopping), so the process is safe to reuse.
+  settled(): Promise<void> {
+    return this.draining?.promise ?? Promise.resolve();
+  }
+
+  private handleStreamEvent(emit: TurnSink["emit"], event: any): void {
+    switch (event?.type) {
+      case "message_start":
+        this.partialMessageId = event.message?.id ?? cryptoRandomId();
+        break;
+      case "content_block_start": {
+        this.clearPartial();
+        const type = event.content_block?.type;
+        if (type === "text" || type === "thinking") {
+          this.partial = {
+            id: `${this.partialMessageId}:${event.index}`,
+            blockType: type,
+            text: "",
+            lastEmit: 0,
+          };
+        }
+        break;
       }
-    }, INTERRUPT_FALLBACK_MS);
+      case "content_block_delta": {
+        const p = this.partial;
+        if (!p) break;
+        const delta = event.delta;
+        if (delta?.type === "text_delta") p.text += delta.text ?? "";
+        else if (delta?.type === "thinking_delta") p.text += delta.thinking ?? "";
+        else break;
+        if (p.timer) break;
+        const send = () => {
+          p.timer = undefined;
+          p.lastEmit = Date.now();
+          emit({ type: "assistant_partial", id: p.id, blockType: p.blockType, text: p.text });
+        };
+        const wait = p.lastEmit + PARTIAL_THROTTLE_MS - Date.now();
+        if (wait <= 0) send();
+        else p.timer = setTimeout(send, wait);
+        break;
+      }
+      case "content_block_stop":
+        this.clearPartial();
+        break;
+    }
+  }
+
+  private clearPartial(): void {
+    clearTimeout(this.partial?.timer);
+    this.partial = null;
   }
 
   private endTurn(sink: TurnSink): void {
     if (this.sink !== sink) return;
     this.sink = null;
+    this.clearPartial();
     // A turn can't end while its own foreground tool calls are still running,
     // so anything still marked as foreground-running settled without a
     // notification reaching us.
@@ -576,13 +806,10 @@ export class ClaudeLiveQuery {
   // Closes the input (letting the CLI exit) once nothing is left for it to do.
   private scheduleWindDown(): void {
     clearTimeout(this.idleTimer);
-    if (this.closed || this.sink || this.unsolicitedPending) return;
+    if (this.closed || this.sink || this.unsolicitedPending || this.draining) return;
     if (this.hasRunningTasks()) return;
-    this.idleTimer = setTimeout(() => {
-      if (!this.sink && !this.unsolicitedPending && !this.hasRunningTasks()) {
-        this.input.end();
-      }
-    }, IDLE_WIND_DOWN_MS);
+    this.idleTimer = setTimeout(() => this.windDownNow(), IDLE_WIND_DOWN_MS);
+    this.markIdle();
   }
 
   private async consume(): Promise<void> {
@@ -595,7 +822,9 @@ export class ClaudeLiveQuery {
       failure = err;
     } finally {
       this.closed = true;
+      idleProcesses.delete(this);
       clearTimeout(this.idleTimer);
+      this.finishDrain();
       const sink = this.sink;
       if (failure && !this.isAbortLike(failure, sink)) {
         const message = failure instanceof Error ? failure.message : String(failure);
@@ -645,11 +874,29 @@ export class ClaudeLiveQuery {
   private route(message: any): void {
     if (message.type === "system" && this.handleTaskMessage(message)) return;
     if (message.type === "user") this.noteOutputPaths(message.message?.content);
+    // Live deltas only matter to an open turn; the finished blocks follow as
+    // assistant messages, so nothing is lost by dropping them otherwise.
+    if (message.type === "stream_event" && (!this.sink || this.draining || message.parent_tool_use_id)) {
+      return;
+    }
 
     // A background subagent's own transcript streams through here too. It
     // belongs to that task, not to whichever turn happens to be open (or to a
     // turn of its own); the task row in the Agents panel tracks its progress.
     if (message.parent_tool_use_id && (!this.sink || this.isBackgroundToolUse(message.parent_tool_use_id))) {
+      return;
+    }
+
+    // Tail of a turn the user already stopped: drop it up to its result.
+    if (this.draining) {
+      if (message.type === "system" && message.subtype === "init") {
+        this.sessionId = message.session_id ?? this.sessionId;
+      }
+      if (message.type === "result") {
+        this.sessionId = message.session_id ?? this.sessionId;
+        this.finishDrain();
+        this.scheduleWindDown();
+      }
       return;
     }
 
@@ -675,7 +922,9 @@ export class ClaudeLiveQuery {
       if (this.bufferedInit) this.buffered.push(this.bufferedInit);
       this.bufferedInit = null;
       this.buffered.push(message);
-      this.hooks.onUnsolicitedTurn(this.notes.splice(0));
+      const steered = this.unfoldedSteers.size > 0;
+      this.unfoldedSteers.clear();
+      this.hooks.onUnsolicitedTurn(this.notes.splice(0), steered);
       return;
     }
     // A CLI turn with no output (e.g. acknowledging a stopped task).
@@ -701,6 +950,9 @@ export class ClaudeLiveQuery {
             permissionMode: message.permissionMode,
             slashCommands: message.slash_commands ?? [],
           });
+          // Remember this snapshot so the Tools & MCP panel can preview the
+          // available tools before a chat has started.
+          void updateToolsCache(message.tools ?? [], message.mcp_servers ?? []);
         } else if (message.subtype === "api_retry") {
           // The CLI hit a retryable API error and is backing off. Surface it
           // as a non-fatal status instead of leaving the chat looking hung.
@@ -755,7 +1007,11 @@ export class ClaudeLiveQuery {
         break;
       }
 
+      case "stream_event":
+        this.handleStreamEvent(emit, message.event);
+        break;
       case "assistant": {
+        this.clearPartial();
         if (this.noticeActive) {
           this.noticeActive = false;
           emit({ type: "chat_notice", kind: "retry", message: null });
@@ -763,6 +1019,7 @@ export class ClaudeLiveQuery {
         const content = normalizeContent(message.message?.content ?? []);
         // Store assistant messages so currentTodos can scan for TodoWrite calls
         this.assistantMessages.push({ type: "assistant", message: message.message, content });
+        this.registerAgentSubagents(message.message?.content ?? []);
         emit({
           type: "assistant",
           uuid: message.uuid ?? cryptoRandomId(),
@@ -822,11 +1079,13 @@ export class ClaudeLiveQuery {
             content,
           });
         }
+        this.settleAgentSubagents(content);
         break;
       }
 
       case "result": {
         this.sessionId = message.session_id ?? this.sessionId;
+        for (const uuid of message.user_message_uuids ?? []) this.unfoldedSteers.delete(uuid);
         if (this.noticeActive) {
           this.noticeActive = false;
           emit({ type: "chat_notice", kind: "retry", message: null });
@@ -848,6 +1107,7 @@ export class ClaudeLiveQuery {
         // hundreds of thousands of tokens at the end of multi-step tasks.
         // The per-assistant-message context_usage emits above are accurate
         // per-API-call measurements and are sufficient for tracking context pressure.
+        this.completeSyntheticAgents();
         this.endTurn(sink);
         break;
       }
@@ -865,6 +1125,11 @@ export class ClaudeLiveQuery {
       case "task_started": {
         // Ambient tasks are housekeeping (watchers etc.), not user-visible work.
         if (m.ambient || m.skip_transcript) return true;
+        // A real lifecycle message supersedes any entry we synthesized from the
+        // Agent tool_use block (that entry is keyed by its tool_use_id).
+        if (m.tool_use_id && this.syntheticAgentTaskIds.delete(m.tool_use_id)) {
+          this.tasks.delete(m.tool_use_id);
+        }
         const existing = this.tasks.get(m.task_id);
         this.tasks.set(m.task_id, {
           ...existing,
@@ -1024,6 +1289,71 @@ export class ClaudeLiveQuery {
     if (snapshot === this.lastPublished) return;
     this.lastPublished = snapshot;
     this.hooks.onTasksChanged(tasks);
+  }
+
+  // Agent/Task subagents don't reliably get CLI task_* lifecycle messages, so
+  // we track them from the tool_use block and settle them from the result. A
+  // real task_started with the same tool_use_id supersedes these (see above).
+  private registerAgentSubagents(content: unknown): void {
+    if (!Array.isArray(content)) return;
+    let changed = false;
+    for (const block of content) {
+      if (block?.type !== "tool_use" || !block.id) continue;
+      if (block.name !== "Agent" && block.name !== "Task") continue;
+      if (this.tasks.has(block.id)) continue;
+      const input = (block.input ?? {}) as {
+        description?: string;
+        prompt?: string;
+        subagent_type?: string;
+      };
+      this.tasks.set(block.id, {
+        id: block.id,
+        toolUseId: block.id,
+        taskType: "local_agent",
+        description: clip(input.description ?? input.prompt ?? "Agent task"),
+        subagentType: input.subagent_type,
+        status: "running",
+        background: true,
+        startedAt: new Date().toISOString(),
+      });
+      this.syntheticAgentTaskIds.add(block.id);
+      changed = true;
+    }
+    if (changed) this.publishTasks();
+  }
+
+  // A real (non-placeholder) tool_result settles a synthesized agent. A
+  // backgrounded subagent returns a "launched in the background" placeholder
+  // immediately — that doesn't count; those are swept at turn end instead.
+  private settleAgentSubagents(content: unknown): void {
+    if (!Array.isArray(content)) return;
+    let changed = false;
+    for (const block of content) {
+      if (block?.type !== "tool_result" || !block.tool_use_id) continue;
+      if (!this.syntheticAgentTaskIds.has(block.tool_use_id)) continue;
+      if (isBackgroundLaunchPlaceholder(block.content)) continue;
+      const t = this.tasks.get(block.tool_use_id);
+      if (!t || t.status !== "running") continue;
+      t.status = block.is_error ? "failed" : "completed";
+      t.endedAt = new Date().toISOString();
+      changed = true;
+    }
+    if (changed) this.publishTasks();
+  }
+
+  // Sweep still-running synthesized agents when a turn settles, so a
+  // backgrounded subagent we never saw a real result for can't spin forever.
+  private completeSyntheticAgents(): void {
+    let changed = false;
+    for (const id of this.syntheticAgentTaskIds) {
+      const t = this.tasks.get(id);
+      if (t && t.status === "running") {
+        t.status = "completed";
+        t.endedAt = new Date().toISOString();
+        changed = true;
+      }
+    }
+    if (changed) this.publishTasks();
   }
 
   // Latest TodoWrite list across every turn (same logic as the useTodos hook).

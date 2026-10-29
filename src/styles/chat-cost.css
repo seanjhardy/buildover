@@ -19,27 +19,10 @@
 .cost-readout--warn .cost-readout-text {
   color: #e8a838;
 }
-.cost-readout-warm {
-  display: inline-flex;
-  align-items: center;
-  gap: 2px;
-  height: 20px;
-  padding: 0 4px;
-  border: 0;
-  border-radius: 10px;
-  background: transparent;
-  color: inherit;
-  font-size: 10.5px;
-  cursor: pointer;
-  opacity: 0.55;
-}
-.cost-readout-warm:hover {
-  opacity: 1;
-  background: var(--app-list-hover-background);
-}
-.cost-readout-warm.is-on {
-  opacity: 1;
-  color: var(--app-claude-orange, #d97757);
+/* The warmth pill (see .warm-pill) sits at the end of the readout, where the
+   old flame toggle used to be. */
+.cost-readout .warm-pill {
+  margin-left: 3px;
 }
 .cost-readout-tooltip-warn {
   color: #e8a838;
@@ -49,10 +32,13 @@
   color: var(--app-placeholder-foreground, rgba(255, 255, 255, 0.4));
   font-size: 10.5px;
 }
-/* Narrow composers: keep the ring, drop the readout text. */
+/* Narrow composers: keep the ring and the warmth pill, drop the cost text. */
 @container composer-bar (max-width: 340px) {
-  .cost-readout {
+  .cost-readout-text {
     display: none;
+  }
+  .cost-readout .warm-pill {
+    margin-left: 0;
   }
 }
 

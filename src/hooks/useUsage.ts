@@ -7,6 +7,18 @@ export interface UsageBucket {
   windowSeconds?: number;
 }
 
+export interface ClaudeAccountSummary {
+  id: string;
+  label: string;
+  active: boolean;
+  loggedIn: boolean;
+  email?: string;
+  fiveHour: UsageBucket | null;
+  sevenDay: UsageBucket | null;
+  error?: string;
+  login?: ClaudeLoginAttempt;
+}
+
 export interface Usage {
   fiveHour: UsageBucket | null;
   sevenDay: UsageBucket | null;
@@ -22,6 +34,19 @@ export interface Usage {
   subscriptionType?: string;
   rateLimitTier?: string;
   fetchedAt: string;
+  // Last good reading served while Claude's usage endpoint is cooling down;
+  // a live one is allowed again at retryAt.
+  stale?: boolean;
+  retryAt?: string;
+  // Multiple Claude accounts (auto-switch on usage limits). Present whenever
+  // the server has at least the primary account; length 1 when the user
+  // hasn't added a second account.
+  accounts?: ClaudeAccountSummary[];
+  autoSwitch?: boolean;
+  /** Why the active account was chosen (auto-pick) or that it's pinned. */
+  autoReason?: string;
+  switchedAt?: string;
+  switchReason?: string;
 }
 
 export interface ClaudeLoginAttempt {
@@ -29,6 +54,8 @@ export interface ClaudeLoginAttempt {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  // claude.ai sign-in page; the code it shows goes back via submitClaudeLoginCode.
+  url?: string;
 }
 
 export interface ClaudeAuthStatus {
@@ -97,6 +124,7 @@ export function useUsage() {
   const [claudeAuth, setClaudeAuth] = useState<ClaudeAuthStatus | null>(null);
   const [claudeError, setClaudeError] = useState<string | null>(null);
   const [claudeErrorStatus, setClaudeErrorStatus] = useState<number | null>(null);
+  const [claudeRetryAt, setClaudeRetryAt] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const inflight = useRef<AbortController | null>(null);
@@ -130,14 +158,17 @@ export function useUsage() {
       let nextError: string | null = null;
 
       if (claudeRes.ok) {
-        setUsage((await claudeRes.json()) as Usage);
+        const next = (await claudeRes.json()) as Usage;
+        setUsage(next);
         setClaudeError(null);
         setClaudeErrorStatus(null);
+        setClaudeRetryAt(next.stale ? (next.retryAt ?? null) : null);
       } else {
         const body = await claudeRes.json().catch(() => ({ error: claudeRes.statusText }));
         const message = body.error || `Claude usage HTTP ${claudeRes.status}`;
         setClaudeError(message);
         setClaudeErrorStatus(claudeRes.status);
+        setClaudeRetryAt(body.retryAt ?? null);
         if (claudeRes.status === 401 || claudeRes.status === 403) setUsage(null);
         nextError = message;
       }
@@ -205,6 +236,14 @@ export function useUsage() {
       inflight.current?.abort();
     };
   }, [fetchOnce, refreshClaudeAuth]);
+
+  // Fetch a live reading as soon as Claude's usage endpoint allows one again.
+  useEffect(() => {
+    if (!claudeRetryAt) return;
+    const wait = Math.max(new Date(claudeRetryAt).getTime() - Date.now(), 0) + 1000;
+    const id = setTimeout(fetchOnce, wait);
+    return () => clearTimeout(id);
+  }, [claudeRetryAt, fetchOnce]);
 
   return {
     usage,

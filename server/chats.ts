@@ -7,6 +7,7 @@ import {
   writeFile,
 } from "node:fs/promises";
 import { join } from "node:path";
+import { getModelProvider, type ModelProvider } from "./modelProvider.js";
 import { chatsDir, indexPath } from "./repos.js";
 import { pruneSnapshotsFrom, restoreFromCheckpoint } from "./snapshots.js";
 import type {
@@ -23,7 +24,10 @@ import type {
   PermissionMode,
   QueuedChatTurn,
 } from "../src/types.js";
-import { DEFAULT_MODEL } from "../src/types.js";
+import {
+  DEFAULT_MODEL,
+  KEEP_WARM_BUDGET_HOURS,
+} from "../src/types.js";
 
 async function readJson<T>(path: string): Promise<T | null> {
   try {
@@ -99,8 +103,9 @@ const indexPersistTimers = new Map<string, NodeJS.Timeout>();
 // Bumped whenever the shape of a persisted ChatSummary changes so that an
 // index.json written by an older build is discarded and rebuilt (rather than
 // silently missing newly-added fields). v2 added queuedTurn / queuePaused,
-// which the queue drainer reads instead of re-parsing every transcript.
-const INDEX_VERSION = 2;
+// which the queue drainer reads instead of re-parsing every transcript. v3
+// added lastApiAt, which list views use to show prompt-cache warmth.
+const INDEX_VERSION = 3;
 
 interface PersistedIndex {
   version?: number;
@@ -426,6 +431,32 @@ export async function appendEvent(
   });
 }
 
+// Opens a turn in one locked read-modify-write: records the turn's model and
+// permission mode and appends its opening events (user message, revert
+// checkpoint). Chat files run to tens of MB, so each separate append costs a
+// full parse + rewrite before the model is even called.
+export async function beginChatTurn(
+  repoPath: string,
+  chatId: string,
+  settings: Pick<ChatRecord, "model" | "permissionMode">,
+  events: ChatEvent[],
+): Promise<{ record: ChatRecord; isFirstUserTurn: boolean } | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return null;
+    const isFirstUserTurn = !record.events.some((e) => e.type === "user_message");
+    record.model = settings.model;
+    record.permissionMode = settings.permissionMode;
+    for (const event of events) {
+      record.events.push(event);
+      applyEventToMeta(record, event);
+    }
+    record.status = computeStatus(record);
+    await writeChat(repoPath, record);
+    return { record, isFirstUserTurn };
+  });
+}
+
 export async function enqueueChatTurn(
   repoPath: string,
   chatId: string,
@@ -584,7 +615,10 @@ function applyEventToMeta(record: ChatRecord, event: ChatEvent): void {
       }
       break;
     case "result":
-      if (event.sessionId) {
+      // A turn that failed before running anything (numTurns 0) reports the
+      // id of a session that was never written, e.g. the fork of a resume
+      // that failed; recording it would make every later turn resume it.
+      if (event.sessionId && !(event.subtype !== "success" && event.numTurns === 0)) {
         record.sessionId = event.sessionId;
         const provider = record.model?.startsWith("cursor:")
             ? "cursor"
@@ -638,11 +672,18 @@ export function computeStatus(record: ChatRecord): ChatStatus {
         break;
       case "turn_end":
         lastTurnEndIndex = i;
+        // A turn cannot end while genuinely blocked on a prompt, so any
+        // permission request still "open" at this point was actually resolved
+        // (or the turn was interrupted) — its response just wasn't persisted.
+        // Clearing here stops a lost permission_response from pinning the chat
+        // to "awaiting_input" forever with no prompt to show.
+        pendingPermissionIds.clear();
         break;
       case "result":
         lastResultIndex = i;
         hasUserMessageAfterResult = false;
         lastTurnWasServerRestartError = false;
+        pendingPermissionIds.clear();
         break;
       case "assistant":
       case "user_tool_results":
@@ -747,6 +788,8 @@ export function toSummary(record: ChatRecord): ChatSummary {
       : {}),
     ...(record.queuePaused ? { queuePaused: true } : {}),
     ...(record.keepWarm ? { keepWarm: true } : {}),
+    ...(record.keepWarmUntil ? { keepWarmUntil: record.keepWarmUntil } : {}),
+    ...(record.cost?.lastApiAt ? { lastApiAt: record.cost.lastApiAt } : {}),
     ...(record.handoffTo ? { continuedInChatId: record.handoffTo.chatId } : {}),
   };
 }
@@ -836,6 +879,24 @@ export async function setModel(
   });
 }
 
+// Persists a mode change made from the composer, so a later replay (chat
+// switch, reconnect) restores the mode the user picked rather than the one the
+// last turn started with.
+export async function setChatPermissionMode(
+  repoPath: string,
+  chatId: string,
+  permissionMode: PermissionMode,
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return null;
+    if (record.permissionMode === permissionMode) return record;
+    record.permissionMode = permissionMode;
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
 // Persists the chat's running cost (see ChatCost). The session owns the
 // numbers in memory and writes whole snapshots, so a stale write can never
 // double-count.
@@ -852,16 +913,35 @@ export async function saveChatCost(
   });
 }
 
+/** Warmth is a budget with a deadline, not a switch (see ChatRecord.keepWarmUntil):
+ *    - `false` spends it immediately: pings stop now.
+ *    - `true` starts a fresh KEEP_WARM_BUDGET_HOURS budget, or leaves a running
+ *      one alone (it's the idempotent "make sure this is on").
+ *    - `{ addHours }` tops the budget up, from now if it had already run out.
+ *  Always writes keepWarm and keepWarmUntil together so nothing downstream can
+ *  see one without the other. */
 export async function setKeepWarm(
   repoPath: string,
   chatId: string,
-  enabled: boolean,
+  update: boolean | { addHours: number },
 ): Promise<ChatRecord | null> {
   return withChatLock(repoPath, chatId, async () => {
     const record = await readChat(repoPath, chatId);
     if (!record) return null;
-    if (enabled) record.keepWarm = true;
-    else delete record.keepWarm;
+    if (update === false) {
+      delete record.keepWarm;
+      delete record.keepWarmUntil;
+    } else {
+      const now = Date.now();
+      const current = Date.parse(record.keepWarmUntil ?? "");
+      const live = Number.isFinite(current) && current > now ? current : 0;
+      const until =
+        update === true
+          ? live || now + KEEP_WARM_BUDGET_HOURS * 3_600_000
+          : (live || now) + update.addHours * 3_600_000;
+      record.keepWarm = true;
+      record.keepWarmUntil = new Date(until).toISOString();
+    }
     await writeChat(repoPath, record);
     return record;
   });
@@ -1067,6 +1147,118 @@ function reanchorSession(record: ChatRecord): void {
   }
 }
 
+// ---- Resuming Claude after other providers ----
+
+export interface ClaudeResumePlan {
+  /** Claude SDK session to resume; undefined starts a fresh one. */
+  sessionId?: string;
+  /** Cut the resumed session at this SDK message uuid (forks it). */
+  resumeSessionAt?: string;
+  /**
+   * Transcript of what happened in the chat that the Claude session never
+   * saw: turns run by Cursor / Codex since Claude's last message, or the
+   * whole chat when there is no Claude session to resume. Prepended to the
+   * prompt.
+   */
+  history?: string;
+}
+
+const nonClaudeSessionPrefix = /^(appserver:|codex-|cursor-|openai-)/;
+
+/**
+ * Works out how the next Claude turn resumes. A chat can move between
+ * providers, and every provider's message uuids and session ids live in the
+ * same event list, so the record's top-level `sessionId` / `resumeSessionAt`
+ * can point at a Cursor or Codex message. Passing one of those to the Claude
+ * SDK fails before the turn starts ("error during execution"). Instead, the
+ * Claude session is anchored at the last message Claude itself produced, and
+ * the other providers' turns after it are handed over as a transcript.
+ */
+export function planClaudeResume(record: ChatRecord): ClaudeResumePlan {
+  const events = record.events;
+  let turnProvider: ModelProvider = "claude";
+  const claudeUuids = new Set<string>();
+  let lastClaude = -1;
+  let foreignAfterLastClaude = false;
+  for (let i = 0; i < events.length; i++) {
+    const e = events[i];
+    if (e.type === "system_init") {
+      turnProvider = e.model ? getModelProvider(e.model) : "claude";
+    } else if ((e.type === "assistant" || e.type === "user_tool_results") && e.uuid && e.sessionId) {
+      if (turnProvider === "claude") {
+        claudeUuids.add(e.uuid);
+        lastClaude = i;
+        foreignAfterLastClaude = false;
+      } else {
+        foreignAfterLastClaude = true;
+      }
+    }
+  }
+
+  if (lastClaude >= 0 && foreignAfterLastClaude) {
+    const anchor = events[lastClaude] as { uuid: string; sessionId: string };
+    return {
+      sessionId: anchor.sessionId,
+      resumeSessionAt: anchor.uuid,
+      history: chatTranscript(events.slice(lastClaude + 1), 40_000),
+    };
+  }
+
+  // Prefer the Claude-specific session id so a prior Cursor / Codex turn
+  // cannot poison Claude SDK resume. Fall back to the legacy top-level
+  // sessionId only when it is genuinely a Claude handle: it must not equal
+  // either other provider's stored id (robust for current records) and must
+  // not carry a known non-Claude id prefix (covers legacy records written
+  // before per-provider tracking). Codex ids are `appserver:` / `codex-`,
+  // Cursor ids may be `cursor-`.
+  const sessionId =
+    record.providerSessions?.claude ??
+    (record.sessionId &&
+    !nonClaudeSessionPrefix.test(record.sessionId) &&
+    record.providerSessions?.cursor !== record.sessionId &&
+    record.providerSessions?.openai !== record.sessionId
+      ? record.sessionId
+      : undefined);
+  // The one-shot marker set by fork / branch-switch / revert only applies
+  // when it names a message in a Claude session.
+  const resumeSessionAt =
+    sessionId && record.resumeSessionAt && claudeUuids.has(record.resumeSessionAt)
+      ? record.resumeSessionAt
+      : undefined;
+  const history =
+    !sessionId && events.some((e) => e.type === "user_message" || e.type === "assistant")
+      ? chatTranscript(events, 12_000)
+      : undefined;
+  return { sessionId, resumeSessionAt, history };
+}
+
+/**
+ * Plain-text transcript of user messages, assistant replies and the tools the
+ * assistant ran, keeping the most recent `maxChars`.
+ */
+function chatTranscript(events: ChatEvent[], maxChars: number): string | undefined {
+  const lines: string[] = [];
+  for (const ev of events) {
+    if (ev.type === "user_message") lines.push(`User: ${ev.text}`);
+    else if (ev.type === "assistant") {
+      const parts: string[] = [];
+      for (const b of ev.content) {
+        if (b.type === "text" && b.text.trim()) parts.push(b.text);
+        else if (b.type === "tool_use") {
+          const input = b.input as Record<string, unknown> | undefined;
+          const detail =
+            typeof input?.command === "string" ? input.command : JSON.stringify(input ?? {});
+          parts.push(`[${b.name}: ${detail.length > 300 ? `${detail.slice(0, 300)}…` : detail}]`);
+        }
+      }
+      if (parts.length) lines.push(`Assistant: ${parts.join("\n")}`);
+    }
+  }
+  if (!lines.length) return undefined;
+  const body = lines.join("\n\n");
+  return body.length > maxChars ? body.slice(-maxChars) : body;
+}
+
 function makeBranchId(): string {
   const ts = Date.now().toString(36);
   const rand = Math.random().toString(36).slice(2, 8);
@@ -1132,6 +1324,40 @@ export async function forkAtMessage(
 
     await writeChat(repoPath, record);
     return { record, branchId, newMessageId };
+  });
+}
+
+/**
+ * Fork a whole chat into a new one: copies its history (trunk and branches)
+ * and anchors the copy's next turn at the source's last SDK message, so the
+ * SDK forks the session instead of both chats appending to the same one.
+ * Non-Claude chats (no SDK message uuids) start a fresh provider session.
+ *
+ * Returns null when the source chat is not found.
+ */
+export async function forkChat(
+  repoPath: string,
+  chatId: string,
+): Promise<ChatRecord | null> {
+  const source = await readChat(repoPath, chatId);
+  if (!source) return null;
+  const fork = await createChat(repoPath, {
+    model: source.model,
+    permissionMode: source.permissionMode,
+    title: `Fork: ${source.title}`.slice(0, 60),
+    worktreePath: source.worktreePath,
+    worktreeBranch: source.worktreeBranch,
+    context1m: source.context1m,
+  });
+  return withChatLock(repoPath, fork.id, async () => {
+    fork.events = structuredClone(source.events);
+    if (source.branches) fork.branches = structuredClone(source.branches);
+    if (source.lastContextUsage) fork.lastContextUsage = source.lastContextUsage;
+    reanchorSession(fork);
+    if (fork.sessionId) fork.providerSessions = { claude: fork.sessionId };
+    fork.status = computeStatus(fork);
+    await writeChat(repoPath, fork);
+    return fork;
   });
 }
 

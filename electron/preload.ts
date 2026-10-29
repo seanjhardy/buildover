@@ -22,7 +22,16 @@ contextBridge.exposeInMainWorld("electronNotifications", {
   updateBadge: (attentionCount: number, runningCount: number): Promise<void> => {
     return ipcRenderer.invoke("notification:update-badge", attentionCount, runningCount);
   },
-  notify: (title: string, body: string): Promise<void> => {
-    return ipcRenderer.invoke("notification:notify", title, body);
+  notify: (
+    title: string,
+    body: string,
+    target?: { repoPath: string; chatId: string },
+  ): Promise<void> => {
+    return ipcRenderer.invoke("notification:notify", title, body, target);
+  },
+  onClick: (cb: (target: { repoPath: string; chatId: string }) => void): (() => void) => {
+    const listener = (_event: any, target: { repoPath: string; chatId: string }) => cb(target);
+    ipcRenderer.on("notification:clicked", listener);
+    return () => ipcRenderer.removeListener("notification:clicked", listener);
   },
 });

@@ -542,8 +542,11 @@ export const TerminalPanel = forwardRef<TerminalPanelHandle, TerminalPanelProps>
   }, [defaultCwd, tabs.length]);
 
   useImperativeHandle(ref, () => ({
-    runCommand(command: string) {
+    runCommand(rawCommand: string) {
       setIsOpen(true);
+      // Run from the repo root: a reused tab keeps whatever directory its shell
+      // was last left in, so `npm run dev` could otherwise start another repo.
+      const command = `cd -- '${defaultCwd.replace(/'/g, `'\\''`)}' && ${rawCommand}`;
       // Prefer the first idle tab: initialised, not setting up, not running, no queued command
       const idleTab = tabsRef.current.find((tab) =>
         terminalsRef.current.has(tab.id) &&

@@ -2,33 +2,34 @@ import { open, type FileHandle } from "node:fs/promises";
 import { ClaudeLiveQuery, type RawAgentEvent, type RunArgs } from "./agent.js";
 import { runOpenAIAgentTurn } from "./openaiAgent.js";
 import { runCursorAgentTurn } from "./cursorAgent.js";
-import {
-  getCodexUsageLimitBlock,
-  isCodexAvailable,
-} from "./codexUsage.js";
-import { isCursorAvailable, getCursorUsageLimitBlock } from "./cursorUsage.js";
+import { getCodexUsageLimitBlock } from "./codexUsage.js";
+import { getCursorUsageLimitBlock } from "./cursorUsage.js";
 import {
   getModelProvider,
   isClaudeModel,
   isCursorModel,
-  toCursorModelId,
 } from "./modelProvider.js";
 import { makeCoordinationMcp } from "./coordinationTools.js";
-import { coordinatorPrompt, subagentPrompt } from "./prompts.js";
+import { MASTER_KEEP_WARM_HOURS, setMasterChatId } from "./master.js";
+import { makeMasterMcp } from "./masterTools.js";
+import { coordinatorPrompt, masterPrompt, subagentPrompt } from "./prompts.js";
 import {
   createChat,
   saveChatCost,
   setHandoffTo,
   toSummary,
   appendEvent,
+  beginChatTurn,
   computeStatus,
   enqueueChatTurn,
   forkAtMessage,
+  planClaudeResume,
   readChat,
   rebuildIndex,
   recoverStaleChat,
   setQueuePaused,
   revertToCheckpoint,
+  setKeepWarm,
   setTitle,
   shiftQueuedChatTurn,
   switchBranch,
@@ -44,6 +45,13 @@ import {
   invalidateUsageCache,
   type UsageLimitBlock,
 } from "./usage.js";
+import {
+  getAccount as getClaudeAccount,
+  getActiveAccount as getActiveClaudeAccount,
+  pickAccountForTurn,
+  shareConfig,
+  switchAwayFromAccount,
+} from "./claudeAccounts.js";
 import { readPrefs } from "./prefs.js";
 import { turnSlots } from "./turnSlots.js";
 import { compactBackstopTokens } from "./tokenEconomy.js";
@@ -121,8 +129,8 @@ const PARENT_NUDGE_PROMPT =
   "You've stopped without contacting your coordinator this turn. If your assignment is complete, call `mark_task_finished` with a summary. If you have a question, a blocker, or an interim finding, call `report_to_parent`. If you genuinely have nothing to report yet and are still working, continue the task. Don't reply to this message with plain text — your coordinator only sees what you send through those tools.";
 
 /*
- * Keep-warm pings (opt-in per chat; window length = prefs.keepWarmHours, default
- * 0 = off). The longest prompt-cache TTL the API offers is 1h, and cache reads
+ * Keep-warm pings (opt-in per chat, and bought by the hour: record.keepWarmUntil
+ * is the deadline the pings run to). The longest prompt-cache TTL the API offers is 1h, and cache reads
  * refresh it. So a chat that is left idle goes cold after an hour and its next
  * message re-sends the whole context at the 1h cache-WRITE price. A silent
  * "ping" turn every 55 minutes re-reads the context at the much cheaper
@@ -132,21 +140,59 @@ const PARENT_NUDGE_PROMPT =
  * read = 0.05x = $0.20):
  *   - one ping    ~ 200k x $0.20/MTok = $0.04, plus a few output tokens
  *   - cold resend ~ 200k x $8/MTok    = $1.60
- * Keeping a chat warm for 6h is ~7 pings, about $0.25 - cheaper than ONE cold
+ * Keeping a chat warm for 4h is ~5 pings, about $0.20 - cheaper than ONE cold
  * restart. It only pays off if the user comes back within the window, which is
- * why it is opt-in and time-boxed.
+ * why it is opt-in and bought a few hours at a time.
+ *
+ * Two clocks, deliberately separate. The CACHE expires 1h after the last API
+ * call and every ping resets it. The BUDGET (keepWarmUntil) is how long the
+ * user has agreed to keep paying for those pings; it is an absolute deadline on
+ * the record, so it survives a restart, and real activity does NOT extend it -
+ * a budget is a promise, not an idle timer. Every tick re-reads it rather than
+ * trusting what the timer was armed with.
  *
  * Pings reuse the silent-turn machinery (like auto-compact): nothing is shown
  * in the chat, the cost counts toward the running total, and no slot is taken
  * unless one is free. The timer restarts whenever a real turn ends; it stops on
- * delete / archive / toggle-off, once keepWarmHours have passed since the last
- * real activity, and is skipped while a turn is running or the cap is full.
+ * delete / archive / toggle-off, when the budget runs out (the loop then clears
+ * it, so nothing re-arms after a restart), and is skipped while a turn is
+ * running or the cap is full.
  */
 const KEEP_WARM_INTERVAL_MS = 55 * 60_000;
 // Margin before the 1h TTL during which a ping can still be retried.
 const KEEP_WARM_CACHE_TTL_MS = 59 * 60_000;
 const KEEP_WARM_RETRY_MS = 2 * 60_000;
+// A ping that lands on a busy chat (or an exhausted plan) comes back later
+// instead of giving up: every path through the loop must leave a timer armed,
+// or warming stops for that chat silently and for good.
+const KEEP_WARM_BUSY_RETRY_MS = 10 * 60_000;
+// How often a turn in flight writes its warmth to disk. The record only has to
+// be right for the ping loop and for a restart; subscribers get it live.
+const API_ACTIVITY_PERSIST_MS = 5 * 60_000;
+// Subscribers don't need a new timestamp for every streamed block either.
+const API_ACTIVITY_BROADCAST_MS = 30_000;
 const KEEP_ALIVE_PROMPT = "(keep-alive ping: reply with exactly: ok)";
+
+/** Warmth budget left on a chat, in ms (<= 0 === spent). The Master has no
+ *  budget: it warms itself for MASTER_KEEP_WARM_HOURS past its last activity
+ *  and that is not the user's to spend (see master.ts). */
+function keepWarmBudgetLeftMs(record: ChatRecord): number {
+  const until = Date.parse(record.keepWarmUntil ?? "");
+  return Number.isFinite(until) ? until - Date.now() : 0;
+}
+
+/** How long since this chat last hit the API (Infinity === never). */
+function msSinceLastApi(record: ChatRecord): number {
+  const ms = Date.parse(record.cost?.lastApiAt ?? record.updatedAt);
+  return Number.isFinite(ms) ? Date.now() - ms : Infinity;
+}
+
+/** Whether this chat should be pinged at all right now. */
+function keepWarmIsOn(record: ChatRecord | null | undefined): boolean {
+  if (!record || record.userMarkedFinished) return false;
+  if (record.kind === "master") return true;
+  return !!record.keepWarm && keepWarmBudgetLeftMs(record) > 0;
+}
 
 // Thrown inside runTurn when a turn is stopped while waiting for a slot.
 const SLOT_WAIT_ABORTED = Symbol("slot-wait-aborted");
@@ -293,30 +339,19 @@ function queuedTurnAlreadyPersisted(turn: QueuedChatTurn): boolean {
   return turn.kind !== "scheduled_wakeup" && turn.kind !== "user";
 }
 
-const CODEX_FALLBACK_MODEL = "gpt-5.6-luna";
-const CURSOR_FALLBACK_MODEL = toCursorModelId("composer-2.5");
-
-/** When Claude is exhausted, prefer Cursor subscription, then Codex. */
-async function resolveClaudeUsageFallback(
-  model: string,
-): Promise<string | null> {
-  if (!isClaudeModel(model)) return null;
-  if (await isCursorAvailable()) {
-    const cursorBlock = await getCursorUsageLimitBlock();
-    if (!cursorBlock) return CURSOR_FALLBACK_MODEL;
-  }
-  if (await isCodexAvailable()) return CODEX_FALLBACK_MODEL;
-  return null;
-}
-
+// For Claude, checks the given account, or else the active one after
+// switching to another account with headroom if auto-switch allows it.
 async function getProviderUsageLimitBlock(
   model: string | undefined,
+  claudeAccountId?: string,
 ): Promise<UsageLimitBlock | null> {
   if (!model) return null;
   const provider = getModelProvider(model);
   if (provider === "cursor") return getCursorUsageLimitBlock();
   if (provider === "openai") return getCodexUsageLimitBlock();
-  return getUsageLimitBlock(model);
+  const account =
+    (claudeAccountId && (await getClaudeAccount(claudeAccountId))) || (await pickAccountForTurn());
+  return getUsageLimitBlock(model, account.configDir ?? undefined);
 }
 
 async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void> {
@@ -333,36 +368,9 @@ async function drainQueuedTurns(repoPath: string, chatId: string): Promise<void>
   const nextModel = nextTurn?.model;
   const usageBlock = await getProviderUsageLimitBlock(nextModel);
   if (usageBlock) {
-    // Claude is exhausted — try running the queued turn via Cursor / Codex.
-    // A scheduled wakeup must resume the existing Claude session; moving it
-    // to another provider would discard the loop's working context. Only
-    // shift once a fallback is known, so a blocked turn stays queued.
-    const fallback =
-      nextTurn && nextTurn.kind !== "scheduled_wakeup" && isClaudeModel(nextTurn.model)
-        ? await resolveClaudeUsageFallback(nextTurn.model)
-        : null;
-    const shifted = fallback ? await shiftQueuedChatTurn(repoPath, chatId) : null;
-    if (fallback && shifted) {
-      console.log(`[usage-queue] Claude blocked, falling back to ${fallback} for ${chatId}`);
-      await session.pushStatusForRecord(shifted.record);
-      void session
-        .runTurn({
-          text: shifted.turn.text,
-          model: fallback,
-          permissionMode: shifted.turn.permissionMode,
-          attachments: shifted.turn.attachments,
-          isRetry: queuedTurnAlreadyPersisted(shifted.turn),
-          origin: shifted.turn.origin,
-          originLabel: shifted.turn.originLabel,
-        })
-        .catch((err) => {
-          console.warn(`[usage-queue] fallback failed for ${chatId}:`, err instanceof Error ? err.message : err);
-        });
-      return;
-    }
-    // No fallback available — wait and retry. A reset time that has already
-    // passed (a stale usage reading) falls back to polling instead of an
-    // immediate re-drain loop.
+    // Never switch the turn to another model: wait and retry. A reset time
+    // that has already passed (a stale usage reading) falls back to polling
+    // instead of an immediate re-drain loop.
     const resetsAt =
       usageBlock.resetsAt && new Date(usageBlock.resetsAt).getTime() > Date.now()
         ? usageBlock.resetsAt
@@ -445,6 +453,9 @@ class AgentSession {
   // alive afterwards while subagents / shell commands it started in the
   // background are still running (see ClaudeLiveQuery).
   private live?: ClaudeLiveQuery;
+  // The Claude account the latest turn ran under, so a limit hit mid-turn is
+  // blamed on that account even if another chat has switched since.
+  private claudeAccountId?: string;
   // Subagent / shell tasks seen in this server's lifetime, running and
   // recently finished. Survives the CLI process that ran them so the Agents
   // panel can still show how they ended.
@@ -452,7 +463,7 @@ class AgentSession {
   private taskOutputFiles = new Map<string, string>();
   // A CLI-initiated turn (a background task settled and woke the model) that
   // arrived while another turn was running. Adopted once the session frees up.
-  private pendingAdoption?: { live: ClaudeLiveQuery; notes: string[] };
+  private pendingAdoption?: { live: ClaudeLiveQuery; notes: string[]; steered?: boolean };
 
   // ---- Global concurrency cap (see turnSlots.ts) ----
   // A running visible turn holds one slot. It is released while the turn is
@@ -470,6 +481,8 @@ class AgentSession {
   // ---- Keep-warm pings (see KEEP_WARM_* below) ----
   private keepWarmTimer?: ReturnType<typeof setTimeout>;
   // Last real (non-ping) activity; the keep-warm window is measured from here.
+  // Master-only: when its self-warming window last restarted. Ordinary chats
+  // use the persisted keepWarmUntil deadline instead.
   private keepWarmAnchorMs = 0;
 
   constructor(chatId: string, repoPath: string) {
@@ -787,9 +800,33 @@ class AgentSession {
       lastCumulativeUsd: cumulativeUsd ?? prev.lastCumulativeUsd,
     };
     const snapshot = this.costState;
+    this.lastApiBroadcastMs = Date.now();
+    this.lastApiPersistMs = Date.now();
     this.broadcast({ type: "chat_cost", chatId: this.chatId, cost: snapshot });
     this.enqueuePersistence(() => saveChatCost(this.repoPath, this.chatId, snapshot));
     return delta;
+  }
+
+  // Warmth is the time of the last API CALL, not of the last finished turn.
+  // recordTurnCost only runs on the SDK's result event, so during a long turn
+  // the recorded time goes stale and every warmth display lies. This keeps it
+  // honest as the turn streams: live to subscribers, and to disk at a throttle
+  // (the record only has to be right for the ping loop and for a restart).
+  private lastApiBroadcastMs = 0;
+  private lastApiPersistMs = 0;
+
+  private noteApiActivity(): void {
+    const now = Date.now();
+    this.costState = { ...this.costState, lastApiAt: new Date(now).toISOString() };
+    if (now - this.lastApiBroadcastMs >= API_ACTIVITY_BROADCAST_MS) {
+      this.lastApiBroadcastMs = now;
+      this.broadcast({ type: "chat_cost", chatId: this.chatId, cost: this.costState });
+    }
+    if (now - this.lastApiPersistMs >= API_ACTIVITY_PERSIST_MS) {
+      this.lastApiPersistMs = now;
+      const snapshot = this.costState;
+      this.enqueuePersistence(() => saveChatCost(this.repoPath, this.chatId, snapshot));
+    }
   }
 
   // ---- Keep-warm ----
@@ -812,39 +849,66 @@ class AgentSession {
   // Re-evaluates this chat's keep-warm timer against its persisted state.
   // Called when the toggle or archive state changes and at startup.
   async syncKeepWarm(): Promise<void> {
-    const record = await readChat(this.repoPath, this.chatId);
-    this.keepWarmEnabled = !!record?.keepWarm && !record.userMarkedFinished;
+    let record = await readChat(this.repoPath, this.chatId);
+    // Warmth used to be a bare on/off flag with no deadline. Give one a budget
+    // the first time we see it so a chat that was warm before the upgrade stays
+    // warm — but only if it still has a live cache to protect. A flag left on a
+    // chat nobody has touched for hours would otherwise buy an expensive
+    // re-warm at startup that the user never asked for.
+    if (record && record.kind !== "master" && record.keepWarm && !record.keepWarmUntil) {
+      const stillWarm = msSinceLastApi(record) < KEEP_WARM_CACHE_TTL_MS;
+      record = (await setKeepWarm(this.repoPath, this.chatId, stillWarm)) ?? record;
+    }
+    // The Master chat is always kept warm (see master.ts) — it's the chat the
+    // user returns to most, over a much longer window than ordinary chats.
+    this.keepWarmEnabled = keepWarmIsOn(record);
     if (!record || !this.keepWarmEnabled) {
       this.clearKeepWarm();
       return;
     }
     if (this.running || this.keepWarmTimer) return; // a turn end re-arms it
-    const lastApi = Date.parse(record.cost?.lastApiAt ?? record.updatedAt);
-    // An already-cold chat is left alone: a ping would pay the full re-write.
-    // The next real message warms it and starts the chain.
-    if (!Number.isFinite(lastApi) || Date.now() - lastApi >= KEEP_WARM_CACHE_TTL_MS) return;
-    this.keepWarmAnchorMs ||= lastApi;
-    this.scheduleKeepWarm(Math.max(0, lastApi + KEEP_WARM_INTERVAL_MS - Date.now()));
+    const sinceApi = msSinceLastApi(record);
+    this.keepWarmAnchorMs ||= Number.isFinite(sinceApi) ? Date.now() - sinceApi : Date.now();
+    this.scheduleKeepWarm(this.keepWarmDelayMs(record, sinceApi));
+  }
+
+  // 55 min after the last API call — or right now if the chat is already cold
+  // and someone is paying to keep it warm, since the alternative is a chat that
+  // can never recover from one missed ping. Capped at the budget's deadline, so
+  // the loop wakes to clear a spent budget rather than leaving it on the record.
+  private keepWarmDelayMs(record: ChatRecord, sinceApiMs: number): number {
+    const toPing =
+      sinceApiMs >= KEEP_WARM_CACHE_TTL_MS ? 0 : KEEP_WARM_INTERVAL_MS - sinceApiMs;
+    if (record.kind === "master") return Math.max(0, toPing);
+    // +1s so the tick lands on the far side of the deadline, never a hair short.
+    return Math.max(0, Math.min(toPing, keepWarmBudgetLeftMs(record) + 1_000));
   }
 
   private async keepWarmTick(): Promise<void> {
     this.keepWarmTimer = undefined;
     try {
-      const [record, prefs] = await Promise.all([
-        readChat(this.repoPath, this.chatId),
-        readPrefs(),
-      ]);
-      const hours = prefs.keepWarmHours ?? 0;
-      this.keepWarmEnabled = !!record?.keepWarm && !record.userMarkedFinished;
-      if (!record || !this.keepWarmEnabled || hours <= 0) return;
+      const record = await readChat(this.repoPath, this.chatId);
+      this.keepWarmEnabled = keepWarmIsOn(record);
+      // Genuinely off (deleted, finished, toggled off): nothing to re-arm.
+      if (!record || !this.keepWarmEnabled) return;
       if (!isClaudeModel(record.model) || !record.sessionId) return;
-      // Window over: stop pinging; the cache is allowed to expire.
-      if (Date.now() - this.keepWarmAnchorMs >= hours * 3_600_000) return;
-      const lastApi = Date.parse(record.cost?.lastApiAt ?? record.updatedAt);
-      if (Number.isFinite(lastApi) && Date.now() - lastApi >= KEEP_WARM_CACHE_TTL_MS) return;
-      // A running turn re-arms the timer when it ends; queued turns are about
-      // to do the same, so a ping would be wasted.
-      if (this.running || this.pendingUserTurns.length > 0 || record.queuedTurns?.length) return;
+      // Budget spent: stop pinging and clear it, so the chat goes cold on its
+      // own and nothing re-arms it after a restart. The Master's window is its
+      // own (master.ts) and is measured from its last activity instead.
+      if (record.kind === "master") {
+        if (Date.now() - this.keepWarmAnchorMs >= MASTER_KEEP_WARM_HOURS * 3_600_000) return;
+      } else if (keepWarmBudgetLeftMs(record) <= 0) {
+        this.keepWarmEnabled = false;
+        await setKeepWarm(this.repoPath, this.chatId, false).catch(() => undefined);
+        await this.broadcastStatus();
+        return;
+      }
+      // Busy right now: a turn end re-arms the timer, but come back anyway —
+      // returning here with no timer armed is how warming used to die for good.
+      if (this.running || this.pendingUserTurns.length > 0 || record.queuedTurns?.length) {
+        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
+        return;
+      }
       await this.runTurn({
         text: KEEP_ALIVE_PROMPT,
         model: record.model,
@@ -858,10 +922,14 @@ class AgentSession {
         `[keep-warm] ping failed for ${this.chatId}:`,
         err instanceof Error ? err.message : err,
       );
+      // A failed ping must not end the chain either.
+      this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
     }
   }
 
-  // A real turn just ended (or started): restart the keep-warm clock from now.
+  // A real turn just ended (or started): the cache clock restarts from now, so
+  // the next ping is 55 min out. The warmth *budget* is deliberately untouched
+  // — the tick re-reads the deadline and stops there.
   private noteRealActivity(): void {
     this.keepWarmAnchorMs = Date.now();
     this.scheduleKeepWarm(KEEP_WARM_INTERVAL_MS);
@@ -950,6 +1018,9 @@ class AgentSession {
       model: record.model,
       permissionMode: record.permissionMode,
       title: `Continue: ${record.title}`.slice(0, 60),
+      // The Master is a role, not a transcript: a handoff carries it over to
+      // the fresh chat (and re-points the registry below).
+      ...(record.kind === "master" ? { kind: "master" as const } : {}),
       worktreePath: record.worktreePath,
       worktreeBranch: record.worktreeBranch,
       context1m: record.context1m,
@@ -966,6 +1037,15 @@ class AgentSession {
       createdAt: new Date().toISOString(),
     };
     await setHandoffTo(this.repoPath, this.chatId, handoffTo);
+    if (record.kind === "master") {
+      await setMasterChatId(fresh.id).catch((err) =>
+        console.warn(
+          "[handoff] master registry re-point failed:",
+          err instanceof Error ? err.message : err,
+        ),
+      );
+      void getSession(this.repoPath, fresh.id).syncKeepWarm().catch(() => undefined);
+    }
     // Sidebar: add the new chat. Both events ride this chat's channel (the one
     // the sidebar is already subscribed to).
     this.broadcast({ type: "chat_created", chatId: this.chatId, summary: toSummary(fresh) });
@@ -1075,7 +1155,7 @@ class AgentSession {
     const looksLikeLimit = /rate.?limit|429|usage limit|quota|exceeded your/i.test(errorMessage);
     // The ~3 min usage cache is stale by definition once a turn hits a limit.
     if (looksLikeLimit) invalidateUsageCache();
-    const block = await getProviderUsageLimitBlock(model).catch(() => null);
+    const block = await getProviderUsageLimitBlock(model, this.claudeAccountId).catch(() => null);
     if (block) return block;
     if (looksLikeLimit) {
       return {
@@ -1102,20 +1182,17 @@ class AgentSession {
       ? null
       : await this.usageBlockForFailure(message, args.model);
     if (usageBlock) {
-      // Prefer falling back to Cursor/Codex immediately instead of parking the
-      // interrupted request while another provider still has quota.
+      // Prefer another Claude account with headroom instead of parking the
+      // interrupted request. Never switch to another model.
       if (isClaudeModel(args.model)) {
-        const fallback = await resolveClaudeUsageFallback(args.model);
-        if (fallback) {
+        const failedAccount = this.claudeAccountId ?? (await getActiveClaudeAccount()).id;
+        const switched = await switchAwayFromAccount(failedAccount);
+        if (switched) {
           console.log(
-            `[session] Claude hit usage mid-turn — falling back to ${fallback}`,
+            `[session] Claude hit usage mid-turn — switching account ${failedAccount} -> ${switched.id}`,
           );
           // pendingUserTurns drains in finally once this.running clears.
-          this.pendingUserTurns.unshift({
-            ...args,
-            model: fallback,
-            isRetry: true,
-          });
+          this.pendingUserTurns.unshift({ ...args, isRetry: true });
           return true;
         }
       }
@@ -1323,7 +1400,19 @@ class AgentSession {
   // Sends one Claude turn through the chat's CLI process, starting a new one
   // when there is none or the existing one can't take this turn.
   private async runClaudeTurn(turn: RunArgs): Promise<void> {
+    // Runs under whichever Claude account is active now; a process started
+    // under another account is replaced (see ClaudeLiveQuery.canReuse).
+    const account = await getActiveClaudeAccount();
+    this.claudeAccountId = account.id;
+    if (account.configDir) {
+      await shareConfig(account.configDir).catch((err) =>
+        console.warn(`[session] could not share config with account ${account.id}:`, err),
+      );
+      turn = { ...turn, claudeConfigDir: account.configDir };
+    }
     let live = this.live;
+    // A just-stopped turn may still be unwinding inside the CLI.
+    if (live) await live.settled();
     if (live && !live.canReuse(turn)) {
       if (live.hasRunningTasks()) {
         console.warn(
@@ -1337,8 +1426,8 @@ class AgentSession {
       const holder: { live?: ClaudeLiveQuery } = {};
       live = await ClaudeLiveQuery.start(turn, {
         onTasksChanged: (tasks) => this.mergeTasks(tasks, holder.live),
-        onUnsolicitedTurn: (notes) => {
-          if (holder.live) this.startBackgroundTurn(holder.live, notes);
+        onUnsolicitedTurn: (notes, steered) => {
+          if (holder.live) this.startBackgroundTurn(holder.live, notes, steered);
         },
         onClosed: () => {
           if (this.live === holder.live) this.live = undefined;
@@ -1352,23 +1441,70 @@ class AgentSession {
 
   // The CLI woke the model on its own after a background task settled. Give
   // that output a turn of its own in the chat, headed by the task summaries.
-  private startBackgroundTurn(live: ClaudeLiveQuery, notes: string[]): void {
+  // A steered message the CLI ran as its own turn is already in the
+  // transcript (see steer), so it gets no header.
+  private startBackgroundTurn(live: ClaudeLiveQuery, notes: string[], steered = false): void {
     if (this.running) {
-      this.pendingAdoption = { live, notes };
+      this.pendingAdoption = { live, notes, steered };
       return;
     }
     this.runTurn({
-      text: notes.join("\n") || "A background task finished.",
+      text: steered ? "" : notes.join("\n") || "A background task finished.",
       // Whatever model the process is running, regardless of the composer.
       model: live.currentModel,
       permissionMode: this.currentPermissionMode,
       origin: "system",
       originLabel: "Background task",
+      isRetry: steered,
       adoptLive: live,
     }).catch((e) =>
       console.warn(
         `[session] background turn failed for ${this.chatId}:`,
         e instanceof Error ? e.message : e,
+      ),
+    );
+  }
+
+  // Delivers a queued message into the running Claude turn without stopping
+  // it: the model sees it after its current tool round. When there is no
+  // Claude turn to steer (idle, or another provider), it runs as a normal
+  // turn instead, which waits for any in-flight turn to finish.
+  steer(turn: QueuedChatTurn): void {
+    if (this.running && !this.currentTurnSilent && this.live?.canSteer()) {
+      this.live.steer(turn.text, turn.attachments);
+      const userId = `u-${Date.now()}`;
+      const userEvent: ChatEvent = {
+        type: "user_message",
+        id: userId,
+        text: turn.text,
+        attachments: turn.attachments,
+        ts: new Date().toISOString(),
+        origin: turn.origin,
+        originLabel: turn.originLabel,
+      };
+      this.enqueuePersistence(async () => {
+        await this.record(userEvent);
+      });
+      this.broadcastUserEcho(
+        userId,
+        turn.text,
+        turn.attachments,
+        turn.origin,
+        turn.originLabel,
+      );
+      return;
+    }
+    void this.runTurn({
+      text: turn.text,
+      model: turn.model,
+      permissionMode: turn.permissionMode,
+      attachments: turn.attachments,
+      origin: turn.origin,
+      originLabel: turn.originLabel,
+    }).catch((err) =>
+      console.warn(
+        `[session] steered turn failed for ${this.chatId}:`,
+        err instanceof Error ? err.message : err,
       ),
     );
   }
@@ -1452,6 +1588,7 @@ class AgentSession {
         this.pendingAdoption = {
           live: args.adoptLive,
           notes: args.text ? [args.text] : [],
+          steered: args.isRetry,
         };
         return;
       }
@@ -1506,10 +1643,10 @@ class AgentSession {
       }
     }
 
-    // Check usage limit before starting a new turn. When Claude is exhausted
-    // we first try Cursor (subscription), then Codex. Only queue when none
-    // of the fallbacks are available. Cursor-selected models check Cursor
-    // limits instead of Claude's. An adopted background turn has already run.
+    // Check usage limit before starting a new turn. A blocked turn is queued
+    // until its own provider resets; it is never moved to another model.
+    // Cursor / Codex models check their own provider's limits. An adopted
+    // background turn has already run.
     if (!args.silent && !args.adoptLive) {
       if (isCursorModel(args.model)) {
         const cursorBlock = await getCursorUsageLimitBlock();
@@ -1524,30 +1661,35 @@ class AgentSession {
           return;
         }
       } else if (isClaudeModel(args.model)) {
-        const usageBlock = await getUsageLimitBlock(args.model);
+        // Switches to another logged-in account with headroom first (when
+        // auto-switch is on) before queueing.
+        const account = await pickAccountForTurn();
+        const usageBlock = await getUsageLimitBlock(args.model, account.configDir ?? undefined);
         if (usageBlock) {
-          const fallback = await resolveClaudeUsageFallback(args.model);
-          if (fallback) {
-            console.log(`[session] Claude blocked — falling back to ${fallback}`);
-            args = { ...args, model: fallback };
-          } else {
-            await this.queueForUsageLimit(args, usageBlock);
-            return;
-          }
+          await this.queueForUsageLimit(args, usageBlock);
+          return;
         }
       }
     }
 
     if (args.keepAlive) {
-      // Pings are best-effort: skip when the cap is saturated or the plan is
-      // out of usage rather than waiting or queueing.
+      // Pings are best-effort: skip when the plan is out of usage (or an
+      // opt-in concurrency cap is saturated) rather than waiting or queueing.
       turnSlots.setMax((await readPrefs()).maxConcurrentTurns);
-      if (this.running) return;
-      if (await getUsageLimitBlock(args.model)) {
-        this.scheduleKeepWarm(KEEP_WARM_INTERVAL_MS);
+      // Every one of these gives up on this ping — but never on the chain.
+      if (this.running) {
+        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
         return;
       }
-      if (this.running) return;
+      const account = await getActiveClaudeAccount();
+      if (await getUsageLimitBlock(args.model, account.configDir ?? undefined)) {
+        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
+        return;
+      }
+      if (this.running) {
+        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
+        return;
+      }
       if (!turnSlots.tryAcquire()) {
         this.scheduleKeepWarm(KEEP_WARM_RETRY_MS);
         return;
@@ -1562,48 +1704,52 @@ class AgentSession {
     // A real message restarts the keep-warm clock when its turn ends.
     if (!args.keepAlive) this.clearKeepWarm();
 
-    const record = await withChatLock(this.repoPath, this.chatId, async () => {
-      const r = await readChat(this.repoPath, this.chatId);
-      if (!r) return null;
-      r.model = args.model;
-      r.permissionMode = args.permissionMode;
-      await writeChat(this.repoPath, r);
-      return r;
-    });
-    if (!record) {
+    // The user message and revert checkpoint (so the user can restore file
+    // state to this exact point later) land in the same write as the turn's
+    // settings — see beginChatTurn.
+    const ts = new Date().toISOString();
+    const userEvent: ChatEvent | null = args.isRetry
+      ? null
+      : {
+          type: "user_message",
+          id: `u-${Date.now()}`,
+          text: args.text,
+          attachments: args.attachments,
+          ts,
+          origin: args.origin,
+          originLabel: args.originLabel,
+        };
+    const checkpointId = args.silent ? null : makeCheckpointId();
+    const begun = await beginChatTurn(
+      this.repoPath,
+      this.chatId,
+      { model: args.model, permissionMode: args.permissionMode },
+      [
+        ...(userEvent ? [userEvent] : []),
+        ...(checkpointId
+          ? [{ type: "revert_checkpoint" as const, checkpointId, ts }]
+          : []),
+      ],
+    );
+    if (!begun) {
       this.running = false;
       this.releaseSlot();
       throw new Error(`Chat ${this.chatId} not found`);
     }
+    const { record, isFirstUserTurn } = begun;
     this.costState = record.cost ?? { totalUsd: 0, lastTurnUsd: 0, turns: 0 };
-    this.keepWarmEnabled = !!record.keepWarm && !record.userMarkedFinished;
+    this.keepWarmEnabled = keepWarmIsOn(record);
 
-    const isFirstUserTurn = !record.events.some(
-      (e) => e.type === "user_message",
-    );
-
-    if (!args.isRetry) {
-      // Persist + echo the user message so subscribers see it immediately.
-      const userId = `u-${Date.now()}`;
-      const ts = new Date().toISOString();
-      const userEvent: ChatEvent = {
-        type: "user_message",
-        id: userId,
-        text: args.text,
-        attachments: args.attachments,
-        ts,
-        origin: args.origin,
-        originLabel: args.originLabel,
-      };
-      const afterUser = await this.record(userEvent);
+    if (userEvent?.type === "user_message") {
+      // Echo the user message so subscribers see it immediately.
       this.broadcastUserEcho(
-        userId,
+        userEvent.id,
         args.text,
         args.attachments,
         args.origin,
         args.originLabel,
       );
-      await this.pushStatusFor(afterUser);
+      await this.pushStatusFor(record);
 
       // Fire-and-forget title generation — never blocks the turn. Skipped for
       // coordinator chats (always titled "Coordinator") and subagent chats
@@ -1611,17 +1757,6 @@ class AgentSession {
       if (isFirstUserTurn && (record.kind ?? "user") === "user") {
         void this.generateAndApplyTitle(args.text);
       }
-    }
-
-    // Persist a revert_checkpoint event before every non-silent turn so the
-    // user can restore file state to this exact point later.
-    const checkpointId = args.silent ? null : makeCheckpointId();
-    if (checkpointId) {
-      await this.record({
-        type: "revert_checkpoint",
-        checkpointId,
-        ts: new Date().toISOString(),
-      });
     }
 
     // Track the latest model so we can use it for the auto-compact turn.
@@ -1639,7 +1774,9 @@ class AgentSession {
               parentChatId: record.parentChatId ?? "unknown",
               task: record.task,
             })
-          : undefined;
+          : chatKind === "master"
+            ? masterPrompt({ keepWarmHours: MASTER_KEEP_WARM_HOURS })
+            : undefined;
     const coordination = {
       ...(systemPromptAppend ? { systemPromptAppend } : {}),
       extraMcpServers: {
@@ -1650,6 +1787,16 @@ class AgentSession {
           parentChatId: record.parentChatId,
           task: record.task,
         }),
+        // The Master's cross-repo toolset (see masterTools.ts). Only this one
+        // chat gets it — every other chat is scoped to its own repo.
+        ...(chatKind === "master"
+          ? {
+              "buildover-master": makeMasterMcp({
+                repoPath: this.repoPath,
+                chatId: this.chatId,
+              }),
+            }
+          : {}),
       },
     };
 
@@ -1658,6 +1805,7 @@ class AgentSession {
     // but we don't broadcast them so they don't appear as visible chat turns.
     const SILENT_SUPPRESS = new Set([
       "assistant",
+      "assistant_partial",
       "user_tool_results",
       "result",
       "user_message_echo",
@@ -1706,6 +1854,18 @@ class AgentSession {
       // Track context usage so we can auto-compact after the turn ends.
       if (tagged.type === "context_usage") {
         this.lastContextUsedTokens = tagged.usedTokens;
+      }
+      // These events only exist because a request just hit the API, so the
+      // prompt cache's hour restarts NOW, not when the turn eventually ends.
+      // Without this a chat mid-turn reports the age of its previous turn and
+      // looks cold while it is demonstrably hot.
+      if (
+        tagged.type === "assistant" ||
+        tagged.type === "user_tool_results" ||
+        tagged.type === "context_usage" ||
+        tagged.type === "result"
+      ) {
+        this.noteApiActivity();
       }
       // The SDK reports a cumulative cost; convert it to this turn's cost so
       // every consumer (result line, running total) sees per-turn figures.
@@ -1766,7 +1926,8 @@ class AgentSession {
       if (!args.silent || !SILENT_SUPPRESS.has(tagged.type)) {
         this.broadcast(tagged);
       }
-      this.queuePersistAgentEvent(tagged);
+      // Live deltas are superseded by the finished block, which is persisted.
+      if (tagged.type !== "assistant_partial") this.queuePersistAgentEvent(tagged);
     };
 
     // Shared permission bridge for providers that can pause a live turn. Claude
@@ -1878,52 +2039,19 @@ class AgentSession {
           abortController: this.abort,
         });
       } else {
-      // Prefer the Claude-specific session id so a prior Cursor / Codex turn
-      // cannot poison Claude SDK resume. Fall back to the legacy top-level
-      // sessionId only when it is genuinely a Claude handle: it must not equal
-      // either other provider's stored id (robust for current records) and must
-      // not carry a known non-Claude id prefix (covers legacy records written
-      // before per-provider tracking). Codex ids are `appserver:` / `codex-`,
-      // Cursor ids may be `cursor-`; the old `openai-` check never matched them,
-      // so switching a Codex chat to Claude resumed the Codex id and failed with
-      // "No conversation found".
-      const nonClaudeSessionPrefix = /^(appserver:|codex-|cursor-|openai-)/;
-      const claudeSessionId =
-        record.providerSessions?.claude ??
-        (record.sessionId &&
-        !nonClaudeSessionPrefix.test(record.sessionId) &&
-        record.providerSessions?.cursor !== record.sessionId &&
-        record.providerSessions?.openai !== record.sessionId
-          ? record.sessionId
-          : undefined);
-      // When switching to Claude with no prior Claude session, inject a text
-      // history preamble so the model sees earlier Cursor/OpenAI turns.
-      let claudePrompt = args.text;
-      if (
-        !claudeSessionId &&
-        record.events.some((e) => e.type === "user_message" || e.type === "assistant")
-      ) {
-        const lines: string[] = [];
-        for (const ev of record.events) {
-          if (ev.type === "user_message") lines.push(`User: ${ev.text}`);
-          else if (ev.type === "assistant") {
-            const t = ev.content
-              .filter((b): b is { type: "text"; text: string } => b.type === "text")
-              .map((b) => b.text)
-              .join("");
-            if (t.trim()) lines.push(`Assistant: ${t}`);
-          }
-        }
-        if (lines.length) {
-          let body = lines.join("\n\n");
-          if (body.length > 12_000) body = body.slice(-12_000);
-          claudePrompt =
-            "Previous conversation in this Buildover chat (for context; continue naturally):\n\n" +
-            body +
-            "\n\n---\n\n" +
-            args.text;
-        }
-      }
+      // Resume Claude's own session, anchored at the last message Claude
+      // produced, and hand over anything other providers did since as a
+      // transcript (see planClaudeResume).
+      const resume = planClaudeResume(record);
+      const claudeSessionId = resume.sessionId;
+      const claudePrompt = resume.history
+        ? (resume.sessionId
+            ? "Since your last message in this chat, other models (Cursor / Codex) handled these turns. This is what happened (tool calls abbreviated):\n\n"
+            : "Previous conversation in this Buildover chat (for context; continue naturally):\n\n") +
+          resume.history +
+          "\n\n---\n\n" +
+          args.text
+        : args.text;
       const claudeTurn: RunArgs = {
         prompt: claudePrompt,
         model: args.model,
@@ -1931,7 +2059,7 @@ class AgentSession {
         // One-shot marker set by fork / branch-switch / revert: resume the
         // session only up to this SDK message uuid so the model never sees
         // the edited-away / reverted history.
-        resumeSessionAt: record.resumeSessionAt,
+        resumeSessionAt: resume.resumeSessionAt,
         cwd: execCwd,
         permissionMode: args.permissionMode,
         getPermissionMode: () => this.currentPermissionMode,
@@ -2213,7 +2341,7 @@ class AgentSession {
       if (args.keepAlive) this.scheduleKeepWarm(KEEP_WARM_INTERVAL_MS);
       else this.noteRealActivity();
       if (adopting) {
-        this.startBackgroundTurn(adoption!.live, adoption!.notes);
+        this.startBackgroundTurn(adoption!.live, adoption!.notes, adoption!.steered);
       } else if (handoffRequest && !wasAborted && !queuedForUsage && !args.silent) {
         // The agent called Handoff: write the note and open the fresh chat.
         void this.runAgentRequestedHandoff(handoffRequest.reason);

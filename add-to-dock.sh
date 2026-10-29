@@ -44,51 +44,28 @@ CONTENTS="$APP_PATH/Contents"
 
 echo "▶ Building $APP_PATH …"
 
+# The bundle is a full copy of node_modules' Electron.app with its own bundle
+# ID. It used to be a shell script that exec'd the node_modules binary, but
+# macOS attributes notifications to the *running* bundle, so every banner went
+# to "com.github.Electron" (whose notification permission is separate, and was
+# off) instead of buildover. Copying locally doesn't add quarantine and always
+# matches this machine's architecture. Re-run this script after upgrading the
+# electron package so the copy picks up the new binary.
+ELECTRON_APP="$(dirname "$(dirname "$(dirname "$ELECTRON_REAL")")")"
+
 # Remove any previous installation
 rm -rf "$APP_PATH"
-
-mkdir -p "$CONTENTS/MacOS"
+ditto "$ELECTRON_APP" "$APP_PATH"
+rm -f "$CONTENTS/Resources/default_app.asar"
 mkdir -p "$CONTENTS/Resources/app"
 
-# Info.plist ─────────────────────────────────────────────────────────────────
-cat > "$CONTENTS/Info.plist" << 'PLIST'
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0">
-<dict>
-    <key>CFBundleExecutable</key>        <string>buildover</string>
-    <key>CFBundleIdentifier</key>        <string>com.buildover.app</string>
-    <key>CFBundleName</key>              <string>buildover</string>
-    <key>CFBundleDisplayName</key>       <string>buildover</string>
-    <key>CFBundleIconFile</key>          <string>electron.icns</string>
-    <key>CFBundleVersion</key>           <string>1.0</string>
-    <key>CFBundleShortVersionString</key><string>1.0</string>
-    <key>CFBundlePackageType</key>       <string>APPL</string>
-    <key>NSHighResolutionCapable</key>   <true/>
-    <key>LSMinimumSystemVersion</key>    <string>11.0</string>
-</dict>
-</plist>
-PLIST
-
-# Launcher shell script — delegates to the Electron binary from node_modules.
-# Using a shell script instead of copying the binary means:
-#   • the correct architecture binary (arm64 or x64) is always used for this machine
-#   • no "app is damaged" / "not supported on this version" Gatekeeper complaints
-#     caused by copying a binary built for a different architecture
-#
-# We must pass the app directory explicitly. When a copied Electron binary sits
-# inside a .app bundle it knows to look in Contents/Resources/app automatically.
-# But when we exec the Electron binary from node_modules, it looks for resources
-# relative to *its own* bundle (node_modules/electron/dist/Electron.app) and
-# finds nothing — showing the default "no app loaded" screen. Passing the path
-# as the first argument overrides that lookup.
-cat > "$CONTENTS/MacOS/buildover" << LAUNCHER
-#!/usr/bin/env bash
-SCRIPT_DIR="\$(cd "\$(dirname "\$0")" && pwd)"
-APP_DIR="\$(dirname "\$SCRIPT_DIR")/Resources/app"
-exec "${ELECTRON_REAL}" "\$APP_DIR" "\$@"
-LAUNCHER
-chmod +x "$CONTENTS/MacOS/buildover"
+# Info.plist: own bundle ID and display name. CFBundleName and the executable
+# stay "Electron" because Electron locates its helper apps from them.
+PLIST="$CONTENTS/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier com.buildover.app" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName buildover" "$PLIST" 2>/dev/null \
+  || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string buildover" "$PLIST"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIconFile electron.icns" "$PLIST"
 
 # package.json stub required by Electron to locate main.js ───────────────────
 cat > "$CONTENTS/Resources/app/package.json" << 'JSON'
@@ -105,6 +82,10 @@ JS
 if [ -f "$REPO_DIR/build/icon.icns" ]; then
   cp "$REPO_DIR/build/icon.icns" "$CONTENTS/Resources/electron.icns"
 fi
+
+# Editing Info.plist invalidates Electron's signature; re-sign ad hoc so macOS
+# will launch it and keep notification permission tied to this bundle.
+codesign --force --deep --sign - "$APP_PATH" >/dev/null 2>&1
 
 # Register the new bundle with Launch Services
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister \

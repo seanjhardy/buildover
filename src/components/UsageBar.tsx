@@ -1,19 +1,18 @@
-import { useState } from "react";
-import { CircleCheck, LogIn, RefreshCw } from "lucide-react";
-import { useUsage, type UsageBucket } from "../hooks/useUsage.js";
+import { useEffect, useRef, useState } from "react";
+import { LogIn, Plus, RefreshCw, Trash2 } from "lucide-react";
+import { useUsage, type ClaudeAccountSummary, type UsageBucket } from "../hooks/useUsage.js";
 import { api } from "../lib/api.js";
+import { paceSummary } from "../lib/usagePace.js";
 
 function colorFor(util: number): string {
-  if (util >= 80) return "var(--app-error)";
-  if (util >= 50) return "var(--app-warning)";
+  if (util >= 90) return "var(--app-error)";
+  if (util >= 70) return "var(--app-warning)";
   return "var(--app-claude-orange)";
 }
 
 function formatTimeUntil(iso: string | null): string {
   if (!iso) return "—";
-  const now = Date.now();
-  const target = new Date(iso).getTime();
-  const ms = target - now;
+  const ms = new Date(iso).getTime() - Date.now();
   if (ms <= 0) return "now";
   const totalMin = Math.floor(ms / 60000);
   const days = Math.floor(totalMin / (60 * 24));
@@ -21,30 +20,28 @@ function formatTimeUntil(iso: string | null): string {
   const mins = totalMin % 60;
   if (days > 0) return `${days}d ${hours}h`;
   if (hours > 0) return `${hours}h ${mins}m`;
-  return `${mins}m`;
+  return mins > 0 ? `${mins}m` : "<1m";
 }
 
-function formatResetDate(iso: string | null): string {
-  if (!iso) return "—";
+/** Today's resets as a time, later ones as the weekday ("Wed 3pm"). */
+function resets(iso: string | null): string {
+  if (!iso) return "";
   const d = new Date(iso);
-  return d.toLocaleString(undefined, {
-    weekday: "short",
-    day: "numeric",
-    hour: "numeric",
-    minute: "2-digit",
-  });
+  const time = d
+    .toLocaleTimeString(undefined, { hour: "numeric", minute: d.getMinutes() ? "2-digit" : undefined, hour12: true })
+    .replace(/\s/g, "")
+    .toLowerCase();
+  return d.getTime() - Date.now() < 86_400_000
+    ? time
+    : `${d.toLocaleDateString(undefined, { weekday: "short" })} ${time}`;
 }
 
-function dollars(cents: number | undefined): string {
-  if (cents == null || !Number.isFinite(cents)) return "—";
-  return `$${(cents / 100).toFixed(2)}`;
-}
-
-function windowLabel(seconds: number | undefined, fallback: string): string {
-  if (!seconds) return fallback;
-  if (seconds <= 6 * 60 * 60) return "Session";
-  if (seconds <= 8 * 24 * 60 * 60) return "Weekly";
-  return `${Math.round(seconds / 86_400)} day`;
+function weekday(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return d.getTime() - Date.now() < 86_400_000
+    ? resets(iso)
+    : d.toLocaleDateString(undefined, { weekday: "short" });
 }
 
 function bucketBlocked(bucket: UsageBucket | null | undefined): boolean {
@@ -56,53 +53,35 @@ function bucketBlocked(bucket: UsageBucket | null | undefined): boolean {
   return true;
 }
 
-function Bar({
-  bucket,
-  label,
-  meta,
-}: {
-  bucket: UsageBucket;
-  label: string;
-  meta?: string;
-}) {
-  const pct = Math.max(0, Math.min(100, bucket.utilization));
+/** A Decisions-style meter; `pace` marks where even use would be by now. */
+function Meter({ name, bucket, pace }: { name: string; bucket: UsageBucket; pace?: number }) {
+  const used = Math.round(Math.max(0, Math.min(100, bucket.utilization)));
   return (
-    <div className="usage-row">
-      <div className="usage-row-label">{label}</div>
-      <div className="usage-row-bar">
-        <div
-          className="usage-row-fill"
-          style={{ width: `${pct}%`, background: colorFor(pct) }}
-        />
+    <div className={`meter ${used >= 90 ? "high" : ""}`}>
+      <div className="meter-row">
+        <span>{name}</span>
+        <span className="meter-value">
+          <span>{used >= 100 ? `back ${resets(bucket.resetsAt)}` : `${used}%`}</span>
+          {used < 100 && (
+            <span className="meter-reset">
+              {bucket.resetsAt ? `resets ${resets(bucket.resetsAt)}` : "not started"}
+            </span>
+          )}
+        </span>
       </div>
-      <div className="usage-row-meta">
-        {pct.toFixed(0)}%
-        {meta ? ` · ${meta}` : ` · ${formatResetDate(bucket.resetsAt)}`}
+      <div className="meter-track">
+        <div className="meter-fill" style={{ width: `${used}%` }} />
+        {pace != null && pace > 0 && pace < 100 && (
+          <div className="meter-pace" style={{ left: `${pace}%` }} title={`Even pace: ${pace}% by now`} />
+        )}
       </div>
     </div>
-  );
-}
-
-function CursorMark({ size = 12 }: { size?: number }) {
-  return (
-    <svg
-      width={size}
-      height={size}
-      viewBox="0 0 24 24"
-      fill="currentColor"
-      aria-hidden="true"
-      className="usage-provider-icon"
-    >
-      <path d="M4 4l16 8-16 8V4zm3.2 5.2v5.6L13.4 12 7.2 9.2z" />
-    </svg>
   );
 }
 
 export function UsageBar() {
   const {
     usage,
-    cursorUsage,
-    codexUsage,
     claudeAuth,
     claudeError,
     claudeErrorStatus,
@@ -112,24 +91,223 @@ export function UsageBar() {
     refreshClaudeAuth,
   } = useUsage();
   const [hover, setHover] = useState(false);
+  // Opened by a click or tap, so the popover works without a mouse to hover.
+  const [pinned, setPinned] = useState(false);
+  // Where the trigger ends on screen; a phone pins the popover just below it.
+  const [popoverTop, setPopoverTop] = useState<number | null>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!pinned) return;
+    const onPointerDown = (e: PointerEvent) => {
+      if (!barRef.current?.contains(e.target as Node)) setPinned(false);
+    };
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setPinned(false);
+    };
+    document.addEventListener("pointerdown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [pinned]);
   const [loginBusy, setLoginBusy] = useState(false);
   const [loginError, setLoginError] = useState<string | null>(null);
+  const [accountBusyId, setAccountBusyId] = useState<string | null>(null);
+  const [accountError, setAccountError] = useState<string | null>(null);
+  // A login waiting for the code claude.ai shows after signing in (the server
+  // can't receive the OAuth callback itself). accountId null = primary.
+  const [loginPrompt, setLoginPrompt] = useState<{ accountId: string | null; url: string } | null>(
+    null,
+  );
+  const [loginCode, setLoginCode] = useState("");
+  const [codeBusy, setCodeBusy] = useState(false);
+
+  const accounts = usage?.accounts ?? [];
+  const autoSwitch = usage?.autoSwitch ?? true;
+  const activeAccount = accounts.find((a) => a.active);
+  // One row per Claude account. Before the server reports accounts, the
+  // signed-in status alone stands in for the primary account.
+  const claudeAccounts: ClaudeAccountSummary[] =
+    accounts.length > 0
+      ? accounts
+      : claudeAuth || usage
+        ? [
+            {
+              id: "primary",
+              label: "Primary",
+              active: true,
+              loggedIn: claudeAuth?.loggedIn ?? false,
+              email: claudeAuth?.email,
+              fiveHour: usage?.fiveHour ?? null,
+              sevenDay: usage?.sevenDay ?? null,
+            },
+          ]
+        : [];
+
+  // Polls /api/claude/accounts until the given account's login attempt
+  // finishes (succeeded, failed, or timed out), mirroring handleClaudeLogin's
+  // polling loop but scoped to one account among several.
+  const pollAccountLogin = async (id: string) => {
+    const deadline = Date.now() + 10 * 60_000;
+    try {
+      while (Date.now() < deadline) {
+        await new Promise((resolve) => window.setTimeout(resolve, 1_000));
+        const result = await api.getClaudeAccounts().catch(() => null);
+        const account = result?.accounts.find((a) => a.id === id);
+        if (!account) continue;
+        if (account.login?.state === "running" && account.login.url) {
+          setLoginPrompt({ accountId: id, url: account.login.url });
+        }
+        if (account.login?.state === "succeeded" && account.loggedIn) {
+          await refresh();
+          return;
+        }
+        if (account.login?.state === "failed") {
+          throw new Error(account.login.error ?? "Claude login did not complete. Please try again.");
+        }
+      }
+      throw new Error("Claude login timed out. Please try again.");
+    } finally {
+      setLoginPrompt(null);
+      setLoginCode("");
+    }
+  };
+
+  const submitLoginCode = async () => {
+    if (!loginPrompt || codeBusy) return;
+    setCodeBusy(true);
+    try {
+      await api.submitClaudeLoginCode(loginCode, loginPrompt.accountId ?? undefined);
+      setLoginCode("");
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      if (loginPrompt.accountId) setAccountError(message);
+      else setLoginError(message);
+    } finally {
+      setCodeBusy(false);
+    }
+  };
+
+  const loginCodePanel = (accountId: string | null) =>
+    loginPrompt && loginPrompt.accountId === accountId ? (
+      <div className="usage-login-code">
+        <a
+          className="usage-login-button"
+          href={loginPrompt.url}
+          target="_blank"
+          rel="noreferrer"
+        >
+          <LogIn size={12} />
+          Open Claude sign-in
+        </a>
+        <div className="usage-note">Sign in, then paste the code claude.ai shows you:</div>
+        <form
+          className="usage-login-code-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void submitLoginCode();
+          }}
+        >
+          <input
+            value={loginCode}
+            onChange={(e) => setLoginCode(e.target.value)}
+            placeholder="Paste code"
+            autoComplete="off"
+            spellCheck={false}
+          />
+          <button
+            type="submit"
+            className="usage-login-button"
+            disabled={codeBusy || !loginCode.trim()}
+          >
+            {codeBusy ? <RefreshCw size={12} className="spin" /> : "Submit"}
+          </button>
+        </form>
+      </div>
+    ) : null;
+
+  const handleAddAccount = async () => {
+    if (accountBusyId) return;
+    setAccountError(null);
+    setAccountBusyId("new");
+    try {
+      const created = await api.addClaudeAccount();
+      setAccountBusyId(created.id);
+      await api.startClaudeAccountLogin(created.id);
+      await pollAccountLogin(created.id);
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAccountBusyId(null);
+    }
+  };
+
+  const handleAccountLogin = async (id: string) => {
+    if (accountBusyId) return;
+    setAccountError(null);
+    setAccountBusyId(id);
+    try {
+      await api.startClaudeAccountLogin(id);
+      await pollAccountLogin(id);
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setAccountBusyId(null);
+    }
+  };
+
+  const handleActivateAccount = async (id: string) => {
+    setAccountError(null);
+    try {
+      await api.activateClaudeAccount(id);
+      await refresh();
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleRemoveAccount = async (id: string) => {
+    setAccountError(null);
+    try {
+      await api.removeClaudeAccount(id);
+      await refresh();
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+  };
+
+  const handleToggleAutoSwitch = async () => {
+    setAccountError(null);
+    try {
+      await api.setClaudeAutoSwitch(!autoSwitch);
+      await refresh();
+    } catch (err) {
+      setAccountError(err instanceof Error ? err.message : String(err));
+    }
+  };
 
   const session = usage?.fiveHour;
   const sessionPct = session ? Math.round(session.utilization) : null;
-  const cursorTotal = cursorUsage?.total;
-  const cursorPct = cursorTotal ? Math.round(cursorTotal.utilization) : null;
-  const codexPrimary = codexUsage?.primary;
-  const codexPct = codexPrimary ? Math.round(codexPrimary.utilization) : null;
+  const pace = paceSummary(claudeAccounts);
+  const paceById = new Map(pace.accounts.map((a) => [a.id, a]));
+  const n = pace.accounts.length;
+  const paceHeadline =
+    pace.verdict === "over"
+      ? pace.runsOutAt
+        ? `▲ Ahead of pace · runs out ${resets(pace.runsOutAt)}`
+        : `▲ ${pace.delta}% ahead of pace · slow down`
+      : pace.verdict === "under"
+        ? `▼ ${-pace.delta}% behind pace · use more`
+        : "● On pace";
 
   const claudeBlocked =
     !!usage &&
     [usage.fiveHour, usage.sevenDay, usage.sevenDaySonnet, usage.sevenDayOpus].some(
       bucketBlocked,
     );
-  const cursorBlocked = bucketBlocked(cursorUsage?.total);
-  const codexBlocked = codexUsage?.quotaExceeded === true;
-  const isBlocked = claudeBlocked || cursorBlocked || codexBlocked;
+  const isBlocked = claudeBlocked;
   const claudeSignedOut = claudeAuth?.loggedIn === false;
 
   const handleClaudeLogin = async () => {
@@ -138,10 +316,13 @@ export function UsageBar() {
     setLoginError(null);
     try {
       await api.startClaudeLogin();
-      const deadline = Date.now() + 5 * 60_000;
+      const deadline = Date.now() + 10 * 60_000;
       while (Date.now() < deadline) {
         await new Promise((resolve) => window.setTimeout(resolve, 1_000));
         const status = await refreshClaudeAuth();
+        if (status?.login.state === "running" && status.login.url) {
+          setLoginPrompt({ accountId: null, url: status.login.url });
+        }
         if (!status || status.login.state === "running") continue;
         if (status.login.state === "succeeded" && status.loggedIn) {
           await refresh();
@@ -156,191 +337,202 @@ export function UsageBar() {
       setLoginError(err instanceof Error ? err.message : String(err));
     } finally {
       setLoginBusy(false);
+      setLoginPrompt(null);
+      setLoginCode("");
     }
   };
 
-  const fetchedAt =
-    usage?.fetchedAt ?? cursorUsage?.fetchedAt ?? codexUsage?.fetchedAt;
+  const fetchedAt = usage?.fetchedAt;
 
   return (
     <div
+      ref={barRef}
       className="usage-bar"
-      onMouseEnter={() => setHover(true)}
-      onMouseLeave={() => setHover(false)}
+      // Touch taps also fire enter events; only a real mouse hovers.
+      onPointerEnter={(e) => e.pointerType === "mouse" && setHover(true)}
+      onPointerLeave={(e) => e.pointerType === "mouse" && setHover(false)}
     >
       <button
         className="usage-trigger"
-        onClick={refresh}
-        title="Click to refresh"
+        onClick={(e) => {
+          if (!pinned) {
+            setPopoverTop(e.currentTarget.getBoundingClientRect().bottom);
+            void refresh();
+          }
+          setPinned(!pinned);
+        }}
+        aria-expanded={pinned || hover}
         style={isBlocked || claudeSignedOut ? { fontWeight: 600 } : undefined}
       >
-        {error &&
-        !usage &&
-        !cursorUsage &&
-        !codexUsage &&
-        !claudeSignedOut &&
-        claudeErrorStatus !== 429 ? (
+        {error && !usage && !claudeSignedOut && claudeErrorStatus !== 429 ? (
           <span style={{ color: "var(--app-error)" }}>usage error</span>
-        ) : sessionPct == null &&
-          cursorPct == null &&
-          codexPct == null &&
-          !isBlocked ? (
-          <span>{loading ? "loading usage…" : "usage"}</span>
-        ) : (
+        ) : claudeSignedOut ? (
+          <span style={{ color: "var(--app-error)" }}>Claude signed out</span>
+        ) : claudeBlocked && pace.accounts.every((a) => a.left <= 0) ? (
+          <span style={{ color: "var(--app-error)" }}>
+            ⚠ Claude limit{session?.resetsAt ? ` · ${formatTimeUntil(session.resetsAt)}` : ""}
+          </span>
+        ) : pace.accounts.length > 0 ? (
           <>
-            {(() => {
-              // One chip per provider: a red "⚠ … limit" when that specific
-              // provider is blocked, otherwise its live percentage. This keeps
-              // a Codex/Cursor limit from implying Claude is unavailable.
-              const chips: JSX.Element[] = [];
-              if (claudeSignedOut) {
-                chips.push(
-                  <span key="claude" style={{ color: "var(--app-error)" }}>
-                    Claude signed out
-                  </span>,
-                );
-              } else if (claudeBlocked) {
-                chips.push(
-                  <span key="claude" style={{ color: "var(--app-error)" }}>
-                    ⚠ Claude limit
-                    {session?.resetsAt
-                      ? ` · ${formatTimeUntil(session.resetsAt)}`
-                      : ""}
-                  </span>,
-                );
-              } else if (sessionPct != null) {
-                chips.push(
-                  <span key="claude" style={{ color: colorFor(sessionPct) }}>
-                    Claude {sessionPct}%
-                  </span>,
-                );
-              } else if (claudeErrorStatus === 429) {
-                chips.push(
-                  <span key="claude" style={{ color: "var(--app-warning)" }}>
-                    Claude usage delayed
-                  </span>,
-                );
-              }
-              if (cursorBlocked) {
-                chips.push(
-                  <span
-                    key="cursor"
-                    className="usage-trigger-cursor"
-                    style={{ color: "var(--app-error)" }}
-                  >
-                    <CursorMark />⚠ Cursor limit
-                    {cursorTotal?.resetsAt
-                      ? ` · ${formatTimeUntil(cursorTotal.resetsAt)}`
-                      : ""}
-                  </span>,
-                );
-              } else if (cursorPct != null) {
-                chips.push(
-                  <span
-                    key="cursor"
-                    className="usage-trigger-cursor"
-                    style={{ color: colorFor(cursorPct) }}
-                  >
-                    <CursorMark />
-                    Cursor {cursorPct}%
-                  </span>,
-                );
-              }
-              if (codexBlocked) {
-                chips.push(
-                  <span key="codex" style={{ color: "var(--app-error)" }}>
-                    ⚠ Codex limit
-                    {codexPrimary?.resetsAt
-                      ? ` · ${formatTimeUntil(codexPrimary.resetsAt)}`
-                      : ""}
-                  </span>,
-                );
-              } else if (codexPct != null) {
-                chips.push(
-                  <span key="codex" style={{ color: colorFor(codexPct) }}>
-                    Codex {codexPct}%
-                  </span>,
-                );
-              }
-              return chips.flatMap((chip, i) =>
-                i === 0
-                  ? [chip]
-                  : [
-                      <span key={`sep-${i}`} className="usage-trigger-sep">
-                        ·
-                      </span>,
-                      chip,
-                    ],
-              );
-            })()}
-            {loading && <span className="usage-trigger-sep">refreshing…</span>}
+            <span className={`usage-verdict ${pace.verdict}`}>
+              {paceHeadline}
+            </span>
           </>
+        ) : sessionPct != null ? (
+          <span style={{ color: colorFor(sessionPct) }}>Claude {sessionPct}%</span>
+        ) : claudeErrorStatus === 429 ? (
+          <span style={{ color: "var(--app-warning)" }}>Claude usage delayed</span>
+        ) : (
+          <span>{loading ? "loading usage…" : "usage"}</span>
         )}
+        {loading && <span className="usage-trigger-sep">refreshing…</span>}
       </button>
-      {hover && (
-        <div className="usage-popover" role="dialog">
+      {(hover || pinned || loginPrompt) && (
+        <div
+          className="usage-popover"
+          role="dialog"
+          style={
+            popoverTop != null
+              ? ({ "--usage-popover-top": `${popoverTop + 8}px` } as React.CSSProperties)
+              : undefined
+          }
+        >
           {isBlocked && (
             <div className="usage-limit-warning">
-              ⚠ Usage limit reached for{" "}
-              {[
-                claudeBlocked ? "Claude" : "",
-                cursorBlocked ? "Cursor" : "",
-                codexBlocked ? "Codex" : "",
-              ]
-                .filter(Boolean)
-                .join(", ")}.{" "}
-              Messages may be queued or routed to the other provider when available.
+              ⚠ Limit reached on the account in use
             </div>
           )}
 
-          {(usage || claudeAuth || claudeError) && (
+          {pace.accounts.length > 0 && (
+            <div className={`usage-pace ${pace.verdict}`}>
+              <div className="usage-pace-head">{paceHeadline}</div>
+              <div className="meter-track usage-pace-track">
+                <div className="meter-fill" style={{ width: `${Math.min(100, pace.used)}%` }} />
+                <div className="meter-pace" style={{ left: `${pace.expected}%` }} />
+              </div>
+              <div className="usage-note">
+                {Math.round(pace.used)}% used · {Math.round(pace.expected)}% expected
+              </div>
+            </div>
+          )}
+
+          {(usage || claudeAuth || claudeError || accounts.length > 0) && (
             <div className="usage-section">
               <div className="usage-provider-heading">
-                <div>
-                  <div
-                    className="usage-popover-title"
-                    style={{ color: "var(--app-claude-orange)" }}
-                  >
-                    Claude Code
-                  </div>
-                  <div
-                    className={`usage-auth-state ${claudeAuth?.loggedIn ? "connected" : "disconnected"}`}
-                  >
-                    {claudeAuth?.loggedIn ? (
-                      <CircleCheck size={11} />
-                    ) : (
-                      <span className="usage-auth-dot" />
-                    )}
-                    {claudeAuth?.loggedIn
-                      ? `Signed in${claudeAuth.orgName ? ` · ${claudeAuth.orgName}` : ""}`
-                      : claudeAuth
-                        ? "Signed out"
-                        : "Authentication status unavailable"}
-                  </div>
-                </div>
-                <button
-                  type="button"
-                  className="usage-login-button"
-                  onClick={() => void handleClaudeLogin()}
-                  disabled={loginBusy}
+                <div
+                  className="usage-popover-title"
+                  style={{ color: "var(--app-claude-orange)" }}
                 >
-                  {loginBusy ? (
-                    <RefreshCw size={12} className="spin" />
-                  ) : (
-                    <LogIn size={12} />
-                  )}
-                  {loginBusy
-                    ? "Finish in browser…"
-                    : claudeAuth?.loggedIn
-                      ? "Re-login"
-                      : "Sign in"}
-                </button>
+                  Claude Code
+                </div>
+                {claudeAccounts.length >= 2 && (
+                  <label
+                    className="usage-note"
+                    style={{ display: "flex", alignItems: "center", gap: 4, cursor: "pointer" }}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={autoSwitch}
+                      onChange={() => void handleToggleAutoSwitch()}
+                    />
+                    Auto-switch
+                  </label>
+                )}
               </div>
-              {usage?.fiveHour && <Bar bucket={usage.fiveHour} label="Session" />}
-              {usage?.sevenDay && <Bar bucket={usage.sevenDay} label="Weekly" />}
-              {usage?.sevenDayOpus && <Bar bucket={usage.sevenDayOpus} label="Opus" />}
-              {usage?.sevenDaySonnet && (
-                <Bar bucket={usage.sevenDaySonnet} label="Sonnet" />
+              {claudeAccounts.length >= 2 && usage?.autoReason && (
+                <div className="usage-note">{usage.autoReason}</div>
+              )}
+              {claudeAccounts.map((account) => {
+                const isPrimary = account.id === "primary";
+                const busy = isPrimary ? loginBusy : accountBusyId === account.id;
+                return (
+                  <div key={account.id} className="usage-account-row">
+                    <div className="usage-account-row-head">
+                      <span
+                        className={`usage-auth-state ${account.loggedIn ? "connected" : "disconnected"}`}
+                        style={account.active && claudeAccounts.length >= 2 ? { fontWeight: 600 } : undefined}
+                      >
+                        {account.loggedIn
+                          ? (account.email ?? account.label)
+                          : `${account.email ?? account.label} · not signed in`}
+                        {account.active && claudeAccounts.length >= 2 ? " · in use" : ""}
+                      </span>
+                      <div style={{ display: "flex", gap: 6 }}>
+                        {!account.active && account.loggedIn && (
+                          <button
+                            type="button"
+                            className="usage-login-button"
+                            onClick={() => void handleActivateAccount(account.id)}
+                          >
+                            Use
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          className="usage-login-button"
+                          disabled={busy}
+                          title={account.loggedIn ? "Sign in again" : undefined}
+                          onClick={() =>
+                            void (isPrimary ? handleClaudeLogin() : handleAccountLogin(account.id))
+                          }
+                        >
+                          {busy ? <RefreshCw size={11} className="spin" /> : <LogIn size={11} />}
+                          {busy
+                            ? loginPrompt?.accountId === (isPrimary ? null : account.id)
+                              ? "Waiting for code…"
+                              : "Starting sign-in…"
+                            : account.loggedIn
+                              ? "Re-login"
+                              : "Sign in"}
+                        </button>
+                        {!isPrimary && (
+                          <button
+                            type="button"
+                            className="usage-login-button"
+                            title="Remove account"
+                            onClick={() => void handleRemoveAccount(account.id)}
+                          >
+                            <Trash2 size={11} />
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                    {account.fiveHour && <Meter name="Session" bucket={account.fiveHour} />}
+                    {account.sevenDay && (
+                      <Meter name="Week" bucket={account.sevenDay} pace={paceById.get(account.id)?.expected} />
+                    )}
+                    {(() => {
+                      const p = paceById.get(account.id);
+                      if (!p) return null;
+                      const text = p.runsOutAt
+                        ? `Runs out ${resets(p.runsOutAt)}`
+                        : p.delta <= -5
+                          ? `${-p.delta}% behind pace`
+                          : p.delta >= 5
+                            ? `${p.delta}% ahead of pace`
+                            : "On pace";
+                      const tone = p.runsOutAt || p.delta >= 5 ? "over" : p.delta <= -5 ? "under" : "on";
+                      return <div className={`usage-verdict ${tone}`}>{text}</div>;
+                    })()}
+                    {account.error && !isPrimary && (
+                      <div className="usage-note" style={{ color: "var(--app-error)" }}>
+                        {account.error}
+                      </div>
+                    )}
+                    {loginCodePanel(isPrimary ? null : account.id)}
+                  </div>
+                );
+              })}
+              {usage?.stale && (
+                <div className="usage-note" style={{ color: "var(--app-warning)" }}>
+                  As of{" "}
+                  {new Date(usage.fetchedAt).toLocaleTimeString(undefined, {
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                  . Claude's usage endpoint is cooling down; live numbers load
+                  automatically{usage.retryAt ? ` in ${formatTimeUntil(usage.retryAt)}` : ""}.
+                </div>
               )}
               {claudeError && (
                 <div
@@ -354,117 +546,40 @@ export function UsageBar() {
                   {claudeError}
                 </div>
               )}
-              {loginError && (
-                <div className="usage-note" style={{ color: "var(--app-error)" }}>
-                  {loginError}
-                </div>
-              )}
-            </div>
-          )}
-
-          {cursorUsage && (
-            <div className="usage-section">
-              <div className="usage-popover-title usage-popover-title-cursor">
-                <CursorMark size={12} />
-                Cursor
-              </div>
-              {cursorUsage.total && (
-                <Bar
-                  bucket={cursorUsage.total}
-                  label="Total"
-                  meta={
-                    cursorUsage.planUsage
-                      ? `${dollars(cursorUsage.planUsage.totalSpendCents)} / ${dollars(cursorUsage.planUsage.limitCents)}`
-                      : undefined
-                  }
-                />
-              )}
-              {cursorUsage.auto && <Bar bucket={cursorUsage.auto} label="Auto" />}
-              {cursorUsage.api && <Bar bucket={cursorUsage.api} label="API" />}
-              {cursorUsage.autoMessage && (
-                <div className="usage-note">{cursorUsage.autoMessage}</div>
-              )}
-              {cursorUsage.apiMessage && (
-                <div className="usage-note">{cursorUsage.apiMessage}</div>
-              )}
-            </div>
-          )}
-
-          {codexUsage && (
-            <div className="usage-section">
-              <div
-                className="usage-popover-title"
-                style={{ color: "#10a37f" }}
+              {/* A just-added account isn't in the list until the next refresh. */}
+              {loginPrompt?.accountId &&
+                !claudeAccounts.some((a) => a.id === loginPrompt.accountId) &&
+                loginCodePanel(loginPrompt.accountId)}
+              <button
+                type="button"
+                className="usage-login-button"
+                disabled={accountBusyId !== null}
+                onClick={() => void handleAddAccount()}
               >
-                OpenAI Codex
-              </div>
-              {codexUsage.primary && (
-                <Bar
-                  bucket={codexUsage.primary}
-                  label={windowLabel(
-                    codexUsage.primary.windowSeconds,
-                    "Primary",
-                  )}
-                />
-              )}
-              {codexUsage.secondary && (
-                <Bar
-                  bucket={codexUsage.secondary}
-                  label={windowLabel(
-                    codexUsage.secondary.windowSeconds,
-                    "Secondary",
-                  )}
-                />
-              )}
-              {codexUsage.codeReviewPrimary && (
-                <Bar
-                  bucket={codexUsage.codeReviewPrimary}
-                  label="Code review"
-                />
-              )}
-              {(codexUsage.additional ?? []).flatMap((limit) =>
-                [limit.primary, limit.secondary]
-                  .filter((bucket): bucket is UsageBucket => bucket != null)
-                  .map((bucket, index) => (
-                    <Bar
-                      key={`${limit.id}-${index}`}
-                      bucket={bucket}
-                      label={limit.label}
-                    />
-                  )),
-              )}
-              {codexUsage.resetCreditsAvailable != null && (
-                <div className="usage-note">
-                  {codexUsage.resetCreditsAvailable} rate-limit reset credit
-                  {codexUsage.resetCreditsAvailable === 1 ? "" : "s"} available
-                </div>
-              )}
-              {codexUsage.note && (
-                <div className="usage-note">{codexUsage.note}</div>
-              )}
-              {codexUsage.error && (
+                {accountBusyId === "new" ? (
+                  <RefreshCw size={11} className="spin" />
+                ) : (
+                  <Plus size={11} />
+                )}
+                Add account
+              </button>
+              {(loginError || accountError) && (
                 <div className="usage-note" style={{ color: "var(--app-error)" }}>
-                  {codexUsage.error}
+                  {loginError ?? accountError}
                 </div>
               )}
             </div>
           )}
 
-          {!usage && !cursorUsage && !codexUsage && error && (
+          {!usage && error && (
             <div style={{ color: "var(--app-error)", fontSize: 12 }}>{error}</div>
           )}
 
           <div className="usage-popover-foot">
             {(usage?.subscriptionType || claudeAuth?.subscriptionType) && (
               <span>
-                claude: {usage?.subscriptionType ?? claudeAuth?.subscriptionType}
+                {usage?.subscriptionType ?? claudeAuth?.subscriptionType}
               </span>
-            )}
-            {cursorUsage?.membershipType && (
-              <span>cursor: {cursorUsage.membershipType}</span>
-            )}
-            {codexUsage?.planType && (
-              <span>codex: {codexUsage.planType}</span>
             )}
             {fetchedAt && (
               <span>

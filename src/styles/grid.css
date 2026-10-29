@@ -156,6 +156,9 @@
 }
 
 .grid-recent-repo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   font-size: 12px;
   font-weight: 500;
   white-space: nowrap;
@@ -320,6 +323,8 @@
   border-bottom: 1px solid var(--app-primary-border-color);
   cursor: grab;
   touch-action: none;
+  container-type: inline-size;
+  container-name: card-head;
 }
 
 .grid-card-head:active {
@@ -397,13 +402,75 @@
   color: #fff;
 }
 
-.grid-card-repo {
-  padding: 6px 10px 0;
-  font-size: 11px;
-  color: color-mix(in srgb, var(--app-claude-orange) 70%, var(--app-secondary-foreground));
+/* ── Repo identity ──
+   A pill in the card header, sized and shaped exactly like the warmth pill
+   beside it, so the header reads as one row. Its colour is derived from the
+   repo path (see RepoChip.tsx), which is what makes projects tellable apart
+   across the grid at a glance; the monogram is the fallback when the name
+   can't fit. */
+
+.repo-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 42%;
+  height: 18px;
+  padding: 0 6px 0 5px;
+  /* --repo-tone (0 | 1) picks between a soft tier and a richer, deeper one, so
+     two repos that land on the same hue still read as two repos. Tone moves
+     saturation as well as lightness — pushing lightness alone just washes the
+     pale tier out to grey. */
+  border: 1px solid hsl(var(--repo-hue) calc(42% + var(--repo-tone) * 16%)
+      calc(62% - var(--repo-tone) * 6%) / 0.3);
+  border-radius: 9px;
+  background: hsl(var(--repo-hue) calc(45% + var(--repo-tone) * 15%)
+      calc(55% - var(--repo-tone) * 5%) / 0.15);
+  color: hsl(var(--repo-hue) calc(40% + var(--repo-tone) * 18%)
+      calc(72% - var(--repo-tone) * 12%));
+  font-size: 10px;
+  line-height: 1;
+  cursor: default;
+}
+
+/* Monogram: a slightly brighter, letter-spaced lead-in that never truncates. */
+.repo-chip-mark {
+  flex-shrink: 0;
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  color: hsl(var(--repo-hue) calc(45% + var(--repo-tone) * 18%)
+      calc(80% - var(--repo-tone) * 10%));
+}
+
+.repo-chip-name {
+  min-width: 0;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Narrow card: drop the name and let the colour + monogram carry the repo.
+   This is also the shape the chip takes in any narrow rail (e.g. the Master
+   panel collapsed), where only the monogram fits. */
+@container card-head (max-width: 360px) {
+  .repo-chip {
+    max-width: none;
+  }
+  .repo-chip-name {
+    display: none;
+  }
+}
+
+/* Same colour key wherever a repo is listed, so recognition transfers. */
+.repo-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: hsl(var(--repo-hue) calc(48% + var(--repo-tone) * 15%)
+      calc(66% - var(--repo-tone) * 8%));
 }
 
 /* Live transcript, rendered by the same MessageList as the full chat view. */
@@ -693,11 +760,23 @@
 }
 
 button.warm-pill {
+  position: relative;
+  overflow: hidden;
   cursor: pointer;
+  /* A press-and-hold here means "stop warming", not "select the text" or
+     "open the system menu" — on touch especially. */
+  touch-action: manipulation;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 button.warm-pill:hover {
   border-color: var(--app-primary-border-color);
+}
+
+button.warm-pill:active {
+  transform: scale(0.96);
 }
 
 .warm-pill--warm {
@@ -715,9 +794,83 @@ button.warm-pill:hover {
   background: rgba(111, 142, 168, 0.12);
 }
 
-/* Keep-warm pings are on: a small dot after the countdown. */
+/* A warmth budget is running: a ring and a dot after the countdown, and the
+   number means the budget, not the cache (see lib/warmth.ts). */
 .warm-pill--pinned {
   border-color: currentColor;
+}
+
+/* The budget is nearly spent — warming is about to stop on its own. */
+.warm-pill--ending {
+  border-style: dashed;
+}
+
+/* Holding to stop warming: the fill drains across the pill for the length of
+   the hold, so letting go early visibly cancels it. */
+.warm-pill--holding::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: currentColor;
+  opacity: 0.22;
+  transform-origin: left center;
+  animation: warm-pill-hold 550ms linear forwards;
+}
+
+@keyframes warm-pill-hold {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+/* Acknowledgements: a bought hour pulses warm, a stopped budget flashes cold
+   and reads "off" for a moment before falling back to the cache countdown. */
+.warm-pill--flash-add {
+  animation: warm-pill-add 1.1s ease-out;
+}
+
+@keyframes warm-pill-add {
+  0% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);
+  }
+  35% {
+    box-shadow: 0 0 0 3px color-mix(in srgb, currentColor 0%, transparent);
+  }
+  100% {
+    box-shadow: 0 0 0 0 color-mix(in srgb, currentColor 0%, transparent);
+  }
+}
+
+.warm-pill--flash-off {
+  border-color: #6f8ea8;
+  color: #6f8ea8;
+  background: rgba(111, 142, 168, 0.18);
+  animation: warm-pill-off 1.1s ease-out;
+}
+
+@keyframes warm-pill-off {
+  0%,
+  18% {
+    transform: scale(1.06);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .warm-pill--holding::after {
+    animation-duration: 1ms;
+    opacity: 0.3;
+  }
+
+  .warm-pill--flash-add,
+  .warm-pill--flash-off {
+    animation: none;
+  }
 }
 
 .warm-pill-dot {

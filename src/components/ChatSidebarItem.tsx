@@ -1,5 +1,5 @@
 import { memo, useEffect, useRef, useState } from "react";
-import { ArchiveRestore, Bot, Check, Pencil, Star, Trash2 } from "lucide-react";
+import { ArchiveRestore, Bot, Check, GitFork, Pencil, Star, Trash2 } from "lucide-react";
 import { StatusIcon } from "./StatusIcon.js";
 import type { ChatSummary } from "../types.js";
 
@@ -13,6 +13,7 @@ interface Props {
   onDelete: (chatId: string) => void;
   onToggleStar?: (chatId: string, starred: boolean) => void;
   onRename?: (chatId: string, title: string) => void;
+  onFork?: (chatId: string) => void;
   draftText?: string;
 }
 
@@ -26,10 +27,13 @@ function ChatSidebarItemInner({
   onDelete,
   onToggleStar,
   onRename,
+  onFork,
   draftText,
 }: Props) {
   const finished = chat.userMarkedFinished;
-  const finishedLabel = finished ? "Unarchive" : "Mark finished";
+  const finishedLabel = finished
+    ? "Unarchive — put this chat back in the list"
+    : "Mark finished — moves it to Archive, nothing is deleted";
   const isCoordinator = chat.kind === "coordinator";
   const isSubagent = chat.kind === "subagent";
   const starred = !!chat.starred;
@@ -37,6 +41,21 @@ function ChatSidebarItemInner({
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(chat.title);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // Delete erases the transcript from disk and sits one icon away from the
+  // non-destructive "Mark finished". So it arms on the first click and only
+  // fires on the second, disarming on a timer or as soon as the pointer
+  // leaves the row.
+  const [armed, setArmed] = useState(false);
+  const armTimer = useRef<number | null>(null);
+  const disarm = () => {
+    if (armTimer.current !== null) window.clearTimeout(armTimer.current);
+    armTimer.current = null;
+    setArmed(false);
+  };
+  useEffect(() => () => {
+    if (armTimer.current !== null) window.clearTimeout(armTimer.current);
+  }, []);
 
   useEffect(() => {
     if (editing) {
@@ -119,6 +138,7 @@ function ChatSidebarItemInner({
         <div
           className="chat-item-actions"
           onClick={(e) => e.stopPropagation()}
+          onMouseLeave={disarm}
         >
           {onToggleStar && (
             <button
@@ -142,6 +162,17 @@ function ChatSidebarItemInner({
               <Pencil size={14} aria-hidden="true" />
             </button>
           )}
+          {onFork && (
+            <button
+              type="button"
+              className="chat-item-action"
+              onClick={() => onFork(chat.id)}
+              aria-label="Fork chat"
+              title="Fork chat into a new one"
+            >
+              <GitFork size={14} aria-hidden="true" />
+            </button>
+          )}
           <button
             type="button"
             className="chat-item-action"
@@ -157,10 +188,27 @@ function ChatSidebarItemInner({
           </button>
           <button
             type="button"
-            className="chat-item-action danger"
-            onClick={() => onDelete(chat.id)}
-            aria-label="Delete chat"
-            title="Delete chat"
+            className={`chat-item-action danger${armed ? " armed" : ""}`}
+            onClick={() => {
+              if (!armed) {
+                setArmed(true);
+                if (armTimer.current !== null) window.clearTimeout(armTimer.current);
+                armTimer.current = window.setTimeout(() => setArmed(false), 4000);
+                return;
+              }
+              disarm();
+              onDelete(chat.id);
+            }}
+            aria-label={
+              armed
+                ? "Confirm permanent delete"
+                : "Delete chat permanently"
+            }
+            title={
+              armed
+                ? "Click again to delete permanently — the transcript cannot be recovered"
+                : "Delete chat permanently (erases the transcript). To just clear it away, use Mark finished."
+            }
           >
             <Trash2 size={14} aria-hidden="true" />
           </button>

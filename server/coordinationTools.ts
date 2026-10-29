@@ -67,8 +67,9 @@ function formatTicket(t: PlanTicket): string {
 
 // Renders one persisted chat event as compact transcript lines (an assistant
 // event can yield several — one per text/tool_use block). Returns [] for
-// event types that aren't useful in a transcript view.
-function formatEventLines(ev: ChatEvent): string[] {
+// event types that aren't useful in a transcript view. Exported so the
+// Master's cross-repo read_chat renders transcripts identically.
+export function formatEventLines(ev: ChatEvent): string[] {
   switch (ev.type) {
     case "user_message": {
       const who =

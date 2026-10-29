@@ -12,9 +12,10 @@
  */
 import { execFile } from "node:child_process";
 import { appendFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { homedir } from "node:os";
+import { homedir, tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { promisify } from "node:util";
+import { query } from "@anthropic-ai/claude-agent-sdk";
 import { complete } from "./anthropicDirect.js";
 import type { ChatRecord, ContentBlock } from "../src/types.js";
 
@@ -24,10 +25,43 @@ const run = promisify(execFile);
 export const WARM_CACHE_MAX_AGE_MS = 55 * 60_000;
 
 export const HANDOFF_MODEL = "claude-haiku-5-5";
-// The OAuth direct-API path rate-limits (429) Haiku 5.5 for some accounts
-// even when idle; Haiku 4.5 still answers there.
+// The bare Messages API with the Claude login 429s every model newer than
+// Haiku 4.5, so Haiku 5.5 goes through the Agent SDK (no tools, no saved
+// session). If that fails, Haiku 4.5 over the bare API is the fallback.
 export const HANDOFF_FALLBACK_MODEL = "claude-haiku-4-5";
-// Haiku 5.5 always thinks, and thinking tokens count against max_tokens.
+const HANDOFF_TIMEOUT_MS = 180_000;
+const NOTE_SYSTEM_PROMPT =
+  "You write handoff notes that let a fresh coding agent continue another agent's work. You are given a condensed transcript of that conversation (tool results omitted).";
+
+async function writeNoteViaSdk(userPrompt: string): Promise<string> {
+  const abortController = new AbortController();
+  const timeout = setTimeout(() => abortController.abort(), HANDOFF_TIMEOUT_MS);
+  try {
+    const q = query({
+      prompt: userPrompt,
+      options: {
+        model: HANDOFF_MODEL,
+        systemPrompt: NOTE_SYSTEM_PROMPT,
+        tools: [],
+        maxTurns: 1,
+        persistSession: false,
+        settingSources: [],
+        cwd: tmpdir(),
+        abortController,
+      },
+    });
+    for await (const msg of q) {
+      if (msg.type !== "result") continue;
+      if (msg.subtype !== "success" || msg.is_error) throw new Error(`Agent SDK note failed: ${msg.subtype}`);
+      return msg.result;
+    }
+    throw new Error("Agent SDK returned no result");
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+// Output cap for the Haiku 4.5 fallback.
 const HANDOFF_MAX_TOKENS = 6_000;
 // ~100k tokens of transcript text at most.
 const MAX_TRANSCRIPT_CHARS = 400_000;
@@ -138,24 +172,21 @@ function workingDirectory(record: ChatRecord, repoPath: string): string {
 export async function writeNoteWithHaiku(record: ChatRecord, repoPath: string): Promise<string> {
   const transcript = renderTranscript(record);
   if (!transcript.trim()) throw new Error("This chat has no messages to hand off.");
-  const request = (model: string) =>
-    complete({
-      model,
-      systemPrompt:
-        "You write handoff notes that let a fresh coding agent continue another agent's work. You are given a condensed transcript of that conversation (tool results omitted).",
-      userPrompt: `Chat title: ${record.title}\nWorking directory: ${workingDirectory(record, repoPath)}\n\n<transcript>\n${transcript}\n</transcript>\n\n${NOTE_INSTRUCTIONS}\n\nReply with the note only.`,
-      maxTokens: HANDOFF_MAX_TOKENS,
-      timeoutMs: 180_000,
-    });
+  const userPrompt = `Chat title: ${record.title}\nWorking directory: ${workingDirectory(record, repoPath)}\n\n<transcript>\n${transcript}\n</transcript>\n\n${NOTE_INSTRUCTIONS}\n\nReply with the note only.`;
   let text: string;
   try {
-    ({ text } = await request(HANDOFF_MODEL));
+    text = await writeNoteViaSdk(userPrompt);
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err);
-    // Rate-limited, unavailable or overloaded: try the older Haiku.
-    if (!/^Anthropic (404|429|529)\b/.test(message)) throw err;
-    console.warn(`[handoff] ${HANDOFF_MODEL} failed (${message.slice(0, 80)}), retrying with ${HANDOFF_FALLBACK_MODEL}`);
-    ({ text } = await request(HANDOFF_FALLBACK_MODEL));
+    console.warn(
+      `[handoff] ${HANDOFF_MODEL} failed (${err instanceof Error ? err.message : err}), retrying with ${HANDOFF_FALLBACK_MODEL}`,
+    );
+    ({ text } = await complete({
+      model: HANDOFF_FALLBACK_MODEL,
+      systemPrompt: NOTE_SYSTEM_PROMPT,
+      userPrompt,
+      maxTokens: HANDOFF_MAX_TOKENS,
+      timeoutMs: HANDOFF_TIMEOUT_MS,
+    }));
   }
   const note = text.trim();
   if (!note) throw new Error("The note writer returned nothing.");

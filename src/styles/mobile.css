@@ -295,3 +295,18 @@
     display: none;
   }
 }
+
+/* The usage popover is wider than the space left of its trigger on a phone,
+   so it spans the screen just below the header instead. */
+@media (max-width: 768px) {
+  .usage-popover {
+    position: fixed;
+    top: var(--usage-popover-top, 64px);
+    left: 8px;
+    right: 8px;
+    width: auto;
+    max-width: none;
+    max-height: calc(100dvh - var(--usage-popover-top, 64px) - 8px);
+    overflow-y: auto;
+  }
+}

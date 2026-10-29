@@ -1206,12 +1206,14 @@
   top: calc(100% + 8px);
   right: 0;
   width: 380px;
+  max-width: calc(100vw - 16px);
   background: var(--app-secondary-background);
   border: 1px solid var(--app-primary-border-color);
   border-radius: var(--corner-radius-medium);
   padding: var(--app-spacing-large);
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
-  z-index: 10;
+  /* Above the Master/sidebar edge gradients */
+  z-index: 1000;
   display: flex;
   flex-direction: column;
   gap: var(--app-spacing-medium);
@@ -1287,6 +1289,33 @@
   cursor: default;
   opacity: 0.75;
 }
+.usage-login-code {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--app-spacing-small);
+  margin: var(--app-spacing-small) 0;
+}
+.usage-login-code a.usage-login-button {
+  text-decoration: none;
+}
+.usage-login-code-form {
+  display: flex;
+  gap: var(--app-spacing-small);
+  width: 100%;
+}
+.usage-login-code-form input {
+  flex: 1;
+  min-width: 0;
+  min-height: 26px;
+  padding: 4px 8px;
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-small);
+  background: transparent;
+  color: inherit;
+  /* 16px stops iOS Safari zooming in on focus. */
+  font-size: 16px;
+}
 .usage-limit-warning {
   background: var(--app-error-background, rgba(239, 68, 68, 0.1));
   border: 1px solid var(--app-error, #ef4444);
@@ -1332,6 +1361,25 @@
 .usage-row-meta {
   color: var(--app-secondary-foreground);
   font-variant-numeric: tabular-nums;
+}
+
+.usage-account-row {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 6px 0;
+  border-top: 1px solid var(--app-primary-border-color);
+  font-size: 11px;
+}
+.usage-account-row:first-of-type {
+  border-top: none;
+  padding-top: 2px;
+}
+.usage-account-row-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--app-spacing-small);
 }
 
 /* ---- Header right cluster (model + session + connection) ---- */
@@ -1549,3 +1597,148 @@
   color: var(--app-secondary-foreground);
   font-size: 13px;
 }
+
+/* ---- Simplified composer (grid cards) ----
+   Small cards can't carry ten controls in one row, so at rest the bar shows
+   only [+] … [send]. The readouts and mic fade in on hover/focus (they're only
+   useful while you're actually working in that card), and the model, effort and
+   permission pills live behind one [⚙] popover. Nothing is removed — just
+   hidden until it's needed. */
+
+/* Not simplified: the wrappers must not affect layout at all. */
+.composer-more-wrap--off,
+.composer-more-inline {
+  display: contents;
+}
+
+.composer-more-wrap {
+  display: inline-flex;
+  align-items: center;
+}
+
+.composer-more-btn.active {
+  background: var(--app-list-hover-background);
+  color: var(--app-primary-foreground);
+}
+
+/* The popover stacks the real pills, so they keep their own popups/behaviour. */
+.composer-more-popup {
+  position: absolute;
+  right: 0;
+  bottom: calc(100% + 8px);
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  padding: 8px;
+  background: var(--app-secondary-background, #1e1e1e);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: 8px;
+  box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+}
+
+.composer-more-popup--hidden {
+  display: none;
+}
+
+/* Inside the popover every control gets a full-width row, labels included —
+   there's room here even though there wasn't in the bar. */
+.composer-more-popup .popup-wrap {
+  display: flex;
+}
+
+.composer-more-popup .model-pill-btn,
+.composer-more-popup .effort-pill-btn,
+.composer-more-popup .mode-pill {
+  width: 100%;
+  height: 28px;
+  padding: 0 8px;
+  justify-content: flex-start;
+}
+
+.composer-more-popup .model-pill-label,
+.composer-more-popup .effort-pill-label {
+  display: inline;
+}
+
+.composer-more-popup .model-pill-bot-icon {
+  display: none;
+}
+
+/* Hidden until needed: on hover, on focus, or while the mic is live. */
+.composer--simplified .context-ring,
+.composer--simplified .cost-readout,
+.composer--simplified .mic-btn {
+  display: none;
+}
+
+.composer--simplified:hover .context-ring,
+.composer--simplified:focus-within .context-ring,
+/* A context window that's actually filling up is always worth showing. */
+.composer--simplified .context-ring.context-ring--high {
+  display: flex;
+}
+
+.composer--simplified:hover .cost-readout,
+.composer--simplified:focus-within .cost-readout {
+  display: inline-flex;
+}
+
+.composer--simplified:hover .mic-btn,
+.composer--simplified:focus-within .mic-btn,
+.composer--simplified .mic-btn.recording,
+.composer--simplified .mic-btn.transcribing {
+  display: inline-flex;
+}
+
+/* Tighter metrics all round: the bar has to survive a 300px-wide card. */
+.composer--simplified .composer-bar {
+  gap: 6px;
+}
+
+.composer--simplified .composer-bar-left,
+.composer--simplified .composer-bar-right {
+  gap: 4px;
+}
+
+.composer--simplified .round-btn,
+.composer--simplified .mic-btn,
+.composer--simplified .send-btn {
+  width: 26px;
+  height: 26px;
+}
+
+.composer--simplified .round-btn {
+  font-size: 17px;
+}
+
+/* Decisions-style meters in the usage popover */
+.usage-account-row .meter { display: flex; flex-direction: column; gap: 4px; }
+.meter-row { display: flex; justify-content: space-between; gap: 8px; font-size: 11.5px; color: var(--app-secondary-foreground); }
+.meter-track { position: relative; height: 4px; border-radius: 2px; background: var(--app-input-background); overflow: hidden; }
+.meter-fill { height: 100%; border-radius: 2px; background: var(--app-claude-orange); transition: width 400ms ease; }
+.meter.high .meter-fill { background: var(--app-error); }
+.meter.high .meter-value { color: var(--app-error); }
+/* Where even use across the week would be by now */
+.meter-pace { position: absolute; top: 0; bottom: 0; width: 2px; margin-left: -1px; background: var(--app-primary-foreground); opacity: 0.55; }
+/* Hovering an account swaps each percentage for when that limit resets */
+.meter-value { display: grid; justify-items: end; font-variant-numeric: tabular-nums; }
+.meter-value > span { grid-area: 1 / 1; transition: opacity 150ms; }
+.meter-reset { opacity: 0; }
+.usage-account-row:hover .meter-value > span:first-child:not(:only-child) { opacity: 0; }
+.usage-account-row:hover .meter-reset { opacity: 1; }
+.usage-account-row { padding: 10px 12px; border: 0; border-radius: var(--corner-radius-medium); background: var(--app-input-background); gap: 8px; }
+.usage-account-row .meter-track { background: var(--app-secondary-background); }
+.usage-account-row:first-of-type { padding-top: 10px; }
+.usage-account-row + .usage-account-row { margin-top: 6px; }
+.usage-pace { display: flex; flex-direction: column; gap: 4px; }
+.usage-pace-head { font-size: 13px; font-weight: 600; }
+/* Pace verdict: behind = usage going to waste, ahead = heading for the limit */
+.usage-verdict { font-size: 11.5px; font-weight: 600; }
+.usage-verdict.under, .usage-pace.under .usage-pace-head { color: var(--app-warning); }
+.usage-verdict.on, .usage-pace.on .usage-pace-head { color: var(--app-success, #4caf50); }
+.usage-verdict.over, .usage-pace.over .usage-pace-head { color: var(--app-error); }
+.usage-pace-track { height: 6px; margin: 2px 0; }
+.usage-account-row .usage-auth-state { color: var(--app-primary-foreground); font-weight: 600; }
+.usage-account-row .usage-auth-state.disconnected { color: var(--app-secondary-foreground); }

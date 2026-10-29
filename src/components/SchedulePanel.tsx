@@ -31,7 +31,7 @@ function describeCron(expr: string): string {
 }
 
 const MODELS: { id: Model; label: string }[] = [
-  { id: "claude-opus-5", label: "Opus" },
+  { id: "claude-opus-5-5", label: "Opus" },
   { id: "claude-sonnet-5", label: "Sonnet" },
   { id: "claude-haiku-4-5", label: "Haiku" },
 ];
@@ -58,6 +58,7 @@ const EMPTY_FORM = {
   model: "claude-sonnet-5" as Model,
   permissionMode: "default" as PermissionMode,
   enabled: true,
+  addToGrid: false,
 };
 
 export function SchedulePanel({ activeRepoPath, onClose }: Props) {
@@ -119,6 +120,7 @@ export function SchedulePanel({ activeRepoPath, onClose }: Props) {
         model: form.model,
         permissionMode: form.permissionMode,
         enabled: form.enabled,
+        addToGrid: form.addToGrid,
       });
       setTasks((prev) => [...prev, task]);
       setForm({ ...EMPTY_FORM });
@@ -225,6 +227,17 @@ export function SchedulePanel({ activeRepoPath, onClose }: Props) {
                 ))}
               </select>
             </div>
+          </div>
+
+          <div className="schedule-form-row">
+            <label className="schedule-grid-toggle">
+              <input
+                type="checkbox"
+                checked={form.addToGrid}
+                onChange={(e) => setForm((f) => ({ ...f, addToGrid: e.target.checked }))}
+              />
+              <span>Add new chats to the Grid board</span>
+            </label>
           </div>
 
           <div className="schedule-form-actions">

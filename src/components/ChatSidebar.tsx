@@ -14,6 +14,7 @@ interface Props {
   onDelete: (chatId: string) => void;
   onToggleStar: (chatId: string, starred: boolean) => void;
   onRename: (chatId: string, title: string) => void;
+  onFork: (chatId: string) => void;
   repoPath: string;
   chatDrafts?: Record<string, string>;
   onOpenGraph?: () => void;
@@ -176,6 +177,7 @@ export function ChatItemsByRecency({
   onDelete,
   onToggleStar,
   onRename,
+  onFork,
   chatDrafts,
 }: {
   items: ChatSummary[];
@@ -185,6 +187,7 @@ export function ChatItemsByRecency({
   onDelete: (chatId: string) => void;
   onToggleStar?: (chatId: string, starred: boolean) => void;
   onRename?: (chatId: string, title: string) => void;
+  onFork?: (chatId: string) => void;
   chatDrafts: Record<string, string>;
 }) {
   const byRecency = useMemo(() => groupByRecency(items), [items]);
@@ -206,6 +209,7 @@ export function ChatItemsByRecency({
                 onDelete={onDelete}
                 onToggleStar={onToggleStar}
                 onRename={onRename}
+                onFork={onFork}
                 draftText={chatDrafts[c.id]}
               />
             ))}
@@ -225,6 +229,7 @@ export function ChatSidebar({
   onDelete,
   onToggleStar,
   onRename,
+  onFork,
   repoPath,
   chatDrafts = {},
   onOpenGraph,
@@ -442,6 +447,7 @@ export function ChatSidebar({
                     onDelete={onDelete}
                     onToggleStar={onToggleStar}
                     onRename={onRename}
+                    onFork={onFork}
                     draftText={chatDrafts[c.id]}
                   />
                 ))}
@@ -461,6 +467,7 @@ export function ChatSidebar({
                     onDelete={onDelete}
                     onToggleStar={onToggleStar}
                     onRename={onRename}
+                    onFork={onFork}
                     chatDrafts={chatDrafts}
                   />
                 </div>
@@ -492,6 +499,7 @@ export function ChatSidebar({
                     onDelete={onDelete}
                     onToggleStar={onToggleStar}
                     onRename={onRename}
+                    onFork={onFork}
                     chatDrafts={chatDrafts}
                   />
                 )}

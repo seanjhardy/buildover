@@ -712,6 +712,74 @@
   background: none;
 }
 
+/* ---- ImageBlock (ShowImage tool output) ----
+   Reuses the svg-block card. Images scale down to the column width (never up)
+   and stack vertically; clicking one opens it full size in a lightbox. */
+.image-block-body {
+  padding: var(--app-spacing-large);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--app-spacing-large);
+}
+.image-block-thumb {
+  display: block;
+  max-width: 100%;
+  padding: 0;
+  border: none;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%) 0 0/16px 16px,
+    linear-gradient(225deg, rgba(255, 255, 255, 0.03) 25%, transparent 25%) 0 0/16px 16px;
+  cursor: zoom-in;
+}
+.image-block-thumb img {
+  display: block;
+  max-width: 100%;
+  max-height: 520px;
+  height: auto;
+  object-fit: contain;
+}
+.image-block-placeholder {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: var(--app-spacing-large);
+  border: 1px dashed var(--app-tool-border);
+  border-radius: var(--corner-radius-medium);
+  color: var(--app-secondary-foreground);
+  font-size: 12px;
+  text-align: center;
+}
+.image-block-placeholder-name {
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+}
+.image-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  background: rgba(0, 0, 0, 0.85);
+  cursor: zoom-out;
+}
+.image-lightbox img {
+  max-width: 100%;
+  max-height: calc(100% - 32px);
+  object-fit: contain;
+}
+.image-lightbox-path {
+  color: rgba(255, 255, 255, 0.7);
+  font-family: var(--app-monospace-font-family);
+  font-size: 11px;
+}
+
 /* ---- TableBlock ---- */
 .table-block {
   border: 1px solid var(--app-tool-border);

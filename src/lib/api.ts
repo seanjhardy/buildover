@@ -8,6 +8,7 @@ import type {
   CreateProjectResult,
   GitHubAccountInfo,
   GitHubRepoInfo,
+  McpServerInfo,
   Model,
   PermissionMode,
   PlanTicket,
@@ -153,6 +154,44 @@ export interface Dashboard {
   updatedAt: string;
 }
 
+export interface GridChatEntry {
+  chatId: string;
+  repoPath: string;
+  repoName: string;
+  order: number;
+  addedAt: string;
+  chat: ChatSummary;
+}
+
+export interface MasterInfo {
+  repoPath: string;
+  chatId: string;
+  /** How long the master chat keeps itself warm after each message. */
+  keepWarmHours: number;
+  model: Model;
+}
+
+export interface RecentChatEntry {
+  repoPath: string;
+  repoName: string;
+  chat: ChatSummary;
+}
+
+export interface ClaudeConnector {
+  id: string;
+  name: string;
+  url: string;
+  iconUrl?: string;
+}
+
+export interface AccountConnectors {
+  accountId: string;
+  label: string;
+  email?: string;
+  connectors: ClaudeConnector[];
+  error?: string;
+}
+
 export interface ScheduledTask {
   id: string;
   label: string;
@@ -163,6 +202,7 @@ export interface ScheduledTask {
   model: Model;
   permissionMode: PermissionMode;
   enabled: boolean;
+  addToGrid?: boolean;
   lastRunAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -247,6 +287,7 @@ export const api = {
     claudeEffort?: EffortLevel | null;
     maxConcurrentTurns?: number | null;
     keepWarmHours?: number | null;
+    thinkingSummaries?: boolean;
   }) =>
     send<{ prefs: AppPrefs }>("PATCH", `/api/prefs`, patch).then((r) => r.prefs),
 
@@ -255,6 +296,20 @@ export const api = {
     send<{ authUrl?: string; connected: boolean }>(
       "POST",
       `/api/mcp-servers/${encodeURIComponent(id)}/auth`,
+    ),
+
+  /** Tools/servers expected to be available once a chat starts (from the last
+   *  session's init snapshot + the statically configured server list). */
+  getMcpPreview: () =>
+    getJson<{ tools: string[]; mcpServers: McpServerInfo[]; updatedAt: string }>(
+      `/api/mcp/preview`,
+    ),
+
+  /** claude.ai account connectors (hosted MCP cloud servers), grouped by
+   *  Buildover account — the same list the Claude app shows. */
+  getClaudeConnectors: () =>
+    getJson<{ accounts: AccountConnectors[] }>(`/api/claude-connectors`).then(
+      (r) => r.accounts,
     ),
 
   getMcpAuthState: (id: string) =>
@@ -294,7 +349,10 @@ export const api = {
       model?: string;
       starred?: boolean;
       context1m?: boolean;
+      /** false stops keep-warm pings now; true starts a default budget. */
       keepWarm?: boolean;
+      /** Hours to add to the warmth budget (starts one if there is none). */
+      keepWarmAddHours?: number;
     },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
@@ -314,6 +372,11 @@ export const api = {
       notePath: string;
       method: "warm" | "cold";
     }>("POST", `/api/chats/${chatId}/handoff`, { repoPath }),
+
+  /** Copies a chat's full history into a new chat that continues from a
+   *  forked session; the original is left untouched. */
+  forkChat: (repoPath: string, chatId: string) =>
+    send<{ chat: ChatRecord }>("POST", `/api/chats/${chatId}/fork`, { repoPath }),
 
   getModels: async () => {
     type ApiModel = {
@@ -374,6 +437,53 @@ export const api = {
     send<{
       login: import("../hooks/useUsage.js").ClaudeLoginAttempt;
     }>("POST", "/api/claude/auth/login"),
+
+  submitClaudeLoginCode: (code: string, accountId?: string) =>
+    send<{
+      login: import("../hooks/useUsage.js").ClaudeLoginAttempt;
+    }>(
+      "POST",
+      accountId
+        ? `/api/claude/accounts/${encodeURIComponent(accountId)}/login/code`
+        : "/api/claude/auth/login/code",
+      { code },
+    ),
+
+  getClaudeAccounts: () =>
+    getJson<{
+      accounts: import("../hooks/useUsage.js").ClaudeAccountSummary[];
+      autoSwitch: boolean;
+      autoReason?: string;
+      switchedAt?: string;
+      switchReason?: string;
+    }>("/api/claude/accounts"),
+
+  addClaudeAccount: (label?: string) =>
+    send<{ id: string; label: string }>("POST", "/api/claude/accounts", { label }),
+
+  activateClaudeAccount: (id: string) =>
+    send<{ accounts: import("../hooks/useUsage.js").ClaudeAccountSummary[] }>(
+      "POST",
+      `/api/claude/accounts/${encodeURIComponent(id)}/activate`,
+    ),
+
+  removeClaudeAccount: (id: string) =>
+    send<{ accounts: import("../hooks/useUsage.js").ClaudeAccountSummary[] }>(
+      "DELETE",
+      `/api/claude/accounts/${encodeURIComponent(id)}`,
+    ),
+
+  startClaudeAccountLogin: (id: string) =>
+    send<{
+      login: import("../hooks/useUsage.js").ClaudeLoginAttempt;
+    }>("POST", `/api/claude/accounts/${encodeURIComponent(id)}/login`),
+
+  setClaudeAutoSwitch: (autoSwitch: boolean) =>
+    send<{ accounts: import("../hooks/useUsage.js").ClaudeAccountSummary[] }>(
+      "PATCH",
+      "/api/claude/accounts",
+      { autoSwitch },
+    ),
 
   getCodexUsage: () =>
     getJson<import("../hooks/useUsage.js").CodexUsage>("/api/codex/usage"),
@@ -478,6 +588,45 @@ export const api = {
 
   deleteSchedule: (id: string) =>
     send<{ ok: boolean }>("DELETE", `/api/schedules/${id}`),
+
+  // ── Master agent ─────────────────────────────────────────────────────────
+  /** Where the master chat lives; creates it on first call. */
+  getMaster: () => getJson<MasterInfo>(`/api/master`),
+
+  // ── Grid ─────────────────────────────────────────────────────────────────
+  listGrid: () =>
+    getJson<{ entries: GridChatEntry[] }>(`/api/grid`).then((r) => r.entries),
+
+  createGridChat: (body: {
+    repoPath: string;
+    model?: Model;
+    permissionMode?: PermissionMode;
+    title?: string;
+  }) =>
+    send<{ entry: GridChatEntry; entries: GridChatEntry[] }>(
+      "POST",
+      `/api/grid/chats`,
+      body,
+    ),
+
+  listRecentChats: () =>
+    getJson<{ chats: RecentChatEntry[] }>(`/api/grid/recent-chats`).then((r) => r.chats),
+
+  addToGrid: (chatId: string, repoPath: string) =>
+    send<{ entries: GridChatEntry[] }>("POST", `/api/grid`, { chatId, repoPath }).then(
+      (r) => r.entries,
+    ),
+
+  reorderGrid: (order: string[]) =>
+    send<{ entries: GridChatEntry[] }>("PATCH", `/api/grid/reorder`, { order }).then(
+      (r) => r.entries,
+    ),
+
+  removeFromGrid: (chatId: string, repoPath: string, done = false) =>
+    send<{ entries: GridChatEntry[] }>(
+      "DELETE",
+      `/api/grid/${encodeURIComponent(chatId)}?repoPath=${encodeURIComponent(repoPath)}${done ? "&done=1" : ""}`,
+    ).then((r) => r.entries),
 };
 
 // ── Caffeinate (keep Mac awake) ──────────────────────────────────────────────

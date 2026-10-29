@@ -19,6 +19,7 @@ import type {
   PermissionMode,
   QueuedChatTurn,
 } from "../types.js";
+import { KEEP_WARM_BUDGET_HOURS } from "../types.js";
 
 // The sentinel error message written by recoverStaleChat on server restart.
 // We suppress this from the chat turn list — the sidebar "Interrupted" state
@@ -60,13 +61,21 @@ export interface ChatMeta {
   /** Running API-equivalent cost incl. silent turns; null before the first result. */
   cost: ChatCost | null;
   keepWarm: boolean;
+  /** ISO deadline the warmth budget runs to; null === warming off. */
+  keepWarmUntil: string | null;
   /** Set once this chat has been continued in a fresh one. */
   handoffTo: ChatHandoffTo | null;
   /** Composer text for a chat created by a handoff (never auto-sent). */
   handoffPrefill: string | null;
 }
 
-const EMPTY_META: ChatMeta = { cost: null, keepWarm: false, handoffTo: null, handoffPrefill: null };
+const EMPTY_META: ChatMeta = {
+  cost: null,
+  keepWarm: false,
+  keepWarmUntil: null,
+  handoffTo: null,
+  handoffPrefill: null,
+};
 
 /** Transient status line from the SDK stream (rate limit / retry). */
 export interface ChatNotice {
@@ -225,6 +234,7 @@ interface UseAgentReturn {
   slotQueue: SlotQueueInfo | null;
   /** Turns the keep-warm toggle on or off for this chat. */
   setKeepWarm: (enabled: boolean) => void;
+  addKeepWarmHours: (hours: number) => void;
   branchInfo: Map<string, BranchInfo>;
   slashCommands: string[];
   /** Turns waiting on a clock: scheduled wakeups and usage-limit retries. */
@@ -243,6 +253,7 @@ interface UseAgentReturn {
   /** Move a queued message to the front and send it immediately, interrupting
    *  the in-flight turn if one is running. */
   fastTrackQueued: (id: string) => void;
+  steerQueued: (id: string) => void;
   reorderQueue: (fromIndex: number, toIndex: number) => void;
   send: (text: string, opts: SendOptions) => void;
   revertToCheckpoint: (checkpointId: string) => void;
@@ -286,6 +297,10 @@ export function useAgent(
   const [branchInfo, setBranchInfo] = useState<Map<string, BranchInfo>>(new Map());
   const [slashCommands, setSlashCommands] = useState<string[]>([]);
   const [meta, setMeta] = useState<ChatMeta>(EMPTY_META);
+  // Read by the warmth controls, which need the current budget to extend it
+  // without making the click wait for a re-render.
+  const metaRef = useRef<ChatMeta>(EMPTY_META);
+  metaRef.current = meta;
   const [notice, setNotice] = useState<ChatNotice | null>(null);
   const [slotQueue, setSlotQueue] = useState<SlotQueueInfo | null>(null);
   const [queuedTurns, setQueuedTurns] = useState<QueuedChatTurn[]>([]);
@@ -680,15 +695,23 @@ export function useAgent(
     };
 
     const unsubscribeListener = agentSocket.onChatEvent(chatId, handler);
-    agentSocket.send({
-      type: "subscribe",
-      chatId,
-      repoPath,
-      withReplay: true,
-    });
+    const subscribeWithReplay = () =>
+      agentSocket.send({
+        type: "subscribe",
+        chatId,
+        repoPath,
+        withReplay: true,
+      });
+    subscribeWithReplay();
+    // Events emitted while the socket was down are gone for good, so after a
+    // reconnect ask for a fresh replay. The socket's own re-subscribe can't be
+    // relied on for that: the sidebar subscribes to the same chat without a
+    // replay, and whichever subscribe was sent last is the one it repeats.
+    const unsubscribeReconnect = agentSocket.onReconnect(subscribeWithReplay);
 
     return () => {
       unsubscribeListener();
+      unsubscribeReconnect();
       // We keep the subscription on the server (other hooks like useChats
       // still want status updates). agentSocket cleans up the server-side
       // subscription only when the last listener for this chat is gone.
@@ -883,6 +906,15 @@ export function useAgent(
     agentSocket.send({ type: "fast_track_queued_turn", chatId: cid, turnId: id });
   }, []);
 
+  // Steer: the server sends the message into the running turn without
+  // stopping it, so the agent picks it up after its current tool call.
+  const steerQueued = useCallback((id: string) => {
+    const cid = chatIdRef.current;
+    if (!cid) return;
+    setQueuedTurns((q) => q.filter((t) => t.id !== id));
+    agentSocket.send({ type: "steer_queued_turn", chatId: cid, turnId: id });
+  }, []);
+
   const setPermissionMode = useCallback((mode: PermissionMode) => {
     const id = chatIdRef.current;
     if (!id) return;
@@ -891,6 +923,11 @@ export function useAgent(
       chatId: id,
       permissionMode: mode,
     });
+    // Keep the cached copy current too, or switching back to this chat would
+    // restore the mode it had when it was last replayed.
+    setChatPermissionMode(mode);
+    const cached = chatCache.get(id);
+    if (cached) chatCache.set(id, { ...cached, chatPermissionMode: mode });
   }, []);
 
   const forkMessage = useCallback(
@@ -939,17 +976,53 @@ export function useAgent(
     [repoPath],
   );
 
-  const setKeepWarm = useCallback(
-    (enabled: boolean) => {
+  // Warmth is a budget with a deadline (see lib/warmth.ts): this writes the
+  // deadline the server will compute, optimistically, so the pill's countdown
+  // moves on the click rather than on the round trip.
+  const patchWarmth = useCallback(
+    (next: { keepWarm: boolean; keepWarmUntil: string | null }, body: { keepWarm?: boolean; keepWarmAddHours?: number }) => {
       if (!repoPath || !chatId) return;
-      setMeta((prev) => ({ ...prev, keepWarm: enabled }));
+      let rollback: { keepWarm: boolean; keepWarmUntil: string | null } | null = null;
+      setMeta((prev) => {
+        rollback = { keepWarm: prev.keepWarm, keepWarmUntil: prev.keepWarmUntil };
+        return { ...prev, ...next };
+      });
       const cached = chatCache.get(chatId);
-      if (cached) chatCache.set(chatId, { ...cached, meta: { ...(cached.meta ?? EMPTY_META), keepWarm: enabled } });
-      api.patchChat(repoPath, chatId, { keepWarm: enabled }).catch(() => {
-        setMeta((prev) => ({ ...prev, keepWarm: !enabled }));
+      if (cached) {
+        chatCache.set(chatId, {
+          ...cached,
+          meta: { ...(cached.meta ?? EMPTY_META), ...next },
+        });
+      }
+      api.patchChat(repoPath, chatId, body).catch(() => {
+        if (rollback) setMeta((prev) => ({ ...prev, ...rollback! }));
       });
     },
     [repoPath, chatId],
+  );
+
+  /** Buys `hours` more warmth, from now if the budget had already run out. */
+  const addKeepWarmHours = useCallback(
+    (hours: number) => {
+      const live = Date.parse(metaRef.current.keepWarmUntil ?? "");
+      const base = Number.isFinite(live) && live > Date.now() ? live : Date.now();
+      patchWarmth(
+        { keepWarm: true, keepWarmUntil: new Date(base + hours * 3_600_000).toISOString() },
+        { keepWarmAddHours: hours },
+      );
+    },
+    [patchWarmth],
+  );
+
+  const setKeepWarm = useCallback(
+    (enabled: boolean) => {
+      if (enabled) {
+        addKeepWarmHours(KEEP_WARM_BUDGET_HOURS);
+        return;
+      }
+      patchWarmth({ keepWarm: false, keepWarmUntil: null }, { keepWarm: false });
+    },
+    [addKeepWarmHours, patchWarmth],
   );
 
   const messageQueue = queuedTurns.filter((t) => t.kind === "user");
@@ -977,6 +1050,7 @@ export function useAgent(
     notice,
     slotQueue,
     setKeepWarm,
+    addKeepWarmHours,
     branchInfo,
     slashCommands,
     queuedTurns: delayedTurns,
@@ -986,6 +1060,7 @@ export function useAgent(
     enqueuePaused,
     removeQueued,
     fastTrackQueued,
+    steerQueued,
     reorderQueue,
     send,
     revertToCheckpoint,
@@ -1036,6 +1111,15 @@ function appendTurnIfNew(prev: ChatTurn[], turn: ChatTurn): ChatTurn[] {
   return [...prev, turn];
 }
 
+// Turns showing a block the model is still generating (assistant_partial).
+const PARTIAL_TURN_PREFIX = "partial:";
+
+function withoutPartials(prev: ChatTurn[]): ChatTurn[] {
+  return prev.some((t) => t.id.startsWith(PARTIAL_TURN_PREFIX))
+    ? prev.filter((t) => !t.id.startsWith(PARTIAL_TURN_PREFIX))
+    : prev;
+}
+
 function applyAgentEvent(event: AgentEvent, s: Setters): void {
   switch (event.type) {
     case "chat_replay": {
@@ -1075,11 +1159,18 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       s.setStatus(hasPendingAttention ? "awaiting_input" : event.record.status);
       s.setIsStreaming(!hasPendingAttention && event.record.status === "running");
       // Expose this chat's saved permission mode so App.tsx can sync its UI.
-      s.setChatPermissionMode(event.record.permissionMode);
+      // A chat with no events yet is either brand new (created with the UI's
+      // current mode) or the server's placeholder for a chat whose create
+      // request hasn't landed, which always says "default". Syncing from it
+      // would silently flip the composer to "Ask before edits".
+      if (event.record.events.length > 0) {
+        s.setChatPermissionMode(event.record.permissionMode);
+      }
       s.setChatContext1m(event.record.context1m);
       s.patchMeta({
         cost: event.record.cost ?? null,
         keepWarm: event.record.keepWarm === true,
+        keepWarmUntil: event.record.keepWarmUntil ?? null,
         handoffTo: event.record.handoffTo ?? null,
         handoffPrefill: event.record.handoffFrom?.prefill ?? null,
       });
@@ -1110,9 +1201,29 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         }),
       );
       break;
+    case "assistant_partial": {
+      const turn: ChatTurn = {
+        kind: "assistant",
+        id: PARTIAL_TURN_PREFIX + event.id,
+        content: [
+          event.blockType === "thinking"
+            ? { type: "thinking", thinking: event.text }
+            : { type: "text", text: event.text },
+        ],
+      };
+      s.setTurns((prev) => {
+        const i = prev.findIndex((t) => t.id === turn.id);
+        if (i === -1) return [...withoutPartials(prev), turn];
+        const next = prev.slice();
+        next[i] = turn;
+        return next;
+      });
+      break;
+    }
     case "assistant":
+      // The finished block replaces its live preview.
       s.setTurns((prev) =>
-        appendTurnIfNew(prev, {
+        appendTurnIfNew(withoutPartials(prev), {
           kind: "assistant",
           id: event.uuid,
           content: event.content,
@@ -1131,6 +1242,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
     case "result":
       s.setSessionId(event.sessionId || undefined);
       s.setTurns((prev) => {
+        prev = withoutPartials(prev);
         // Deduplicate: scan backwards from the end of the current turn (up to
         // the previous user message) to see if chat_replay already hydrated
         // this result. This prevents a second copy when the deferred
@@ -1281,6 +1393,8 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
       // AttentionPrompt card shows the message/summary in the UI.
       break;
     case "turn_end":
+      // A stopped turn can end mid-block, leaving a preview with no final.
+      s.setTurns(withoutPartials);
       s.setIsStreaming(false);
       s.setPendingPermission(undefined);
       s.setPendingAttention(undefined);

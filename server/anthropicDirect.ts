@@ -1,4 +1,5 @@
 import { fetchWithClaudeAuth } from "./anthropicAuth.js";
+import { getActiveAccount } from "./claudeAccounts.js";
 
 // Bare Anthropic Messages API client. Uses the same OAuth token the Claude
 // Code CLI stores, so no separate ANTHROPIC_API_KEY is needed. We use this
@@ -41,7 +42,7 @@ export async function complete(opts: CompleteOptions): Promise<CompleteResult> {
         ...(opts.systemPrompt ? { system: opts.systemPrompt } : {}),
         messages: [{ role: "user", content: opts.userPrompt }],
       }),
-    });
+    }, (await getActiveAccount()).configDir ?? undefined);
 
     if (!res.ok) {
       const body = await res.text().catch(() => "");

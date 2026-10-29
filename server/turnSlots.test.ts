@@ -104,4 +104,14 @@ describe("TurnSlots", () => {
     slots.setMax(0);
     for (let i = 0; i < 20; i++) assert.equal(slots.tryAcquire(), true);
   });
+
+  it("is unlimited by default, so nothing ever queues unless a cap is set", async () => {
+    const slots = new TurnSlots();
+    for (let i = 0; i < 50; i++) assert.equal(await slots.acquire(), true);
+    assert.equal(slots.stats.queued, 0);
+    // Clearing the pref (undefined) must also mean unlimited, not a cap.
+    slots.setMax(3);
+    slots.setMax(undefined);
+    assert.equal(slots.tryAcquire(), true);
+  });
 });

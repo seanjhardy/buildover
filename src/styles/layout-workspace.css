@@ -511,6 +511,14 @@
 .chat-item-action.danger:hover {
   color: var(--app-error);
 }
+/* Armed delete: the first click only arms it, so make that unmistakable. */
+.chat-item-action.danger.armed,
+.chat-item-action.danger.armed:hover {
+  color: var(--app-error);
+  background: color-mix(in srgb, var(--app-error) 18%, transparent);
+  box-shadow: inset 0 0 0 1px var(--app-error);
+  opacity: 1;
+}
 .chat-item-action.starred {
   color: var(--app-warning, #e3b341);
   opacity: 1;

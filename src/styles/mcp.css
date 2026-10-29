@@ -155,3 +155,36 @@
   color: var(--app-secondary-foreground);
   padding: 4px 0;
 }
+
+.mcp-preview-note {
+  margin: 4px 10px 0;
+  padding: 6px 8px;
+  border: 1px dashed var(--app-primary-border-color);
+  border-radius: 6px;
+  font-size: 11px;
+  color: var(--app-secondary-foreground);
+}
+
+.mcp-account {
+  margin-top: 8px;
+}
+.mcp-account-head {
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 2px 0;
+}
+.mcp-account-label {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--app-primary-foreground);
+}
+.mcp-account-email {
+  flex: 1;
+  min-width: 0;
+  font-size: 10.5px;
+  color: var(--app-secondary-foreground);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -52,7 +52,9 @@ export function ContextRing({ contextUsage }: Props) {
   return (
     <div
       ref={ringRef}
-      className="context-ring"
+      // --high keeps the ring visible in the simplified (grid card) composer,
+      // where the readouts are otherwise hidden until hover.
+      className={`context-ring${pct >= 60 ? " context-ring--high" : ""}`}
       onMouseEnter={() => setHovered(true)}
       onMouseLeave={() => setHovered(false)}
       aria-label={`Context window: ${pct.toFixed(1)}% used`}

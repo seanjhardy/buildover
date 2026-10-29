@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { House, ShoppingBag } from "lucide-react";
+import { House, ShoppingBag, LayoutGrid } from "lucide-react";
 import { OpenRepoMenu } from "./OpenRepoMenu.js";
 import { StatusIcon } from "./StatusIcon.js";
 import type { ChatStatus, RecentRepoInfo, RepoInfo } from "../types.js";
@@ -18,6 +18,8 @@ interface Props {
   marketActive?: boolean;
   homeActive?: boolean;
   onMarket?: () => void;
+  gridActive?: boolean;
+  onGrid?: () => void;
 }
 
 export function RepoTabs({
@@ -34,6 +36,8 @@ export function RepoTabs({
   marketActive,
   homeActive,
   onMarket,
+  gridActive,
+  onGrid,
 }: Props) {
   const [draggedPath, setDraggedPath] = useState<string | null>(null);
   const [dragOverPath, setDragOverPath] = useState<string | null>(null);
@@ -88,6 +92,15 @@ export function RepoTabs({
           >
             <ShoppingBag size={13} />
             <span className="repo-tab-name">Market</span>
+          </button>
+          <button
+            type="button"
+            className={`repo-tab repo-tab--grid ${gridActive ? "active" : ""}`}
+            onClick={onGrid}
+            title="Grid"
+          >
+            <LayoutGrid size={13} />
+            <span className="repo-tab-name">Grid</span>
           </button>
         </div>
         {openRepos.map((repo) => {

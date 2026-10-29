@@ -50,7 +50,14 @@ export const MODELS: ModelOption[] = [
   { id: "claude-haiku-4-5", label: "Claude Haiku 4.5", provider: "claude" },
 ];
 
-export const DEFAULT_MODEL: Model = "claude-opus-5";
+export const DEFAULT_MODEL: Model = "claude-opus-5-5";
+
+/** Warmth is a budget, not a switch: turning it on buys this many hours of
+ *  keep-alive pings, and the chat goes cold on its own when they run out. */
+export const KEEP_WARM_BUDGET_HOURS = 4;
+/** Each further click on the warmth pill tops the budget up by this much.
+ *  There is no cap — it's the user's money. */
+export const KEEP_WARM_ADD_HOURS = 1;
 
 /** Cursor model ids are stored as `cursor:<nativeId>`. */
 export const CURSOR_MODEL_PREFIX = "cursor:";
@@ -175,7 +182,7 @@ export type ChatStatus =
 // chat pinned at the top of each repo's sidebar that delegates work to
 // subagents. "subagent" chats are spawned by another chat (their parent) via
 // the spawn_subagent tool. Absent/"user" means a normal user-created chat.
-export type ChatKind = "user" | "coordinator" | "subagent";
+export type ChatKind = "user" | "coordinator" | "subagent" | "master";
 
 export interface RepoInfo {
   id: string;
@@ -265,12 +272,15 @@ export interface AppPrefs {
   claudeEffort?: EffortLevel;
   /** Token count at which Claude chats auto-compact. Unset → 200k. */
   autoCompactWindow?: number;
-  /** Max turns running at once across all chats; extras queue FIFO. Unset → 4,
-   *  0 → unlimited. */
+  /** Opt-in cap on turns running at once across all chats; extras queue FIFO.
+   *  Unset or 0 → unlimited, which is the default: chats all run in parallel. */
   maxConcurrentTurns?: number;
   /** How many hours a chat with "Keep warm" on is pinged to keep its prompt
    *  cache alive after the last real activity. Unset / 0 → off. */
   keepWarmHours?: number;
+  /** Return summaries of Claude's thinking. Off → thinking is omitted, which
+   *  starts replies ~1–3s sooner. */
+  thinkingSummaries?: boolean;
 }
 
 /** Running spend for one chat, API-equivalent (list price, not billing). */
@@ -327,6 +337,13 @@ export interface ChatSummary {
   queuePaused?: boolean;
   /** Mirrors ChatRecord.keepWarm so startup can re-arm keep-alive timers. */
   keepWarm?: boolean;
+  /** Mirrors ChatRecord.keepWarmUntil: when the warmth budget runs out, so
+   *  list views can show the countdown without reading the full record. */
+  keepWarmUntil?: string;
+  /** Mirrors ChatRecord.cost?.lastApiAt — when this chat last hit the API, so
+   *  list views can show whether its prompt cache is still warm without
+   *  reading every full transcript. */
+  lastApiAt?: string;
   /** Mirrors ChatRecord.handoffTo?.chatId. */
   continuedInChatId?: string;
 }
@@ -478,9 +495,14 @@ export interface ChatRecord {
   context1m?: boolean;
   /** Running API-equivalent cost, including silent turns (see ChatCost). */
   cost?: ChatCost;
-  /** Opt-in: ping the chat every 55 min after its last activity so the
-   *  prompt cache never goes cold (window length = prefs.keepWarmHours). */
+  /** Opt-in: ping the chat every 55 min so its prompt cache never goes cold.
+   *  Always set together with keepWarmUntil, and cleared with it. */
   keepWarm?: boolean;
+  /** ISO deadline the pings run until — the warmth *budget*. Stored as an
+   *  absolute time, not a counter, so it survives a server restart and the
+   *  ping loop can check it before every ping. Topped up a click at a time;
+   *  when it passes, the server clears both fields and the chat goes cold. */
+  keepWarmUntil?: string;
   /** Set on the old chat once it has been continued in a fresh one. */
   handoffTo?: ChatHandoffTo;
   /** Set on the fresh chat: where it came from, and the composer text to
@@ -645,6 +667,14 @@ export type ClientMessage =
       turnId: string;
     }
   | {
+      // Takes a queued user message off the queue and sends it into the
+      // in-flight turn without stopping it; the agent sees it after its
+      // current tool call. Runs as a normal turn when nothing is running.
+      type: "steer_queued_turn";
+      chatId: string;
+      turnId: string;
+    }
+  | {
       // Updates the permissionMode of an in-flight turn. The server applies
       // this dynamically so toggling bypass mid-turn takes effect on the
       // next (and any pending) permission decision.
@@ -748,6 +778,15 @@ export type AgentEvent =
       uuid: string;
       sessionId: string;
       content: ContentBlock[];
+    }
+  | {
+      // The text / thinking block the model is generating right now, sent as
+      // it grows. Never persisted: the finished block arrives as `assistant`.
+      type: "assistant_partial";
+      chatId: string;
+      id: string;
+      blockType: "text" | "thinking";
+      text: string;
     }
   | {
       type: "user_tool_results";

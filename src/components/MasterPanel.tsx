@@ -161,6 +161,22 @@ function MasterChat({
 
   const [model, setModel] = useState<Model>(info.model);
   useEffect(() => setModel(info.model), [info.model]);
+  // The chat record is the source of truth for the model: /api/master can be
+  // stale (a server started before its memo fix still serves the model it saw
+  // at boot), and seeding the Composer from it reverts the user's choice on
+  // the next send.
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getChat(info.repoPath, info.chatId)
+      .then((record) => {
+        if (!cancelled && record?.model) setModel(record.model);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [info.repoPath, info.chatId]);
   const handleModelChange = useCallback(
     (next: string) => {
       setModel(next);
@@ -204,12 +220,7 @@ function MasterChat({
         <span className="master-head-status">
           <StatusIcon status={agent.status ?? "idle"} />
         </span>
-        <WarmPill
-          lastApiAtMs={lastApiAtMs}
-          keepWarm
-          keepWarmHours={info.keepWarmHours}
-          locked
-        />
+        <WarmPill lastApiAtMs={lastApiAtMs} locked managedHours={info.keepWarmHours} />
         <button
           type="button"
           className="master-collapse-btn"
@@ -248,8 +259,6 @@ function MasterChat({
           slotQueue={agent.slotQueue}
           handoffTo={agent.meta.handoffTo}
           onOpenChat={() => void onReload()}
-          keepWarm
-          keepWarmHours={info.keepWarmHours}
           onHandoff={() => void handleHandoff()}
           handoffBusy={handoffBusy}
           handoffError={handoffError}
@@ -299,8 +308,6 @@ function MasterChat({
             onEffortChange={settings.onEffortChange}
             chatCost={agent.meta.cost}
             chatStartedAt={chatStartedAt}
-            keepWarm
-            keepWarmHours={info.keepWarmHours}
             prefill={agent.turns.length === 0 ? agent.meta.handoffPrefill : null}
           />
         </div>

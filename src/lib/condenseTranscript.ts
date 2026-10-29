@@ -10,9 +10,9 @@ export type RenderedTurn = Exclude<ChatTurn, { kind: "tool_results" }>;
 // so it stays visible even mid-turn.
 const QUESTION_TOOLS = ["ExitPlanMode", "RequestUserAttention", "AskUserQuestion"];
 
-// Presentational tools render as rich content (SVG, table, chart) rather than
+// Presentational tools render as rich content (SVG, table, chart, image) rather than
 // as a tool call — their output *is* the message, so it is never activity.
-const PRESENTATIONAL_TOOLS = ["RenderSVG", "RenderTable", "RenderChart", "Render3DModel"];
+const PRESENTATIONAL_TOOLS = ["RenderSVG", "RenderTable", "RenderChart", "Render3DModel", "ShowImage"];
 
 // MCP exposes tools as `mcp__<server>__<Tool>`, so match the bare name too.
 const matchesTool = (name: string, names: string[]): boolean =>

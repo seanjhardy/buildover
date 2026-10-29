@@ -2,6 +2,7 @@ import { useState } from "react";
 import {
   ChevronDown,
   ChevronUp,
+  CornerDownRight,
   GripVertical,
   Paperclip,
   Pause,
@@ -21,6 +22,8 @@ interface Props {
   /** Removes any queued entry by id. */
   onRemove: (id: string) => void;
   onFastTrack: (id: string) => void;
+  /** Sends into the running turn without stopping it. */
+  onSteer: (id: string) => void;
   onReorder: (fromIndex: number, toIndex: number) => void;
 }
 
@@ -52,6 +55,7 @@ export function MessageQueue({
   onTogglePause,
   onRemove,
   onFastTrack,
+  onSteer,
   onReorder,
 }: Props) {
   const [collapsed, setCollapsed] = useState(false);
@@ -152,6 +156,15 @@ export function MessageQueue({
                     )}
                     <span className="message-queue-text">{preview(msg.text)}</span>
                     <div className="message-queue-item-actions">
+                      <button
+                        type="button"
+                        className="message-queue-action steer"
+                        onClick={() => onSteer(msg.id)}
+                        title="Send after the current step (doesn't stop the turn)"
+                        aria-label="Send after the current step"
+                      >
+                        <CornerDownRight size={14} />
+                      </button>
                       <button
                         type="button"
                         className="message-queue-action fast"

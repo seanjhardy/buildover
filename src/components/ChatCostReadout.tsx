@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Flame } from "lucide-react";
 import type { ChatCost } from "../types.js";
+import { WarmPill, type WarmPillProps } from "./WarmPill.js";
 import {
   costReadoutIsAmber,
   formatDuration,
@@ -15,10 +15,8 @@ interface Props {
   startedAt?: string;
   /** Current context size in tokens (the context ring's "used"). */
   contextTokens: number;
-  /** Keep-warm toggle; omitted for providers without a prompt cache. */
-  keepWarm?: boolean;
-  keepWarmHours?: number;
-  onToggleKeepWarm?: () => void;
+  /** The chat's warmth pill; omitted for providers without a prompt cache. */
+  warm?: WarmPillProps;
 }
 
 const TOOLTIP_WIDTH = 230;
@@ -36,15 +34,13 @@ function useNow(intervalMs = 30_000): number {
 /**
  * Running API-equivalent cost and age of the chat, e.g. `$4.12 · 2h 14m`, next
  * to the context ring. Turns amber when the context is large or the last turn
- * was expensive. The tooltip has the details; the flame toggles keep-warm.
+ * was expensive. The tooltip has the details; the warm pill sits alongside.
  */
 export function ChatCostReadout({
   cost,
   startedAt,
   contextTokens,
-  keepWarm = false,
-  keepWarmHours = 6,
-  onToggleKeepWarm,
+  warm,
 }: Props) {
   const now = useNow();
   const [hovered, setHovered] = useState(false);
@@ -74,22 +70,7 @@ export function ChatCostReadout({
       <span className="cost-readout-text" aria-label={`Chat cost and age: ${label}`}>
         {label}
       </span>
-      {onToggleKeepWarm && (
-        <button
-          type="button"
-          className={`cost-readout-warm${keepWarm ? " is-on" : ""}`}
-          aria-pressed={keepWarm}
-          onClick={onToggleKeepWarm}
-          title={
-            keepWarm
-              ? `Keep warm ${keepWarmHours}h is on. Click to stop.`
-              : `Keep warm ${keepWarmHours}h: ping every 55 min so the prompt cache never expires`
-          }
-        >
-          <Flame size={12} />
-          {keepWarm && <span>{keepWarmHours}h</span>}
-        </button>
-      )}
+      {warm && <WarmPill {...warm} />}
       {hovered &&
         createPortal(
           <div

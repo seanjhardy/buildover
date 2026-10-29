@@ -12,7 +12,14 @@ interface ImportMeta {
 // Only available when running inside Electron; undefined in plain browser dev mode.
 interface ElectronNotifications {
   updateBadge(attentionCount: number, runningCount: number): Promise<void>;
-  notify(title: string, body: string): Promise<void>;
+  notify(title: string, body: string, target?: NotificationTarget): Promise<void>;
+  /** Fires when the user clicks a notification; returns an unsubscribe fn. */
+  onClick(cb: (target: NotificationTarget) => void): () => void;
+}
+
+interface NotificationTarget {
+  repoPath: string;
+  chatId: string;
 }
 
 interface ElectronShell {

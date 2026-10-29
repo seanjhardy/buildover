@@ -202,7 +202,7 @@ export function makeOrchestratorMcp(
         ])
         .optional()
         .describe(
-          "Model for the new chat. Defaults to claude-opus-5 if omitted.",
+          "Model for the new chat. Defaults to claude-opus-5-5 if omitted.",
         ),
       permissionMode: z
         .enum(["default", "acceptEdits", "plan", "bypassPermissions"])
@@ -220,7 +220,7 @@ export function makeOrchestratorMcp(
           `Repo not found at ${args.repoPath}. Call open_repo first.`,
         );
       }
-      const model: Model = args.model ?? "claude-opus-5";
+      const model: Model = args.model ?? "claude-opus-5-5";
       const permissionMode: PermissionMode = args.permissionMode ?? "default";
       const record = await createChat(meta.path, { model, permissionMode });
 

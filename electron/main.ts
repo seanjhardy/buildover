@@ -229,13 +229,35 @@ app.whenReady().then(async () => {
   });
 
   // ── Native notification ─────────────────────────────────────────────────────
-  // Only fires when the main window is NOT focused — user is already watching otherwise.
+  // The renderer decides whether to notify (it knows which chat is on screen).
+  // Clicking brings the window forward and tells the renderer which chat to open.
+  // Live notifications are held here so their click handlers aren't GC'd.
+  const liveNotifications = new Set<any>();
   ipcMain.handle(
     "notification:notify",
-    (_event: any, title: string, body: string) => {
-      if (mainWindow?.isFocused()) return;
+    (_event: any, title: string, body: string, target?: { repoPath: string; chatId: string }) => {
       if (!Notification.isSupported()) return;
       const n = new Notification({ title, body, silent: true });
+      liveNotifications.add(n);
+      const release = () => liveNotifications.delete(n);
+      n.on("close", release);
+      n.on("click", () => {
+        release();
+        const sendTarget = () => {
+          if (!target || !mainWindow) return;
+          mainWindow.webContents.send("notification:clicked", target);
+        };
+        if (!mainWindow) {
+          createWindow();
+          mainWindow.webContents.once("did-finish-load", sendTarget);
+        } else {
+          if (mainWindow.isMinimized()) mainWindow.restore();
+          mainWindow.show();
+          mainWindow.focus();
+          sendTarget();
+        }
+        app.focus({ steal: true });
+      });
       n.show();
     },
   );

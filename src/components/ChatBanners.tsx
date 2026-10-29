@@ -1,7 +1,9 @@
 import { useEffect, useState } from "react";
 import { CornerDownRight, Flame, Loader2, X } from "lucide-react";
 import type { ChatHandoffTo } from "../types.js";
+import { KEEP_WARM_BUDGET_HOURS } from "../types.js";
 import { chatWarning } from "../lib/tokenCost.js";
+import { budgetMsLeft, formatWarmSpan } from "../lib/warmth.js";
 import type { ChatNotice, SlotQueueInfo } from "../hooks/useAgent.js";
 
 interface Props {
@@ -17,10 +19,13 @@ interface Props {
   slotQueue: SlotQueueInfo | null;
   handoffTo: ChatHandoffTo | null;
   onOpenChat: (chatId: string) => void;
-  keepWarm: boolean;
-  keepWarmHours: number;
-  /** Omitted for providers without a prompt cache. */
-  onToggleKeepWarm?: () => void;
+  /** ISO deadline the warmth budget runs to. Absent === warming off. */
+  keepWarmUntil?: string | null;
+  /** Buys a warmth budget. Omitted for providers without a prompt cache. */
+  onKeepWarm?: (hours: number) => void;
+  /** Inside a grid card the warm pill already carries the cost story, so the
+   *  cost banners are suppressed there and only the live notices remain. */
+  hideCostWarning?: boolean;
   onHandoff: () => void;
   handoffBusy: boolean;
   handoffError: string | null;
@@ -53,9 +58,9 @@ export function ChatBanners(props: Props) {
     slotQueue,
     handoffTo,
     onOpenChat,
-    keepWarm,
-    keepWarmHours,
-    onToggleKeepWarm,
+    keepWarmUntil,
+    onKeepWarm,
+    hideCostWarning,
     onHandoff,
     handoffBusy,
     handoffError,
@@ -68,7 +73,10 @@ export function ChatBanners(props: Props) {
     return () => clearInterval(id);
   }, []);
 
-  const warning = busy || handoffTo ? null : chatWarning({ model, contextTokens, lastApiAtMs, now });
+  const warning =
+    busy || handoffTo || hideCostWarning
+      ? null
+      : chatWarning({ model, contextTokens, lastApiAtMs, now });
   const [dismissedKey, setDismissedKey] = useState<string | null>(() => readDismissed(chatId));
 
   useEffect(() => {
@@ -99,6 +107,7 @@ export function ChatBanners(props: Props) {
   };
 
   const showWarning = warning !== null && warning.key !== dismissedKey;
+  const budgetLeft = budgetMsLeft(keepWarmUntil);
 
   if (!notice && !slotQueue && !handoffTo && !showWarning && !handoffError) return null;
 
@@ -108,8 +117,10 @@ export function ChatBanners(props: Props) {
         <div className="chat-banner chat-banner--info" role="status">
           <Loader2 size={13} className="chat-banner-spinner" />
           <span className="chat-banner-text">
-            Queued: waiting for a free agent slot ({slotQueue.running}/{slotQueue.max} turns running
-            {slotQueue.position > 1 ? `, ${slotQueue.position - 1} ahead of this one` : ""}).
+            Queued: you have capped concurrent turns at {slotQueue.max} and {slotQueue.running} are
+            running{slotQueue.position > 1 ? `, ${slotQueue.position - 1} chat${slotQueue.position > 2 ? "s" : ""} ahead of this one` : ""}.
+            This chat starts on its own as soon as a turn finishes. Clear the maxConcurrentTurns
+            preference (or set it to 0) to run every chat at once.
           </span>
         </div>
       )}
@@ -136,7 +147,9 @@ export function ChatBanners(props: Props) {
       )}
       {showWarning && warning && (
         <div
-          className={`chat-banner chat-banner--actions chat-banner--${warning.kind === "cold" ? "warn" : "info"}`}
+          // Both kinds are information about cost, so neither takes the amber
+          // treatment reserved for things that actually went wrong.
+          className="chat-banner chat-banner--actions chat-banner--info"
           role="status"
         >
           <span className="chat-banner-text">
@@ -146,7 +159,9 @@ export function ChatBanners(props: Props) {
           <div className="chat-banner-actions">
             <button
               type="button"
-              className="chat-banner-btn chat-banner-btn--primary"
+              // A cold cache is a one-off cost, not a reason to abandon the
+              // chat: only the large-context note pushes a fresh chat hard.
+              className={`chat-banner-btn${warning.kind === "large" ? " chat-banner-btn--primary" : ""}`}
               onClick={onHandoff}
               disabled={handoffBusy}
             >
@@ -161,17 +176,25 @@ export function ChatBanners(props: Props) {
                 </>
               )}
             </button>
-            {warning.kind === "cold" && onToggleKeepWarm && (
+            {warning.kind === "cold" && onKeepWarm && (
               <button
                 type="button"
-                className={`chat-banner-btn${keepWarm ? " is-on" : ""}`}
-                aria-pressed={keepWarm}
-                onClick={onToggleKeepWarm}
-                title="Ping every 55 min so the prompt cache never expires again"
+                className={`chat-banner-btn${budgetLeft > 0 ? " is-on" : ""}`}
+                aria-pressed={budgetLeft > 0}
+                onClick={() => onKeepWarm(KEEP_WARM_BUDGET_HOURS)}
+                title={
+                  budgetLeft > 0
+                    ? `Already keeping this warm for ${formatWarmSpan(budgetLeft)} more — click to add ${KEEP_WARM_BUDGET_HOURS}h`
+                    : `Ping every 55 min for ${KEEP_WARM_BUDGET_HOURS}h so the cache stays alive`
+                }
               >
                 <Flame size={12} />
-                <span className="chat-banner-btn-full">Keep warm {keepWarmHours}h</span>
-                <span className="chat-banner-btn-abbr">{keepWarmHours}h</span>
+                <span className="chat-banner-btn-full">
+                  {budgetLeft > 0 ? `Warm ${formatWarmSpan(budgetLeft)}` : `Keep warm ${KEEP_WARM_BUDGET_HOURS}h`}
+                </span>
+                <span className="chat-banner-btn-abbr">
+                  {budgetLeft > 0 ? formatWarmSpan(budgetLeft) : `${KEEP_WARM_BUDGET_HOURS}h`}
+                </span>
               </button>
             )}
             <button type="button" className="chat-banner-dismiss" onClick={dismiss} aria-label="Dismiss">

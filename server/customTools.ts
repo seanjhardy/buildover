@@ -4,6 +4,7 @@ import {
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { writeRunConfig } from "./runConfig.js";
+import { showImages } from "./shownImages.js";
 
 // Callback type: the tool handler calls this and awaits the returned promise,
 // which only resolves when a real attention_ack WebSocket message arrives from
@@ -276,6 +277,40 @@ export function createCustomToolsServer(
             text: `Rendered ${args.type} chart${title} in the chat.`,
           },
         ],
+      };
+    },
+  );
+
+  // ShowImage: puts image files in front of the user without the model seeing
+  // them. The handler snapshots each file into buildover's own store and
+  // returns one line of text per image carrying a reference to the snapshot;
+  // the client reads the reference from the tool result and loads the image
+  // from /api/shown-images. No image content is ever returned to the model.
+  const showImageTool = tool(
+    "ShowImage",
+    "Show image files to the user inline in the chat, without you seeing them. " +
+      "Use this for screenshots, renders, plots or other images the user needs " +
+      "to look at but you don't. The image is never added to your context: you " +
+      "only get a one-line confirmation per image, so if you need to inspect an " +
+      "image yourself, read it separately. Supports png, jpg, gif, webp and svg. " +
+      "The file is copied at call time, so it stays visible even if it is later " +
+      "moved or deleted.",
+    {
+      paths: z
+        .array(z.string())
+        .min(1)
+        .max(20)
+        .describe("Absolute paths of the image files to show, in display order."),
+      caption: z
+        .string()
+        .optional()
+        .describe("Optional one-line caption shown under the image(s). Plain text."),
+    },
+    async (args) => {
+      const { text, shown } = await showImages(args.paths);
+      return {
+        content: [{ type: "text" as const, text }],
+        ...(shown === 0 ? { isError: true } : {}),
       };
     },
   );
@@ -646,6 +681,128 @@ export function createCustomToolsServer(
     },
   );
 
+  // ── Routines / scheduled tasks ────────────────────────────────────────────
+  // Let the agent set up recurring routines itself (e.g. "every weekday at 9am,
+  // start a chat in this repo with this prompt"). Schedules are global and
+  // fire via node-cron; an omitted repoPath defaults to the current chat's repo.
+  const createScheduleTool = tool(
+    "create_schedule",
+    "Create a recurring routine: on a cron schedule, start a new chat (or message an existing one) with a prompt. " +
+      "Use this when the user asks to set up a routine, recurring task, or scheduled process. " +
+      "The cron expression is standard 5-field (minute hour day-of-month month day-of-week), e.g. " +
+      "'0 9 * * 1-5' = 9am on weekdays, '*/30 * * * *' = every 30 minutes, '0 8 * * *' = 8am daily.",
+    {
+      label: z.string().describe("Short human-readable name for the routine."),
+      cronExpression: z
+        .string()
+        .describe("Standard 5-field cron expression, e.g. '0 9 * * 1-5'."),
+      prompt: z
+        .string()
+        .describe("The message sent to the chat each time the routine fires."),
+      repoPath: z
+        .string()
+        .optional()
+        .describe("Absolute repo path to run in. Defaults to the current chat's repo."),
+      chatId: z
+        .string()
+        .optional()
+        .describe("Existing chat to message. If omitted, a new chat is created each run."),
+      model: z.string().optional().describe("Model id; defaults to the app default."),
+      permissionMode: z
+        .enum(["default", "acceptEdits", "plan", "bypassPermissions"])
+        .optional()
+        .describe("Permission mode for the spawned chat."),
+      addToGrid: z
+        .boolean()
+        .optional()
+        .describe("When a new chat is created, also add it to the Grid board."),
+    },
+    async (args) => {
+      const targetRepo = args.repoPath || repoPath;
+      if (!targetRepo) {
+        return {
+          content: [{ type: "text" as const, text: "Error: repoPath is required (no current repo)." }],
+          isError: true,
+        };
+      }
+      try {
+        const { createTask } = await import("./schedules.js");
+        const task = await createTask({
+          label: args.label,
+          cronExpression: args.cronExpression,
+          prompt: args.prompt,
+          repoPath: targetRepo,
+          chatId: args.chatId,
+          model: args.model,
+          permissionMode: args.permissionMode,
+          addToGrid: args.addToGrid,
+        });
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: `Created routine "${task.label}" (${task.id}) — cron "${task.cronExpression}" in ${targetRepo}.`,
+            },
+          ],
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error creating routine: ${e instanceof Error ? e.message : String(e)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const listSchedulesTool = tool(
+    "list_schedules",
+    "List all configured routines / scheduled tasks with their cron expression, target repo, and enabled state.",
+    {},
+    async () => {
+      try {
+        const { readSchedules } = await import("./schedules.js");
+        const { tasks } = await readSchedules();
+        if (tasks.length === 0) return { content: [{ type: "text" as const, text: "No routines configured." }] };
+        const lines = tasks.map(
+          (t) =>
+            `• ${t.label} (${t.id}) — "${t.cronExpression}" — ${t.enabled ? "enabled" : "disabled"} — ${t.repoPath}${t.addToGrid ? " — grid" : ""}`,
+        );
+        return { content: [{ type: "text" as const, text: lines.join("\n") }] };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error listing routines: ${e instanceof Error ? e.message : String(e)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
+  const deleteScheduleTool = tool(
+    "delete_schedule",
+    "Delete a routine / scheduled task by its id (use list_schedules to find the id).",
+    { id: z.string().describe("The routine's id, e.g. 'sched_...'.") },
+    async (args) => {
+      try {
+        const { deleteTask } = await import("./schedules.js");
+        const ok = await deleteTask(args.id);
+        return {
+          content: [
+            {
+              type: "text" as const,
+              text: ok ? `Deleted routine ${args.id}.` : `No routine found with id ${args.id}.`,
+            },
+          ],
+          ...(ok ? {} : { isError: true }),
+        };
+      } catch (e) {
+        return {
+          content: [{ type: "text" as const, text: `Error deleting routine: ${e instanceof Error ? e.message : String(e)}` }],
+          isError: true,
+        };
+      }
+    },
+  );
+
   return createSdkMcpServer({
     name: "buildover-custom-tools",
     version: "1.0.0",
@@ -655,11 +812,15 @@ export function createCustomToolsServer(
       renderTableTool,
       renderChartTool,
       renderModelTool,
+      showImageTool,
       clearContextTool,
       handoffTool,
       writeRunConfigTool,
       todoReadTool,
       todoWriteTool,
+      createScheduleTool,
+      listSchedulesTool,
+      deleteScheduleTool,
     ],
   });
 }

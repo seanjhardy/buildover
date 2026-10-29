@@ -1,18 +1,27 @@
 /**
- * Global cap on concurrently running agent turns (pref: maxConcurrentTurns,
- * default 4). Extra turns wait FIFO. Each running turn holds one slot.
+ * Optional cap on concurrently running agent turns. Unlimited by default: start
+ * as many chats as you like and they all run at once. Setting the
+ * maxConcurrentTurns pref to a positive number turns the cap back on, in which
+ * case extra turns wait FIFO and each running turn holds one slot.
  *
- * Why this cannot deadlock: a slot is only ever waited on by a turn that has
- * not started, and slots are only freed by turns ending (or pausing for user
- * input — see AgentSession.suspendSlot). No turn blocks on another chat's turn
- * while holding a slot: spawn_subagent, send_message_to_subagent and
- * report_to_parent all fire-and-forget the other chat's runTurn (or park the
- * message) and return immediately; the SDK's own Agent-tool subagents run
- * inside the parent chat's CLI process and never take a slot. So the "waits
- * for" graph has no edges between turns, and therefore no cycles.
+ * Nothing else depends on this being bounded: plan/usage limits are handled
+ * separately (queueForUsageLimit parks a turn when the account is out of
+ * usage), and the CLI retries transient rate limits itself (surfaced as a
+ * non-fatal chat_notice), so queueing here would not prevent either.
+ *
+ * Why a cap cannot deadlock when one is set: a slot is only ever waited on by a
+ * turn that has not started, and slots are only freed by turns ending (or
+ * pausing for user input — see AgentSession.suspendSlot). No turn blocks on
+ * another chat's turn while holding a slot: spawn_subagent,
+ * send_message_to_subagent and report_to_parent all fire-and-forget the other
+ * chat's runTurn (or park the message) and return immediately; the SDK's own
+ * Agent-tool subagents run inside the parent chat's CLI process and never take
+ * a slot. So the "waits for" graph has no edges between turns, and therefore no
+ * cycles.
  */
 
-export const DEFAULT_MAX_CONCURRENT_TURNS = 4;
+/** No cap unless the user opts into one (`<= 0` means unlimited). */
+export const DEFAULT_MAX_CONCURRENT_TURNS = 0;
 
 interface Waiter {
   resolve: (acquired: boolean) => void;

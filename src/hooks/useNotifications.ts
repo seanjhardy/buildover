@@ -10,6 +10,10 @@ const ATTENTION_STATUSES = new Set<ChatStatus>(["awaiting_input", "error"]);
 // Statuses that trigger a native macOS notification on transition into them.
 const NOTIFY_STATUSES = new Set<ChatStatus>(["awaiting_input", "agent_done", "error"]);
 
+function repoName(repoPath: string): string {
+  return repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
+}
+
 function statusLabel(status: ChatStatus): string {
   switch (status) {
     case "awaiting_input": return "Needs your input";
@@ -27,11 +31,26 @@ function statusLabel(status: ChatStatus): string {
  *       - Empty = nothing noteworthy happening
  *  2. Fires native macOS notifications when agents transition into notify states.
  *
- * Works only inside Electron (window.electronNotifications is undefined in plain browser).
+ * A notification is skipped only when the window is focused AND that exact chat
+ * is on screen — so finishing work in another repo tab still notifies. Clicking
+ * a notification calls onOpenChat with the chat's repo and id.
+ *
+ * Native notifications + badge need Electron; in a plain browser we fall back
+ * to the Web Notification API when permission has already been granted.
  */
 export function useNotifications(
   allRepoChats: Record<string, ChatSummary[]>,
+  activeRepoPath: string | null,
+  activeChatId: string | null,
+  onOpenChat: (target: NotificationTarget) => void,
 ): void {
+  // Refs so navigation doesn't re-run the status effect (which would be harmless
+  // but wasteful) and the click listener always sees the latest callback.
+  const viewRef = useRef({ activeRepoPath, activeChatId });
+  viewRef.current = { activeRepoPath, activeChatId };
+  const onOpenChatRef = useRef(onOpenChat);
+  onOpenChatRef.current = onOpenChat;
+
   // chatId → last observed status — used to detect transitions
   const prevStatusRef = useRef<Map<string, ChatStatus>>(new Map());
 
@@ -42,7 +61,9 @@ export function useNotifications(
   // ── Status transitions → badge + notifications ──────────────────────────
   useEffect(() => {
     const api = window.electronNotifications;
-    if (!api) return; // Not running in Electron
+    const webNotify =
+      !api && typeof Notification !== "undefined" && Notification.permission === "granted";
+    if (!api && !webNotify) return;
 
     let attentionCount = 0;
     let runningCount = 0;
@@ -53,7 +74,7 @@ export function useNotifications(
     // Collect the set of chat IDs currently present so we can clean up stale entries.
     const currentChatIds = new Set<string>();
 
-    for (const chats of Object.values(allRepoChats)) {
+    for (const [repoPath, chats] of Object.entries(allRepoChats)) {
       for (const chat of chats) {
         currentChatIds.add(chat.id);
 
@@ -85,10 +106,26 @@ export function useNotifications(
           !notified.has(`${chat.id}:${chat.status}`)
         ) {
           notified.add(`${chat.id}:${chat.status}`);
-          void api.notify(
-            `buildover — ${statusLabel(chat.status)}`,
-            chat.title || "Unnamed chat",
-          );
+          const view = viewRef.current;
+          const onScreen =
+            document.hasFocus() &&
+            view.activeRepoPath === repoPath &&
+            view.activeChatId === chat.id;
+          if (!onScreen) {
+            const target = { repoPath, chatId: chat.id };
+            const title = `${repoName(repoPath)} — ${statusLabel(chat.status)}`;
+            const body = chat.title || chat.task || "Unnamed chat";
+            if (api) {
+              void api.notify(title, body, target);
+            } else {
+              const n = new Notification(title, { body, tag: `${chat.id}:${chat.status}`, silent: true });
+              n.onclick = () => {
+                window.focus();
+                onOpenChatRef.current(target);
+                n.close();
+              };
+            }
+          }
         }
 
         // Record current status as the new "previous" for the next render.
@@ -108,8 +145,15 @@ export function useNotifications(
     }
 
     // Update dock badge: number for attention, dot for running, empty when idle.
-    void api.updateBadge(attentionCount, runningCount);
+    if (api) void api.updateBadge(attentionCount, runningCount);
   }, [allRepoChats]);
+
+  // ── Notification click → open that chat ─────────────────────────────────
+  useEffect(() => {
+    const api = window.electronNotifications;
+    if (!api?.onClick) return;
+    return api.onClick((target) => onOpenChatRef.current(target));
+  }, []);
 
   // ── Window focus / visibility → clear attention badge ───────────────────
   // When the user brings the window into focus, clear the attention number only

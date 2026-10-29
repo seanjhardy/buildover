@@ -6,6 +6,7 @@ import {
   readCreds,
   resolveClaudeCli,
 } from "./anthropicAuth.js";
+import { forgetUsageError } from "./usage.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -16,6 +17,13 @@ export interface ClaudeLoginAttempt {
   startedAt?: string;
   finishedAt?: string;
   error?: string;
+  /**
+   * The claude.ai sign-in page the CLI printed. On a desktop the CLI opens it
+   * itself and catches the callback; on the server nothing can open it, so
+   * the UI links to it and sends back the code the page shows (see
+   * submitClaudeLoginCode).
+   */
+  url?: string;
 }
 
 export interface ClaudeAuthStatus {
@@ -30,8 +38,19 @@ export interface ClaudeAuthStatus {
   error?: string;
 }
 
-let loginProcess: ChildProcess | null = null;
-let loginAttempt: ClaudeLoginAttempt = { state: "idle" };
+// Login attempts and the status they're reflected in are tracked per
+// configDir (`""` = the default/primary account) so two accounts can log in
+// independently without one clobbering the other's in-flight attempt.
+const loginProcesses = new Map<string, ChildProcess>();
+const loginAttempts = new Map<string, ClaudeLoginAttempt>();
+
+function key(configDir?: string): string {
+  return configDir ?? "";
+}
+
+function getLoginAttempt(configDir?: string): ClaudeLoginAttempt {
+  return loginAttempts.get(key(configDir)) ?? { state: "idle" };
+}
 
 function parseStatus(value: string): Partial<ClaudeAuthStatus> | null {
   try {
@@ -54,19 +73,26 @@ function parseStatus(value: string): Partial<ClaudeAuthStatus> | null {
   }
 }
 
-export async function getClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
+/**
+ * configDir, when provided, is passed to the CLI as CLAUDE_CONFIG_DIR so the
+ * status reflects that account rather than the default/primary one.
+ */
+export async function getClaudeAuthStatus(
+  configDir?: string,
+): Promise<ClaudeAuthStatus> {
+  const env = configDir ? { ...process.env, CLAUDE_CONFIG_DIR: configDir } : process.env;
   try {
     const { stdout } = await execFileAsync(
       resolveClaudeCli(),
       ["auth", "status", "--json"],
-      { timeout: 10_000, maxBuffer: 256 * 1024 },
+      { timeout: 10_000, maxBuffer: 256 * 1024, env },
     );
     const status = parseStatus(stdout);
     if (!status) throw new Error("Claude returned an unreadable auth status");
 
     let expiresAt: string | undefined;
     try {
-      const creds = await readCreds(true);
+      const creds = await readCreds(true, configDir);
       if (Number.isFinite(creds.expiresAt)) {
         expiresAt = new Date(creds.expiresAt).toISOString();
       }
@@ -78,7 +104,7 @@ export async function getClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
       loggedIn: status.loggedIn === true,
       ...status,
       expiresAt,
-      login: { ...loginAttempt },
+      login: { ...getLoginAttempt(configDir) },
     };
   } catch (err) {
     const stdout = String(
@@ -88,7 +114,7 @@ export async function getClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
     return {
       loggedIn: status?.loggedIn === true,
       ...status,
-      login: { ...loginAttempt },
+      login: { ...getLoginAttempt(configDir) },
       error: status
         ? undefined
         : "Buildover could not read Claude Code's authentication status.",
@@ -96,68 +122,116 @@ export async function getClaudeAuthStatus(): Promise<ClaudeAuthStatus> {
   }
 }
 
+const LOGIN_TIMEOUT_MS = 10 * 60_000;
+const AUTHORIZE_URL = /https:\/\/\S+\/oauth\/authorize\?\S+/;
+
 /**
  * Start the official Claude CLI browser login without blocking the API request.
- * Only one login process may run at once. On native desktop the OAuth callback
- * returns directly to the CLI; no token ever passes through the renderer.
+ * Only one login process may run at once per account (per configDir). On
+ * native desktop the OAuth callback returns directly to the CLI; no token
+ * ever passes through the renderer. When configDir is set, the login writes
+ * that account's credentials instead of the default/primary account's.
  */
-export function startClaudeLogin(): ClaudeLoginAttempt {
-  if (loginProcess && loginAttempt.state === "running") {
-    return { ...loginAttempt };
+export function startClaudeLogin(configDir?: string): ClaudeLoginAttempt {
+  const k = key(configDir);
+  const existingProcess = loginProcesses.get(k);
+  const existingAttempt = getLoginAttempt(configDir);
+  if (existingProcess && existingAttempt.state === "running") {
+    const age = Date.now() - new Date(existingAttempt.startedAt ?? 0).getTime();
+    if (existingAttempt.url && age < LOGIN_TIMEOUT_MS) return { ...existingAttempt };
+    // Abandoned or never printed a URL: start over rather than wait on it.
+    loginProcesses.delete(k);
+    existingProcess.kill();
   }
 
   const startedAt = new Date().toISOString();
-  loginAttempt = { state: "running", startedAt };
+  loginAttempts.set(k, { state: "running", startedAt });
 
   try {
     const child = spawn(
       resolveClaudeCli(),
       ["auth", "login", "--claudeai"],
       {
-        env: process.env,
-        stdio: ["ignore", "ignore", "ignore"],
+        env: configDir
+          ? { ...process.env, CLAUDE_CONFIG_DIR: configDir }
+          : process.env,
+        stdio: ["pipe", "pipe", "pipe"],
       },
     );
-    loginProcess = child;
+    loginProcesses.set(k, child);
+    const killTimer = setTimeout(() => child.kill(), LOGIN_TIMEOUT_MS);
+    killTimer.unref();
+
+    let output = "";
+    const onOutput = (chunk: Buffer) => {
+      output = (output + chunk.toString()).slice(-8_000);
+      const attempt = loginAttempts.get(k);
+      const url = output.match(AUTHORIZE_URL)?.[0];
+      if (url && attempt?.state === "running" && !attempt.url && loginProcesses.get(k) === child) {
+        loginAttempts.set(k, { ...attempt, url });
+      }
+    };
+    child.stdout?.on("data", onOutput);
+    child.stderr?.on("data", onOutput);
+    child.stdin?.on("error", () => {});
 
     child.once("error", (err) => {
-      if (loginProcess !== child) return;
-      loginProcess = null;
-      loginAttempt = {
+      if (loginProcesses.get(k) !== child) return;
+      loginProcesses.delete(k);
+      loginAttempts.set(k, {
         state: "failed",
         startedAt,
         finishedAt: new Date().toISOString(),
         error: `Could not start Claude login: ${err.message}`,
-      };
+      });
     });
 
     child.once("exit", (code, signal) => {
-      if (loginProcess !== child) return;
-      loginProcess = null;
-      clearCredsCache();
+      clearTimeout(killTimer);
+      if (loginProcesses.get(k) !== child) return;
+      loginProcesses.delete(k);
+      clearCredsCache(configDir);
       const succeeded = code === 0;
-      loginAttempt = {
+      if (succeeded) void forgetUsageError(configDir);
+      loginAttempts.set(k, {
         state: succeeded ? "succeeded" : "failed",
         startedAt,
         finishedAt: new Date().toISOString(),
         ...(!succeeded
           ? {
               error: signal
-                ? `Claude login was interrupted (${signal}).`
-                : "Claude login did not complete. Try again or run `claude auth login` in a terminal.",
+                ? "Claude login timed out or was interrupted. Please try again."
+                : (output.match(/Login failed:[^\n]*/)?.[0] ??
+                  "Claude login did not complete. Please try again."),
             }
           : {}),
-      };
+      });
     });
   } catch (err) {
-    loginProcess = null;
-    loginAttempt = {
+    loginProcesses.delete(k);
+    loginAttempts.set(k, {
       state: "failed",
       startedAt,
       finishedAt: new Date().toISOString(),
       error: err instanceof Error ? err.message : String(err),
-    };
+    });
   }
 
-  return { ...loginAttempt };
+  return { ...getLoginAttempt(configDir) };
+}
+
+/**
+ * Sends the code shown by claude.ai after signing in to the waiting
+ * `claude auth login` process (it prompts "Paste code here").
+ */
+export function submitClaudeLoginCode(code: string, configDir?: string): ClaudeLoginAttempt {
+  const k = key(configDir);
+  const child = loginProcesses.get(k);
+  const trimmed = code.trim();
+  if (!child?.stdin || getLoginAttempt(configDir).state !== "running") {
+    throw new Error("No Claude login is waiting for a code. Start the sign-in again.");
+  }
+  if (!trimmed) throw new Error("Paste the code shown after signing in.");
+  child.stdin.write(`${trimmed}\n`);
+  return { ...getLoginAttempt(configDir) };
 }

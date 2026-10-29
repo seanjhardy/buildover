@@ -17,12 +17,14 @@ import { WebSocketServer, type WebSocket } from "ws";
 import {
   createChat,
   deleteChat,
+  forkChat,
   listChats,
   readChat,
   recoverStaleChat,
   recoverStaleChatsForRepoWithIds,
   setContext1m,
   setKeepWarm,
+  setChatPermissionMode,
   setModel,
   setQueuePaused,
   setStarred,
@@ -73,7 +75,7 @@ import {
 } from "./sessions.js";
 import { getOrchestrator } from "./orchestrator.js";
 import { classifySegment } from "./segmenter.js";
-import { ClaudeUsageError, fetchUsage } from "./usage.js";
+import { ClaudeUsageError, getUsage } from "./usage.js";
 import { turnSlots } from "./turnSlots.js";
 import { fetchCursorUsage } from "./cursorUsage.js";
 import { fetchCursorModels } from "./cursorModels.js";
@@ -127,13 +129,26 @@ import {
   deleteTask,
   startScheduler,
 } from "./schedules.js";
+import {
+  listGridChats,
+  addToGrid,
+  removeFromGrid,
+  reorderGrid,
+  createGridChat,
+  markGridChatDone,
+  listRecentChats,
+} from "./grid.js";
+import { ensureMasterChat } from "./master.js";
 import { attachTerminalWss } from "./terminal.js";
+import { windDownIdleProcesses } from "./agent.js";
 import {
   readInstalledServers,
   writeInstalledServers,
+  installedMcpServerInfos,
 } from "./mcp-config.js";
+import { readToolsCache } from "./mcp-tools-cache.js";
 import { startMcpAuth, getMcpAuthState } from "./mcpAuth.js";
-import type { InstalledMcpServer } from "../src/types.js";
+import type { InstalledMcpServer, McpServerInfo } from "../src/types.js";
 import { searchMessages, removeIndexedChat, getIndexStatus } from "./embeddings.js";
 import {
   readRunConfig,
@@ -150,7 +165,16 @@ import {
   startSelfUpdateChecker,
 } from "./selfUpdate.js";
 import { fetchWithClaudeAuth } from "./anthropicAuth.js";
-import { getClaudeAuthStatus, startClaudeLogin } from "./claudeAuth.js";
+import { getClaudeAuthStatus, startClaudeLogin, submitClaudeLoginCode } from "./claudeAuth.js";
+import {
+  addAccount as addClaudeAccount,
+  getAccount as getClaudeAccount,
+  getActiveAccount as getActiveClaudeAccount,
+  listAccountSummaries,
+  removeAccount as removeClaudeAccount,
+  setActiveAccount,
+  setAutoSwitch as setClaudeAutoSwitch,
+} from "./claudeAccounts.js";
 import {
   enableVpn,
   disableVpn,
@@ -182,6 +206,7 @@ import {
   updateTemplate,
 } from "./templates.js";
 import { patchPrefs, readPrefs } from "./prefs.js";
+import { SHOWN_IMAGES_DIR, SHOWN_IMAGE_MIME, SHOWN_IMAGE_NAME, type ShownImageFormat } from "./shownImages.js";
 import { DEFAULT_MODEL, EFFORT_LEVELS, type AppPrefs, type EffortLevel } from "../src/types.js";
 import type {
   AgentEvent,
@@ -317,10 +342,18 @@ app.post("/api/env/set", async (req, res) => {
 
 app.get("/api/usage", async (_req, res) => {
   try {
-    res.json(await fetchUsage());
+    // The active account's usage, plus a summary of every Claude account so
+    // the UI can show which one is active and switch between them.
+    const active = await getActiveClaudeAccount();
+    const usage = await getUsage(active.configDir ?? undefined);
+    const accountInfo = await listAccountSummaries().catch(() => null);
+    res.json({ ...usage, ...(accountInfo ?? {}) });
   } catch (err) {
     res.status(err instanceof ClaudeUsageError ? err.status : 500).json({
       error: err instanceof Error ? err.message : String(err),
+      ...(err instanceof ClaudeUsageError && err.retryAfterMs
+        ? { retryAt: new Date(Date.now() + err.retryAfterMs).toISOString() }
+        : {}),
     });
   }
 });
@@ -336,6 +369,62 @@ app.get("/api/claude/auth/status", async (_req, res) => {
 // the browser process or this response.
 app.post("/api/claude/auth/login", (_req, res) => {
   res.status(202).json({ login: startClaudeLogin() });
+});
+
+// The code claude.ai shows when the CLI couldn't catch the sign-in callback.
+app.post("/api/claude/auth/login/code", (req, res) => {
+  try {
+    res.json({ login: submitClaudeLoginCode(String(req.body?.code ?? "")) });
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Multiple Claude accounts: Buildover switches to another logged-in account
+// when the active one runs out of usage (see claudeAccounts.ts).
+app.get("/api/claude/accounts", async (_req, res) => {
+  res.json(await listAccountSummaries());
+});
+
+app.post("/api/claude/accounts", async (req, res) => {
+  const label = typeof req.body?.label === "string" ? req.body.label : undefined;
+  const account = await addClaudeAccount(label);
+  res.status(201).json({ id: account.id, label: account.label });
+});
+
+app.patch("/api/claude/accounts", async (req, res) => {
+  if (typeof req.body?.autoSwitch === "boolean") {
+    await setClaudeAutoSwitch(req.body.autoSwitch);
+  }
+  res.json(await listAccountSummaries());
+});
+
+app.post("/api/claude/accounts/:id/login", async (req, res) => {
+  const account = await getClaudeAccount(req.params.id);
+  if (!account) return res.status(404).json({ error: "Account not found" });
+  res.status(202).json({ login: startClaudeLogin(account.configDir ?? undefined) });
+});
+
+app.post("/api/claude/accounts/:id/login/code", async (req, res) => {
+  const account = await getClaudeAccount(req.params.id);
+  if (!account) return res.status(404).json({ error: "Account not found" });
+  try {
+    res.json({ login: submitClaudeLoginCode(String(req.body?.code ?? ""), account.configDir ?? undefined) });
+  } catch (err) {
+    res.status(409).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.post("/api/claude/accounts/:id/activate", async (req, res) => {
+  const account = await setActiveAccount(req.params.id);
+  if (!account) return res.status(404).json({ error: "Account not found" });
+  res.json(await listAccountSummaries());
+});
+
+app.delete("/api/claude/accounts/:id", async (req, res) => {
+  const ok = await removeClaudeAccount(req.params.id);
+  if (!ok) return res.status(400).json({ error: "Cannot remove this account" });
+  res.json(await listAccountSummaries());
 });
 
 app.get("/api/cursor/usage", async (_req, res) => {
@@ -821,6 +910,13 @@ app.patch("/api/prefs", async (req, res) => {
       // null clears the override so the default applies.
       patch[key] = value === null ? undefined : Math.floor(value);
     }
+    const summaries = req.body?.thinkingSummaries;
+    if (summaries !== undefined) {
+      if (typeof summaries !== "boolean") {
+        return res.status(400).json({ error: `invalid thinkingSummaries: ${summaries}` });
+      }
+      patch.thinkingSummaries = summaries;
+    }
     const prefs = await patchPrefs(patch);
     turnSlots.setMax(prefs.maxConcurrentTurns);
     res.json({ prefs });
@@ -948,9 +1044,18 @@ app.patch("/api/chats/:chatId", async (req, res) => {
         (await setKeepWarm(repoPath, req.params.chatId, req.body.keepWarm)) ??
         record;
     }
-    // Archiving / un-archiving / toggling keep-warm starts or stops its pings.
+    // Topping the warmth budget up: hours are added to whatever is left of it
+    // (see setKeepWarm), so repeated clicks accumulate.
+    if (typeof req.body?.keepWarmAddHours === "number" && req.body.keepWarmAddHours > 0) {
+      record =
+        (await setKeepWarm(repoPath, req.params.chatId, {
+          addHours: req.body.keepWarmAddHours,
+        })) ?? record;
+    }
+    // Archiving / un-archiving / changing the warmth budget starts or stops its pings.
     if (
       typeof req.body?.keepWarm === "boolean" ||
+      typeof req.body?.keepWarmAddHours === "number" ||
       typeof req.body?.userMarkedFinished === "boolean"
     ) {
       void getSession(repoPath, req.params.chatId).syncKeepWarm().catch(() => {});
@@ -975,6 +1080,24 @@ app.post("/api/chats/:chatId/handoff", async (req, res) => {
       notePath: result.notePath,
       method: result.method,
     });
+  } catch (err) {
+    res.status(400).json({
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+});
+
+// Copies a chat (full history) into a new one that continues from a forked
+// SDK session, leaving the original untouched.
+app.post("/api/chats/:chatId/fork", async (req, res) => {
+  try {
+    const repoPath = readRepoPath(req);
+    if (tryGetSession(repoPath, req.params.chatId)?.isRunning()) {
+      return res.status(409).json({ error: "Wait for the current turn to finish before forking." });
+    }
+    const chat = await forkChat(repoPath, req.params.chatId);
+    if (!chat) return res.status(404).json({ error: "Not found" });
+    res.json({ chat });
   } catch (err) {
     res.status(400).json({
       error: err instanceof Error ? err.message : String(err),
@@ -1348,6 +1471,7 @@ app.post("/api/mcp-servers", (req, res) => {
   if (idx >= 0) servers[idx] = entry;
   else servers.push(entry);
   writeInstalledServers(servers);
+  windDownIdleProcesses();
   res.json({ ok: true });
 });
 
@@ -1355,6 +1479,7 @@ app.delete("/api/mcp-servers", (req, res) => {
   const id = String(req.query.id ?? "");
   if (!id) return res.status(400).json({ error: "id required" });
   writeInstalledServers(readInstalledServers().filter((s) => s.id !== id));
+  windDownIdleProcesses();
   res.json({ ok: true });
 });
 
@@ -1374,12 +1499,14 @@ app.post("/api/mcp-servers", (req, res) => {
   if (idx >= 0) servers[idx] = entry;
   else servers.push(entry);
   writeInstalledServers(servers);
+  windDownIdleProcesses();
   res.json({ ok: true });
 });
 
 app.delete("/api/mcp-servers/:id", (req, res) => {
   const id = decodeURIComponent(req.params.id);
   writeInstalledServers(readInstalledServers().filter((s) => s.id !== id));
+  windDownIdleProcesses();
   res.json({ ok: true });
 });
 
@@ -1725,6 +1852,29 @@ app.get("/api/file/serve", async (req, res) => {
   } catch (err) {
     res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
   }
+});
+
+// ---- Shown images ----
+// Snapshots written by the ShowImage tool (see shownImages.ts). Only names that
+// match the snapshot pattern are served, and only from the snapshot store, so
+// this can't be used to read any other file.
+app.get("/api/shown-images/:name", (req, res) => {
+  const name = req.params.name;
+  const match = SHOWN_IMAGE_NAME.exec(name);
+  if (!match) {
+    res.status(404).end();
+    return;
+  }
+  const format = match[1] as ShownImageFormat;
+  res.setHeader("Content-Type", SHOWN_IMAGE_MIME[format]);
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  // Opened full size in its own tab, an SVG is a document: block its scripts.
+  res.setHeader("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; img-src data:");
+  // Content-addressed: a name always means the same bytes.
+  res.setHeader("Cache-Control", "public, max-age=31536000, immutable");
+  res.sendFile(join(SHOWN_IMAGES_DIR, name), (err) => {
+    if (err && !res.headersSent) res.status(404).end();
+  });
 });
 
 // ---- File list ----
@@ -2095,6 +2245,7 @@ app.post("/api/schedules", async (req, res) => {
       model: req.body?.model,
       permissionMode: req.body?.permissionMode,
       enabled: req.body?.enabled !== false,
+      addToGrid: req.body?.addToGrid === true,
     });
     res.json(task);
   } catch (err) {
@@ -2117,6 +2268,131 @@ app.delete("/api/schedules/:id", async (req, res) => {
     const ok = await deleteTask(req.params.id);
     if (!ok) { res.status(404).json({ error: "Not found" }); return; }
     res.json({ ok: true });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- MCP preview (tools available before a chat starts) ----
+app.get("/api/mcp/preview", (_req, res) => {
+  try {
+    const cache = readToolsCache();
+    const configured = installedMcpServerInfos(readInstalledServers());
+    // Merge: start from the configured servers (always current), then overlay
+    // any live status the cache captured for the same server id.
+    const byName = new Map<string, McpServerInfo>();
+    for (const s of configured) byName.set(s.name, { ...s, status: "connecting" });
+    for (const s of cache.mcpServers) byName.set(s.name, s);
+    res.json({
+      tools: cache.tools,
+      mcpServers: [...byName.values()],
+      updatedAt: cache.updatedAt,
+    });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Lists the claude.ai account "connectors" (hosted MCP cloud servers) the
+// Claude CLI auto-fetches, grouped by Buildover account — so the MCP panel can
+// show the same list the Claude app shows, before a chat starts.
+app.get("/api/claude-connectors", async (_req, res) => {
+  try {
+    const { listConnectorsByAccount } = await import("./claudeConnectors.js");
+    res.json({ accounts: await listConnectorsByAccount() });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Master agent ----
+//
+// The master chat is provisioned on first request (and at startup) so the
+// client can simply ask where it lives.
+app.get("/api/master", async (_req, res) => {
+  try {
+    res.json(await ensureMasterChat());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// ---- Grid ----
+app.get("/api/grid", async (_req, res) => {
+  try {
+    const entries = await listGridChats();
+    res.json({ entries });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// The 10 most recently active chats across all recent repos.
+app.get("/api/grid/recent-chats", async (_req, res) => {
+  try {
+    const chats = await listRecentChats(10);
+    res.json({ chats });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Create a new chat and add it to the grid.
+app.post("/api/grid/chats", async (req, res) => {
+  try {
+    const repoPath = String(req.body?.repoPath ?? "").trim();
+    if (!repoPath) { res.status(400).json({ error: "repoPath is required" }); return; }
+    const entry = await createGridChat({
+      repoPath,
+      model: req.body?.model,
+      permissionMode: req.body?.permissionMode,
+      title: req.body?.title,
+    });
+    const entries = await listGridChats();
+    res.json({ entry, entries });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Add an existing chat to the grid.
+app.post("/api/grid", async (req, res) => {
+  try {
+    const chatId = String(req.body?.chatId ?? "").trim();
+    const repoPath = String(req.body?.repoPath ?? "").trim();
+    if (!chatId || !repoPath) { res.status(400).json({ error: "chatId and repoPath are required" }); return; }
+    await addToGrid(chatId, repoPath);
+    const entries = await listGridChats();
+    res.json({ entries });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.patch("/api/grid/reorder", async (req, res) => {
+  try {
+    const order = Array.isArray(req.body?.order) ? req.body.order.map(String) : [];
+    await reorderGrid(order);
+    const entries = await listGridChats();
+    res.json({ entries });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Remove a chat from the grid. ?done=1 also finishes the chat (mark done).
+app.delete("/api/grid/:chatId", async (req, res) => {
+  try {
+    const chatId = req.params.chatId;
+    const repoPath = String(req.query.repoPath ?? "").trim();
+    const done = req.query.done === "1" || req.query.done === "true";
+    if (done && repoPath) {
+      await markGridChatDone(chatId, repoPath);
+    } else {
+      await removeFromGrid(chatId);
+    }
+    const entries = await listGridChats();
+    res.json({ entries });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -2639,11 +2915,27 @@ wss.on("connection", (ws: WebSocket) => {
           );
           break;
         }
+        case "steer_queued_turn": {
+          const sub = subscriptions.get(msg.chatId);
+          if (!sub) break;
+          const queued = await readChat(sub.repoPath, msg.chatId);
+          const turn = queued?.queuedTurns?.find(
+            (t) => t.id === msg.turnId && t.kind === "user",
+          );
+          if (!turn) break;
+          // Off the queue first, so the drainer can't also run it.
+          const record = await removeQueuedChatTurn(sub.repoPath, msg.chatId, msg.turnId);
+          const session = getSession(sub.repoPath, msg.chatId);
+          if (record) await session.pushStatusForRecord(record);
+          session.steer(turn);
+          break;
+        }
         case "set_permission_mode": {
           const sub = subscriptions.get(msg.chatId);
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
           session.setPermissionMode(msg.permissionMode);
+          await setChatPermissionMode(sub.repoPath, msg.chatId, msg.permissionMode);
           break;
         }
         case "fork_message": {
@@ -2813,8 +3105,24 @@ async function recoverStaleChats(): Promise<void> {
 // Finish stale transcript recovery before accepting websocket traffic. This
 // removes the startup window where a new live turn could begin while the
 // recovery scan was still closing turns from disk.
+// Make sure the master chat exists and its keep-warm timer is armed before any
+// client asks for it (timers live in memory, so a restart drops them).
+async function recoverMasterChat(): Promise<void> {
+  try {
+    const master = await ensureMasterChat();
+    await recoverStaleChatsForRepoWithIds(master.repoPath).catch(() => []);
+    await getSession(master.repoPath, master.chatId).syncKeepWarm();
+  } catch (err) {
+    console.warn(
+      "[server] master chat setup failed:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 void (async () => {
   await recoverStaleChats();
+  await recoverMasterChat();
   httpServer.listen(PORT, HOST, () => {
     // eslint-disable-next-line no-console
     console.log(`[server] listening on http://${HOST}:${PORT}`);

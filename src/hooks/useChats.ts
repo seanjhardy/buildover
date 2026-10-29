@@ -333,6 +333,7 @@ function recordToSummary(record: ChatRecord): ChatSummary {
     parentChatId: record.parentChatId,
     task: record.task,
     keepWarm: record.keepWarm,
+    lastApiAt: record.cost?.lastApiAt,
     continuedInChatId: record.handoffTo?.chatId,
   };
 }

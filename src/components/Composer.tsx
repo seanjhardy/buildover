@@ -12,6 +12,7 @@ import {
   Paperclip,
   Settings,
   ShieldOff,
+  SlidersHorizontal,
   Square,
   Terminal,
   Trash2,
@@ -32,6 +33,7 @@ import { EffortButton } from "./EffortButton.js";
 import { AttachmentChip } from "./AttachmentChip.js";
 import { ContextRing } from "./ContextRing.js";
 import { ChatCostReadout } from "./ChatCostReadout.js";
+import type { WarmPillProps } from "./WarmPill.js";
 import { useTranscription } from "../hooks/useTranscription.js";
 import { fileApi } from "../lib/api.js";
 
@@ -61,6 +63,9 @@ interface Props {
   /** When true, the 1M context window beta is enabled for Claude models. */
   context1m?: boolean;
   onContext1mChange?: (enabled: boolean) => void;
+  /** When true, Claude turns return thinking summaries (slower first reply). */
+  thinkingSummaries?: boolean;
+  onThinkingSummariesChange?: (enabled: boolean) => void;
   /** Claude reasoning effort; the slider is hidden when onEffortChange is absent. */
   effort?: EffortLevel;
   onEffortChange?: (level: EffortLevel) => void;
@@ -68,13 +73,15 @@ interface Props {
   chatCost?: ChatCost | null;
   /** ISO time of the chat's first message (for the readout's duration). */
   chatStartedAt?: string;
-  keepWarm?: boolean;
-  keepWarmHours?: number;
-  /** Toggles keep-warm; omitted when the model has no prompt cache. */
-  onToggleKeepWarm?: () => void;
+  /** The chat's warmth pill, shown beside the cost readout. */
+  warm?: WarmPillProps;
   /** Text to drop into an empty composer once (a handoff note). Never sent
    *  automatically; the user may edit it first. */
   prefill?: string | null;
+  /** Compact embedded mode (grid cards): the action bar keeps only [+] and
+   *  send; the readouts and mic appear on hover/focus and the model, effort and
+   *  mode pills move into a single settings popover. */
+  simplified?: boolean;
 }
 
 // Hold the send button this long (ms) to enqueue into a paused queue instead
@@ -256,18 +263,19 @@ export function Composer(props: Props) {
     onToggleMcp,
     context1m = false,
     onContext1mChange,
+    thinkingSummaries = false,
+    onThinkingSummariesChange,
     effort,
     onEffortChange,
     chatCost,
     chatStartedAt,
-    keepWarm,
-    keepWarmHours,
-    onToggleKeepWarm,
+    warm,
     prefill,
     contextUsage,
     repoPath,
     sdkSlashCommands = [],
     hideModePill = false,
+    simplified = false,
   } = props;
 
   // Merge built-in commands with SDK skills. SDK skills that already have a
@@ -311,11 +319,14 @@ export function Composer(props: Props) {
   const [modelTooltipPos, setModelTooltipPos] = useState({ x: 0, y: 0 });
   const modelBtnRef = useRef<HTMLButtonElement>(null);
   const [plusPopupOpen, setPlusPopupOpen] = useState(false);
+  // Simplified mode only: the [⚙] popover holding model / effort / mode.
+  const [morePopupOpen, setMorePopupOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
   const modeWrapRef = useRef<HTMLDivElement>(null);
   const modelWrapRef = useRef<HTMLDivElement>(null);
   const plusWrapRef = useRef<HTMLDivElement>(null);
+  const moreWrapRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // ---- @ file popup state ----
@@ -391,7 +402,14 @@ export function Composer(props: Props) {
 
   // Close popups on outside click.
   useEffect(() => {
-    if (!modePopupOpen && !modelPopupOpen && !plusPopupOpen && !atPopupOpen && !slashPopupOpen)
+    if (
+      !modePopupOpen &&
+      !modelPopupOpen &&
+      !plusPopupOpen &&
+      !morePopupOpen &&
+      !atPopupOpen &&
+      !slashPopupOpen
+    )
       return;
     const onDoc = (e: MouseEvent) => {
       const target = e.target as Node;
@@ -403,6 +421,9 @@ export function Composer(props: Props) {
       }
       if (plusPopupOpen && !plusWrapRef.current?.contains(target)) {
         setPlusPopupOpen(false);
+      }
+      if (morePopupOpen && !moreWrapRef.current?.contains(target)) {
+        setMorePopupOpen(false);
       }
       if (atPopupOpen && !atWrapRef.current?.contains(target)) {
         setAtPopupOpen(false);
@@ -662,7 +683,7 @@ export function Composer(props: Props) {
   return (
     <div
       ref={containerRef}
-      className={`composer ${dragOver ? "drag-over" : ""}`}
+      className={`composer${simplified ? " composer--simplified" : ""} ${dragOver ? "drag-over" : ""}`}
       data-permission-mode={permissionMode}
       onDragOver={(e) => {
         e.preventDefault();
@@ -1032,9 +1053,7 @@ export function Composer(props: Props) {
             cost={chatCost ?? null}
             startedAt={chatStartedAt}
             contextTokens={contextUsage?.usedTokens ?? 0}
-            keepWarm={keepWarm}
-            keepWarmHours={keepWarmHours}
-            onToggleKeepWarm={onToggleKeepWarm}
+            warm={warm}
           />
         </div>
 
@@ -1066,6 +1085,29 @@ export function Composer(props: Props) {
               <Mic className="mic-icon" size={14} aria-hidden="true" />
             )}
           </button>
+          <div
+            ref={moreWrapRef}
+            className={simplified ? "composer-more-wrap popup-wrap" : "composer-more-wrap--off"}
+          >
+            {simplified && (
+              <button
+                className={`round-btn composer-more-btn${morePopupOpen ? " active" : ""}`}
+                onClick={() => setMorePopupOpen((v) => !v)}
+                title="Model, reasoning and permissions"
+                aria-label="Chat settings"
+                aria-expanded={morePopupOpen}
+              >
+                <SlidersHorizontal size={14} />
+              </button>
+            )}
+            <div
+              className={
+                simplified
+                  ? `composer-more-popup${morePopupOpen ? "" : " composer-more-popup--hidden"}`
+                  : "composer-more-inline"
+              }
+              role={simplified ? "dialog" : undefined}
+            >
           <div ref={modelWrapRef} className="popup-wrap">
             <button
               ref={modelBtnRef}
@@ -1155,6 +1197,21 @@ export function Composer(props: Props) {
                     </button>
                   );
                 })()}
+                {onThinkingSummariesChange && getModelProvider(model) === "claude" && (
+                  <button
+                    className={`model-popup-item context1m-toggle${thinkingSummaries ? " active" : ""}`}
+                    onClick={() => {
+                      onThinkingSummariesChange(!thinkingSummaries);
+                      setModelPopupOpen(false);
+                    }}
+                    title="Show a summary of Claude's thinking. The API summarises thinking before the reply starts, so this delays the first response by ~1–3s."
+                  >
+                    <span className="context1m-label">Thinking summaries</span>
+                    <span className={`context1m-badge${thinkingSummaries ? " on" : ""}`}>
+                      {thinkingSummaries ? "ON" : "OFF"}
+                    </span>
+                  </button>
+                )}
                 {(() => {
                   const models = Array.isArray(availableModels) ? availableModels : [];
                   const providerOf = (m: { id: string; provider?: string }) =>
@@ -1309,6 +1366,8 @@ export function Composer(props: Props) {
               </div>
             )}
           </div>}
+            </div>
+          </div>
 
           {isStreaming ? (
             (() => {

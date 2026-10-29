@@ -21,6 +21,7 @@ interface PreviewChatSidebarProps {
   onDeleteChat: (chatId: string) => void;
   onToggleStar?: (chatId: string, starred: boolean) => void;
   onRename?: (chatId: string, title: string) => void;
+  onFork?: (chatId: string) => void;
   chatDrafts: Record<string, string>;
   repoPath: string;
   onClosePreview: () => void;
@@ -53,6 +54,7 @@ export function PreviewChatSidebar({
   onDeleteChat,
   onToggleStar,
   onRename,
+  onFork,
   chatDrafts,
   repoPath,
   onClosePreview,
@@ -190,6 +192,7 @@ export function PreviewChatSidebar({
                       onDelete={onDeleteChat}
                       onToggleStar={onToggleStar}
                       onRename={onRename}
+                      onFork={onFork}
                       chatDrafts={chatDrafts}
                     />
                   </div>
@@ -270,6 +273,7 @@ export function PreviewChatSidebar({
           onTogglePause={agent.toggleQueuePaused}
           onRemove={agent.removeQueued}
           onFastTrack={agent.fastTrackQueued}
+          onSteer={agent.steerQueued}
           onReorder={agent.reorderQueue}
         />
         <Composer

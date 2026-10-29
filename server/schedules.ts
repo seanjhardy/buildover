@@ -36,6 +36,8 @@ export interface ScheduledTask {
   model: Model;
   permissionMode: PermissionMode;
   enabled: boolean;
+  /** When the task creates a new chat, also add it to the Grid board. */
+  addToGrid?: boolean;
   lastRunAt?: string;
   createdAt: string;
   updatedAt: string;
@@ -102,6 +104,7 @@ export interface NewTaskOpts {
   model?: Model;
   permissionMode?: PermissionMode;
   enabled?: boolean;
+  addToGrid?: boolean;
 }
 
 export async function createTask(opts: NewTaskOpts): Promise<ScheduledTask> {
@@ -120,6 +123,7 @@ export async function createTask(opts: NewTaskOpts): Promise<ScheduledTask> {
       model: opts.model ?? DEFAULT_MODEL,
       permissionMode: opts.permissionMode ?? "default",
       enabled: opts.enabled ?? true,
+      ...(opts.addToGrid ? { addToGrid: true } : {}),
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
@@ -209,8 +213,13 @@ async function runTask(id: string): Promise<void> {
       const record = await createChat(task.repoPath, {
         model: task.model,
         permissionMode: task.permissionMode,
+        title: task.label,
       });
       chatId = record.id;
+      if (task.addToGrid) {
+        const { addToGrid } = await import("./grid.js");
+        await addToGrid(record.id, task.repoPath).catch(() => undefined);
+      }
     }
 
     const session = getSession(task.repoPath, chatId);

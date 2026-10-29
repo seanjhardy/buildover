@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { McpServerInfo } from "../types.js";
-import { api } from "../lib/api.js";
+import { api, type AccountConnectors } from "../lib/api.js";
 import { openExternalUrl } from "../lib/openExternalUrl.js";
 
 interface Props {
@@ -18,7 +18,51 @@ export function McpPanel({ tools, mcpServers, cwd, onClose }: Props) {
   const [filter, setFilter] = useState("");
   const filterLc = filter.toLowerCase();
 
-  const grouped = groupTools(tools);
+  // Before a chat starts the live lists are empty. Fall back to a preview of
+  // what will connect: the configured servers + the last session's tool list.
+  const [preview, setPreview] = useState<{
+    tools: string[];
+    mcpServers: McpServerInfo[];
+  } | null>(null);
+  const live = tools.length > 0 || mcpServers.length > 0;
+  useEffect(() => {
+    if (live) return;
+    let cancelled = false;
+    api
+      .getMcpPreview()
+      .then((p) => {
+        if (!cancelled) setPreview({ tools: p.tools, mcpServers: p.mcpServers });
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [live]);
+
+  const effectiveTools = live ? tools : preview?.tools ?? [];
+  const effectiveServers = live ? mcpServers : preview?.mcpServers ?? [];
+
+  // claude.ai account connectors (hosted MCP cloud servers). These auto-connect
+  // when a chat runs under the account that owns them — shown here so you can
+  // see the same list the Claude app shows before a chat starts.
+  const [accounts, setAccounts] = useState<AccountConnectors[] | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .getClaudeConnectors()
+      .then((a) => {
+        if (!cancelled) setAccounts(a);
+      })
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+  const accountsWithConnectors = (accounts ?? []).filter(
+    (a) => a.connectors.length > 0 || a.error,
+  );
+
+  const grouped = groupTools(effectiveTools);
   const nativeMatches = grouped.native.filter((t) =>
     t.toLowerCase().includes(filterLc),
   );
@@ -55,14 +99,20 @@ export function McpPanel({ tools, mcpServers, cwd, onClose }: Props) {
         </ul>
       </section>
 
+      {!live && (effectiveTools.length > 0 || effectiveServers.length > 0) && (
+        <div className="mcp-preview-note">
+          Preview — these connect when the chat starts.
+        </div>
+      )}
+
       <section className="mcp-section">
         <div className="mcp-section-title">
-          MCP servers <span className="mcp-count">{mcpServers.length}</span>
+          MCP servers <span className="mcp-count">{effectiveServers.length}</span>
         </div>
-        {mcpServers.length === 0 && (
+        {effectiveServers.length === 0 && (
           <div className="mcp-empty">No MCP servers configured.</div>
         )}
-        {mcpServers.map((srv) => {
+        {effectiveServers.map((srv) => {
           const srvTools = (grouped.byServer.get(srv.name) ?? []).filter((t) =>
             t.toLowerCase().includes(filterLc),
           );
@@ -90,6 +140,48 @@ export function McpPanel({ tools, mcpServers, cwd, onClose }: Props) {
           );
         })}
       </section>
+
+      {accountsWithConnectors.length > 0 && (
+        <section className="mcp-section">
+          <div className="mcp-section-title">claude.ai connectors</div>
+          <div className="mcp-preview-note">
+            Auto-connect when a chat runs under that account (same list as the
+            Claude app).
+          </div>
+          {accountsWithConnectors.map((acct) => {
+            const matches = acct.connectors.filter((c) =>
+              c.name.toLowerCase().includes(filterLc),
+            );
+            return (
+              <div key={acct.accountId} className="mcp-account">
+                <div className="mcp-account-head">
+                  <span className="mcp-account-label">{acct.label}</span>
+                  {acct.email && (
+                    <span className="mcp-account-email">{acct.email}</span>
+                  )}
+                  <span className="mcp-count">{acct.connectors.length}</span>
+                </div>
+                {acct.error ? (
+                  <div className="mcp-empty">{acct.error}</div>
+                ) : (
+                  <ul className="mcp-list">
+                    {matches.map((c) => (
+                      <li key={c.id}>
+                        <span className="mcp-tool-name" title={c.url}>
+                          {c.name}
+                        </span>
+                      </li>
+                    ))}
+                    {matches.length === 0 && (
+                      <li className="mcp-empty">No matches</li>
+                    )}
+                  </ul>
+                )}
+              </div>
+            );
+          })}
+        </section>
+      )}
     </aside>
   );
 }

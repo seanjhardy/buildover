@@ -8,8 +8,10 @@ export const CONTEXT_AMBER_TOKENS = 150_000;
 export const TURN_COST_AMBER_USD = 1;
 /** Idle time after which the 1h prompt cache has expired. */
 export const COLD_CACHE_IDLE_MS = 60 * 60_000;
-/** Below this context size a cold restart is too cheap to warn about. */
-export const COLD_CACHE_MIN_TOKENS = 50_000;
+/** Below this context size a cold restart is too cheap to mention. Chats go
+ *  cold all the time and that is normal; the note is only worth the user's
+ *  attention when rebuilding the context actually costs real money. */
+export const COLD_CACHE_MIN_TOKENS = 120_000;
 /** Above this context size every call is expensive enough to warn about. */
 export const LARGE_CONTEXT_TOKENS = 160_000;
 
@@ -42,8 +44,10 @@ export function costReadoutIsAmber(contextTokens: number, lastTurnUsd: number | 
 
 export interface ChatWarning {
   kind: "cold" | "large";
-  /** Dismissal is remembered per chat against this key: a new idle period (or
-   *  the other kind of warning) produces a new key and shows again. */
+  /** Dismissal is remembered per chat against this key. Deliberately coarse —
+   *  one key per *kind*, not per idle period — so dismissing a cold note keeps
+   *  it dismissed for as long as the chat stays cold. ChatBanners forgets the
+   *  dismissal once the condition clears, so it returns for the next episode. */
   key: string;
   message: string;
   /** Same warning for a narrow column: keeps the token count and the cost —
@@ -74,9 +78,11 @@ export function chatWarning(input: {
   ) {
     return {
       kind: "cold",
-      key: `cold:${lastApiAtMs}`,
-      message: `Prompt cache expired (idle ${formatDuration(idleMs)}). Your next message re-sends ~${formatTokensRounded(contextTokens)} tokens (≈${formatUsd(coldCost)}).`,
-      shortMessage: `Cache expired · ~${formatTokensRounded(contextTokens)} tokens (≈${formatUsd(coldCost)})`,
+      key: "cold",
+      // Information about cost, not an error: say what the next message costs,
+      // say it is a one-off, and leave it at that.
+      message: `Cache expired after ${formatDuration(idleMs)} idle — the next message re-sends ~${formatTokensRounded(contextTokens)} tokens (≈${formatUsd(coldCost)}) once, then it's cheap again.`,
+      shortMessage: `Cache expired · next message ~${formatTokensRounded(contextTokens)} tokens (≈${formatUsd(coldCost)})`,
     };
   }
   if (contextTokens > LARGE_CONTEXT_TOKENS) {

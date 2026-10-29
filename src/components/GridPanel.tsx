@@ -19,6 +19,7 @@ import { MessageList } from "./MessageList.js";
 import { MessageQueue } from "./MessageQueue.js";
 import { AttentionPrompt, PermissionPrompt } from "./PermissionPrompt.js";
 import { StatusIcon } from "./StatusIcon.js";
+import { RepoChip, assignRepoColors, repoColor, type RepoColor } from "./RepoChip.js";
 import { Composer } from "./Composer.js";
 import { ChatBanners } from "./ChatBanners.js";
 import { McpPanel } from "./McpPanel.js";
@@ -50,10 +51,6 @@ export interface GridChatSettings {
   onThinkingSummariesChange: (enabled: boolean) => void;
   effort?: EffortLevel;
   onEffortChange: (level: EffortLevel) => void;
-  /** Effective keep-warm window in hours (pref, or the default when unset). */
-  keepWarmHours: number;
-  /** A chat turned keep-warm on: seeds the window pref on first use. */
-  onKeepWarmEnabled: () => void;
 }
 
 interface Props {
@@ -300,10 +297,18 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
     };
   }, [n]);
 
+  // Repo swatches for the repos actually on the board, de-collided against
+  // each other so two projects on screen never share a colour.
+  const repoColors = useMemo(
+    () => assignRepoColors(entries.map((e) => e.repoPath)),
+    [entries],
+  );
+
   const renderCard = (entry: GridChatEntry) => (
     <GridCard
       key={entry.chatId}
       entry={entry}
+      repoColor={repoColors.get(entry.repoPath)}
       settings={settings}
       onOpen={onOpenChat}
       onDone={markDone}
@@ -399,7 +404,17 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
                             title={onGrid ? "Already on the grid" : `Add to grid — ${r.repoPath}`}
                           >
                             <span className="grid-recent-text">
-                              <span className="grid-recent-repo">{r.repoName}</span>
+                              <span className="grid-recent-repo">
+                                <span
+                                  className="repo-dot"
+                                  style={{
+                                    ["--repo-hue" as string]: String(repoColor(r.repoPath).hue),
+                                    ["--repo-tone" as string]: String(repoColor(r.repoPath).tone),
+                                  }}
+                                  aria-hidden
+                                />
+                                {r.repoName}
+                              </span>
                               <span className="grid-recent-title">{r.chat.title || "New chat"}</span>
                             </span>
                             {onGrid ? (
@@ -423,7 +438,8 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         ) : n === 0 ? (
           <div className="grid-empty">
             No grid chats yet. Use <strong>New chat</strong> to start one — it stays here until you
-            mark it done, and also appears in its repo.
+            mark it done, and also appears in its repo. Marking done only takes a chat off the
+            grid; bring it back any time from <strong>New chat → Recent chats</strong>.
           </div>
         ) : (
           <DndContext
@@ -517,6 +533,8 @@ function storedPermissionMode(): PermissionMode {
 
 interface CardProps {
   entry: GridChatEntry;
+  /** Swatch for this card's repo, assigned across the whole board. */
+  repoColor?: RepoColor;
   settings: GridChatSettings;
   onOpen: (repoPath: string, chatId: string) => void | Promise<void>;
   onDone: (entry: GridChatEntry) => void;
@@ -533,6 +551,7 @@ interface CardProps {
  *  banners, prompts, queue and Composer as the full chat view. */
 function GridCard({
   entry,
+  repoColor: repoSwatch,
   settings,
   onOpen,
   onDone,
@@ -583,14 +602,9 @@ function GridCard({
     [entry.repoPath, entry.chatId],
   );
 
-  const { setKeepWarm } = agent;
-  const keepWarm = agent.meta.keepWarm;
-  const { onKeepWarmEnabled } = settings;
-  const handleToggleKeepWarm = useCallback(() => {
-    const next = !keepWarm;
-    if (next) onKeepWarmEnabled();
-    setKeepWarm(next);
-  }, [keepWarm, setKeepWarm, onKeepWarmEnabled]);
+  const { setKeepWarm, addKeepWarmHours } = agent;
+  const keepWarmUntil = agent.meta.keepWarmUntil;
+  const handleStopKeepWarm = useCallback(() => setKeepWarm(false), [setKeepWarm]);
   const hasPromptCache = getModelProvider(model) === "claude";
 
   const [handoffBusy, setHandoffBusy] = useState(false);
@@ -713,16 +727,22 @@ function GridCard({
         >
           {chat.title || "New chat"}
         </span>
+        <RepoChip
+          repoName={entry.repoName}
+          repoPath={entry.repoPath}
+          color={repoSwatch}
+        />
         <WarmPill
           lastApiAtMs={lastApiAtMs}
-          keepWarm={!!keepWarm}
-          keepWarmHours={settings.keepWarmHours}
-          onToggle={hasPromptCache ? handleToggleKeepWarm : undefined}
+          keepWarmUntil={keepWarmUntil}
+          onAddHours={hasPromptCache ? addKeepWarmHours : undefined}
+          onDisable={handleStopKeepWarm}
         />
         <button
           type="button"
           className="grid-card-done"
-          title="Mark done (remove from grid)"
+          aria-label="Mark done — removes this chat from the grid only"
+          title="Mark done — takes it off the grid only. The chat is kept: find it again under New chat → Recent chats, or in its repo's Archive."
           onClick={(e) => {
             e.stopPropagation();
             onDone(entry);
@@ -731,7 +751,6 @@ function GridCard({
           <Check size={14} />
         </button>
       </div>
-      <div className="grid-card-repo">{entry.repoName}</div>
       <div className="grid-card-body">
         <MessageList
           turns={agent.turns}
@@ -763,9 +782,7 @@ function GridCard({
           slotQueue={agent.slotQueue}
           handoffTo={agent.meta.handoffTo}
           onOpenChat={(id) => void onOpen(entry.repoPath, id)}
-          keepWarm={keepWarm}
-          keepWarmHours={settings.keepWarmHours}
-          onToggleKeepWarm={hasPromptCache ? handleToggleKeepWarm : undefined}
+          hideCostWarning
           onHandoff={() => void handleHandoff()}
           handoffBusy={handoffBusy}
           handoffError={handoffError}
@@ -841,9 +858,6 @@ function GridCard({
               onEffortChange={settings.onEffortChange}
               chatCost={agent.meta.cost}
               chatStartedAt={chatStartedAt}
-              keepWarm={keepWarm}
-              keepWarmHours={settings.keepWarmHours}
-              onToggleKeepWarm={hasPromptCache ? handleToggleKeepWarm : undefined}
               prefill={agent.turns.length === 0 ? agent.meta.handoffPrefill : null}
               simplified
             />
