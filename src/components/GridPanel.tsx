@@ -33,7 +33,7 @@ import { MasterButton } from "./MasterPanel.js";
 import { WarmPill } from "./WarmPill.js";
 import { GridQueue, timeAgo, type QueueItem } from "./GridQueue.js";
 import { GridSubagents, gridSubagents } from "./GridSubagents.js";
-import { GridSources } from "./GridSources.js";
+import { GridPipelineCard, pipelineCardId } from "./GridPipelineCard.js";
 import {
   FADE_SCALE,
   FAR_SCALE,
@@ -72,11 +72,14 @@ import type {
   Model,
   ModelOption,
   PermissionMode,
+  PipelinesView,
   RecentRepoInfo,
   RepoInfo,
 } from "../types.js";
 
 const POLL_MS = 3000;
+const PIPELINES_POLL_MS = 10_000;
+const NO_PIPELINES: PipelinesView = { sources: [], budget: { spentUsd: 0, capUsd: null, warnAt: 1 }, nextSweep: "" };
 /** Pointer travel before a press becomes a pan or a drag (so clicks and
  *  double-clicks still work). */
 const DRAG_SLOP_PX = 4;
@@ -462,6 +465,42 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
 
   const gridChatIds = useMemo(() => new Set(entries.map((e) => e.chatId)), [entries]);
 
+  // Each pipeline is a window on the canvas too, beside the chats it starts.
+  const [pipelines, setPipelines] = useState<PipelinesView | null>(null);
+  useEffect(() => {
+    let alive = true;
+    const load = () =>
+      api
+        .getPipelines()
+        .then((v) => alive && setPipelines(v))
+        // Without pipelines the grid still settles which windows it has.
+        .catch(() => alive && setPipelines((v) => v ?? NO_PIPELINES));
+    void load();
+    const timer = setInterval(load, PIPELINES_POLL_MS);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+    };
+  }, []);
+  const runPipeline = useCallback(async (id: string) => {
+    try {
+      setPipelines(await api.runPipeline(id));
+    } catch {
+      /* the next poll shows what happened */
+    }
+  }, []);
+  const pipelineKey = (pipelines?.sources ?? []).map((s) => `${pipelineCardId(s.id)}\t${s.repoPath}`).join("\n");
+  /** Every window's repo: chats' and pipelines'. */
+  const repoById = useMemo(() => {
+    const out = new Map(entries.map((e) => [e.chatId, e.repoPath]));
+    for (const line of pipelineKey ? pipelineKey.split("\n") : []) {
+      const [id, repoPath] = line.split("\t");
+      out.set(id, repoPath);
+    }
+    return out;
+  }, [entries, pipelineKey]);
+  const pipelinesLoaded = pipelines !== null;
+
   const markDone = useCallback(
     async (entry: GridChatEntry) => {
       try {
@@ -474,18 +513,17 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
     [edit],
   );
 
-  // Give new chats a cell (the one asked for, if it's still free, else one
-  // beside their repo's other windows), and forget cells of chats that have
-  // left the grid.
+  // Give new chats and pipelines a cell (the one asked for, if it's still
+  // free, else one beside their repo's other windows), and forget cells of
+  // ones that have left the grid.
   useEffect(() => {
     if (loading) return;
     const asked = pendingFocusRef.current;
     setLayout((prev) => {
-      const repoById = new Map(entries.map((e) => [e.chatId, e.repoPath]));
       const positions: Record<string, Cell> = {};
       let changed = false;
       for (const [id, p] of Object.entries(prev.positions)) {
-        if (repoById.has(id)) positions[id] = p;
+        if (repoById.has(id) || (!pipelinesLoaded && id.startsWith("pipeline:"))) positions[id] = p;
         else changed = true;
       }
       for (const e of entries) {
@@ -497,9 +535,14 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
             : placeNew(positions, (id) => repoById.get(id), e.repoPath);
         changed = true;
       }
+      for (const [id, repoPath] of repoById) {
+        if (positions[id]) continue;
+        positions[id] = placeNew(positions, (other) => repoById.get(other), repoPath);
+        changed = true;
+      }
       return changed ? { ...prev, positions } : prev;
     });
-  }, [entries, loading]);
+  }, [entries, repoById, pipelinesLoaded, loading]);
 
   useEffect(() => {
     saveLayout({ ...layout, view: viewStore.get() });
@@ -770,15 +813,15 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
     [edit, refresh, focusCard],
   );
 
-  // Forget the focus and selection of chats that leave the grid.
+  // Forget the focus and selection of windows that leave the grid.
   useEffect(() => {
-    if (loading) return;
-    if (focusedId && !gridChatIds.has(focusedId)) setFocusedId(null);
+    if (loading || !pipelinesLoaded) return;
+    if (focusedId && !repoById.has(focusedId)) setFocusedId(null);
     setSelected((prev) => {
-      const kept = [...prev].filter((id) => gridChatIds.has(id));
+      const kept = [...prev].filter((id) => repoById.has(id));
       return kept.length === prev.size ? prev : new Set(kept);
     });
-  }, [gridChatIds, focusedId, loading]);
+  }, [repoById, focusedId, loading, pipelinesLoaded]);
 
   // Trackpad: two-finger scroll pans, pinch (ctrl+wheel) zooms about the
   // cursor. At reading zoom a vertical scroll over the focused window's
@@ -1109,7 +1152,6 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   const autoArrange = useCallback(() => {
     const canvas = canvasRef.current;
     const lay = layoutRef.current;
-    const repoById = new Map(entries.map((e) => [e.chatId, e.repoPath]));
     const next = arrange(lay.positions, (id) => repoById.get(id));
     const els: HTMLElement[] = [];
     for (const [id, to] of Object.entries(next)) {
@@ -1132,7 +1174,7 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         fitAll();
       }),
     );
-  }, [entries, fitAll]);
+  }, [repoById, fitAll]);
 
   /** Edge drag: every window shares one size, so this resizes the whole grid.
    *  The window being dragged keeps its top-left corner where it is. */
@@ -1197,10 +1239,10 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   // A block is a repo's windows joined edge to edge. Its "+" sits in the free
   // cell its next chat would take, and shows while the pointer is over the
   // block or that cell.
-  const groups = useMemo(() => {
-    const repoById = new Map(entries.map((e) => [e.chatId, e.repoPath]));
-    return repoGroups(layout.positions, (id) => repoById.get(id));
-  }, [entries, layout.positions]);
+  const groups = useMemo(
+    () => repoGroups(layout.positions, (id) => repoById.get(id)),
+    [repoById, layout.positions],
+  );
   /** The block (named by its first window) whose "+" is showing. */
   const hoverStore = useMemo(() => createValueStore<string | null>(null), []);
   /** cell key → the block the pointer is "over" there. */
@@ -1398,12 +1440,6 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
 
   return (
     <div className="grid-page gc-stage">
-      <GridSources
-        colorOf={colorOf}
-        onFocus={focusCard}
-        onOpenChat={openChat}
-        onGrid={(chatId) => gridChatIds.has(chatId)}
-      />
       <div className="gc-main">
         <div
           className="gc-viewport"
@@ -1424,8 +1460,8 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
             }
           >
             {filletList.map((f) => {
-              const entry = entryById.get(f.chatId);
-              const color = entry ? colorOf(entry.repoPath) : { hue: 0, tone: 0 };
+              const repo = repoById.get(f.chatId);
+              const color = repo ? colorOf(repo) : { hue: 0, tone: 0 };
               // A window that needs you carries its ring round its half of the
               // arc. A focused or selected one sits over the corner, ring and
               // all, so it doesn't.
@@ -1475,6 +1511,29 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
                 />
               );
             })}
+            {pipelines?.sources.map((source) => {
+              const id = pipelineCardId(source.id);
+              const p = layout.positions[id];
+              if (!p) return null;
+              const s = sidesOf(p, occ);
+              const color = colorOf(source.repoPath);
+              return (
+                <GridPipelineCard
+                  key={id}
+                  source={source}
+                  budget={pipelines.budget}
+                  c={p.c}
+                  r={p.r}
+                  sideClass={`${s.n ? " gc-n" : ""}${s.e ? " gc-e" : ""}${s.s ? " gc-s" : ""}${s.w ? " gc-w" : ""}`}
+                  repoHue={color.hue}
+                  repoTone={color.tone}
+                  focused={focusedId === id}
+                  selected={selected.has(id)}
+                  onRun={runPipeline}
+                  onFocusChat={focusCard}
+                />
+              );
+            })}
             <GroupAdds
               groups={groups}
               hover={hoverStore}
@@ -1490,7 +1549,7 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
 
         {loading ? (
           <div className="grid-empty">Loading…</div>
-        ) : n === 0 ? (
+        ) : n === 0 && !pipelines?.sources.length ? (
           <div className="grid-empty">
             No grid chats yet. Use <strong>New chat</strong> to start one — it stays here until you
             mark it done, and also appears in its repo. Marking done only takes a chat off the grid;

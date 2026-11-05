@@ -1016,7 +1016,14 @@ export interface PipelineSourceView {
   repoPath: string;
   counts: Record<ItemState, number>;
   spendUsd: number;
+  /** Being read right now (or asked to be). */
+  reading: boolean;
+  /** When it was last read without failing. */
+  checkedAt?: string;
+  nextCheckAt: string;
   error?: string;
+  /** Connectors (MCP server ids) to sign in to before it can be read. */
+  signIn?: string[];
   items: PipelineItemView[];
 }
 

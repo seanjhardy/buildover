@@ -139,7 +139,7 @@ import {
   listRecentChats,
 } from "./grid.js";
 import { ensureMasterChat } from "./master.js";
-import { pipelinesView, releaseNow, startPipelines } from "./pipelines.js";
+import { pipelinesView, releaseNow, runNow, startPipelines } from "./pipelines.js";
 import { attachTerminalWss } from "./terminal.js";
 import { windDownIdleProcesses } from "./agent.js";
 import {
@@ -2341,6 +2341,16 @@ app.get("/api/pipelines", async (_req, res) => {
 app.post("/api/pipelines/release", async (_req, res) => {
   try {
     await releaseNow();
+    res.json(await pipelinesView());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Read one source now and start work on its best item, outside its schedule.
+app.post("/api/pipelines/:id/run", async (req, res) => {
+  try {
+    runNow(req.params.id);
     res.json(await pipelinesView());
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });

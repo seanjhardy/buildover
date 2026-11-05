@@ -44,6 +44,13 @@ export function parseRows(text: string): unknown[] {
 
 const FILE_TOOLS = ["Read", "Grep", "Glob"];
 
+/** A connector the source reads through isn't signed in. */
+export class NeedsSignIn extends Error {
+  constructor(readonly servers: string[]) {
+    super(`${servers.join(" and ")} isn't signed in`);
+  }
+}
+
 export async function agentFetch(
   servers: string[],
   prompt: string,
@@ -86,11 +93,12 @@ export async function agentFetch(
     for await (const msg of q) {
       if (msg.type === "system" && msg.subtype === "init") {
         // Without its connector the agent would just find nothing; say why instead.
-        const down = msg.mcp_servers.filter((m) => servers.includes(m.name) && (m.status === "needs-auth" || m.status === "failed"));
-        if (down.length) {
-          abortController.abort();
-          throw new Error(down.map((m) => (m.status === "needs-auth" ? `${m.name} isn't signed in (MCP panel)` : `${m.name} failed to connect`)).join("; "));
-        }
+        const mine = msg.mcp_servers.filter((m) => servers.includes(m.name));
+        const signedOut = mine.filter((m) => m.status === "needs-auth").map((m) => m.name);
+        const failed = mine.filter((m) => m.status === "failed").map((m) => m.name);
+        if (signedOut.length || failed.length) abortController.abort();
+        if (signedOut.length) throw new NeedsSignIn(signedOut);
+        if (failed.length) throw new Error(`${failed.join(" and ")} failed to connect`);
         continue;
       }
       if (msg.type !== "result") continue;

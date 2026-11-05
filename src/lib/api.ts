@@ -608,6 +608,7 @@ export const api = {
   // ── Pipelines ────────────────────────────────────────────────────────────
   getPipelines: () => getJson<PipelinesView>(`/api/pipelines`),
   releasePipelines: () => send<PipelinesView>("POST", `/api/pipelines/release`),
+  runPipeline: (id: string) => send<PipelinesView>("POST", `/api/pipelines/${encodeURIComponent(id)}/run`),
 
   // ── Grid ─────────────────────────────────────────────────────────────────
   listGrid: () =>

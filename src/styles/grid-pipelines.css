@@ -1,0 +1,123 @@
+/* ── A pipeline's window on the canvas ── */
+
+.gp-body {
+  position: relative;
+  gap: 14px;
+  padding: 16px 18px 40px;
+  overflow-y: auto;
+  color: #e6e6e9;
+  font-size: 13px;
+}
+
+.gp-top {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.gp-status {
+  color: #8d8d96;
+}
+
+.gp-run {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+}
+
+.gp-busy {
+  animation: gp-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes gp-pulse {
+  50% {
+    opacity: 0.35;
+  }
+}
+
+.gp-error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  color: #e56b6b;
+  overflow-wrap: anywhere;
+}
+.gp-error svg {
+  flex: none;
+  margin-top: 2px;
+}
+
+.gp-signin {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+}
+.gp-signin p {
+  margin: 0;
+}
+
+.gp-section {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.gp-section h4 {
+  margin: 0 0 4px;
+  color: #5c5c64;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.gp-item {
+  padding: 4px 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  line-height: 1.35;
+  text-align: left;
+}
+
+.gp-item--link {
+  margin: 0 -6px;
+  padding: 4px 6px;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.gp-item--link:hover {
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.gp-urgent {
+  margin-right: 5px;
+  vertical-align: -2px;
+  color: #e56b6b;
+}
+
+.gp-more,
+.gp-empty {
+  color: #8d8d96;
+}
+
+/* What it costs: only while the pointer is on the window. */
+.gp-cost {
+  position: absolute;
+  right: 18px;
+  bottom: 12px;
+  left: 18px;
+  z-index: 2;
+  color: #8d8d96;
+  font-size: 12px;
+  opacity: 0;
+  transition: opacity 0.15s ease;
+  pointer-events: none;
+}
+.gp-card:hover .gp-cost {
+  opacity: 1;
+}

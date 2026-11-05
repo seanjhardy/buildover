@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nextState, pickRelease, pickResearch, syncDue, weekStart, type PipelineItem } from "./pipelines.js";
+import { nextCheck, nextState, pickRelease, pickResearch, syncDue, weekStart, type PipelineItem } from "./pipelines.js";
 import { isWriteTool, parseRows } from "./pipelineAgentFetch.js";
 import type { SourceConfig } from "./pipelineSources.js";
 import { closedKeys, fillQuery, ideasPrompt } from "./pipelineSources.js";
@@ -30,6 +30,10 @@ test("nextState follows the chat", () => {
   assert.equal(nextState({ ...working, page: { waiting: true } }, { status: "queued", onGrid: false }, now).state, "waiting");
   assert.equal(nextState({ ...working, page: { done: "Fixed" } }, { status: "agent_done", onGrid: false }, now).reason, "Fixed");
   assert.equal(nextState(working, { status: null, onGrid: false }, now).state, "done");
+  // Started on the canvas: taking it off closes it, whatever it was doing.
+  const placed = { ...working, placed: true };
+  assert.equal(nextState(placed, { status: "running", onGrid: true }, now).state, "working");
+  assert.equal(nextState(placed, { status: "running", onGrid: false }, now).reason, "Closed");
   const shown = item({ state: "shown", chatId: "c" });
   assert.equal(nextState(shown, { status: "running", onGrid: true }, now).state, "shown");
   assert.equal(nextState(shown, { status: "agent_done", onGrid: false }, now).state, "done");
@@ -111,6 +115,10 @@ test("before-sweep sources check once in the hour before each sweep", () => {
   const every = { id: "b", everyMinutes: 10 } as SourceConfig;
   assert.equal(syncDue(every, t(12, 0).toISOString(), sweeps, t(12, 5)), false);
   assert.equal(syncDue(every, t(12, 0).toISOString(), sweeps, t(12, 10)), true);
+  // When each is read next.
+  assert.equal(nextCheck(src, undefined, sweeps, t(12, 0)).getTime(), t(13, 0).getTime());
+  assert.equal(nextCheck(src, t(13, 5).toISOString(), sweeps, t(13, 30)).getTime(), new Date(2026, 10, 6, 8, 30).getTime());
+  assert.equal(nextCheck(every, t(12, 0).toISOString(), sweeps, t(12, 5)).getTime(), t(12, 10).getTime());
 });
 
 test("connector agents may only read, and their rows are parsed out of prose", () => {
