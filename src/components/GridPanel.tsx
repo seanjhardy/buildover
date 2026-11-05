@@ -12,6 +12,9 @@ import {
   LayoutGrid,
   Bot,
   PanelTop,
+  MessageSquare,
+  AlarmClock,
+  X,
 } from "lucide-react";
 import { api } from "../lib/api.js";
 import type { GridChatEntry, RecentChatEntry } from "../lib/api.js";
@@ -1422,10 +1425,21 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
             {filletList.map((f) => {
               const entry = entryById.get(f.chatId);
               const color = entry ? colorOf(entry.repoPath) : { hue: 0, tone: 0 };
+              // A window that needs you carries its ring round its half of the
+              // arc. A focused or selected one sits over the corner, ring and
+              // all, so it doesn't.
+              const ringOf = (id: string) => {
+                const e = entryById.get(id);
+                if (!e || id === focusedId || selected.has(id)) return undefined;
+                const status = reports.get(id)?.status ?? e.chat.status;
+                return needsAttention(status) ? status : undefined;
+              };
               return (
                 <div
                   key={`${f.x},${f.y}`}
                   data-at={`${f.x},${f.y}`}
+                  data-h={ringOf(f.chatId)}
+                  data-v={ringOf(f.vChatId)}
                   className={`gc-fillet gc-tinted gc-fillet--${f.dx > 0 ? "r" : "l"}${f.dy > 0 ? "b" : "t"}`}
                   style={{ ...repoColorVars(color), "--x": f.x, "--y": f.y } as React.CSSProperties}
                   aria-hidden
@@ -1775,7 +1789,10 @@ const GridCard = memo(function GridCard({
   // The front page the agent wrote, if any; the chat is on the back.
   const page = useFrontPage(agent.turns);
   const [flipped, setFlipped] = useState(false);
-  const showFront = hasFrontPage(page) && !flipped;
+  const withFront = hasFrontPage(page);
+  const showFront = withFront && !flipped;
+  // An offered answer other than the big one starts a message for Sean to finish.
+  const [optionDraft, setOptionDraft] = useState<string | null>(null);
   // Prefer the live session status over the polled summary, which lags.
   const status = agent.status ?? chat.status;
   const attention = needsAttention(status);
@@ -1963,6 +1980,34 @@ const GridCard = memo(function GridCard({
           >
             <Check size={12} />
           </button>
+          {withFront && (
+            <>
+              <button
+                type="button"
+                className="gc-head-btn"
+                aria-label="Not now"
+                title="Not now: hide it until the next sweep"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDone(entry, "not_now");
+                }}
+              >
+                <AlarmClock size={12} />
+              </button>
+              <button
+                type="button"
+                className="gc-head-btn"
+                aria-label="Not relevant"
+                title="Not relevant: close it, and note that things like it don't matter"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onDone(entry, "not_relevant");
+                }}
+              >
+                <X size={12} />
+              </button>
+            </>
+          )}
           <button
             type="button"
             className="gc-head-btn"
@@ -1988,18 +2033,18 @@ const GridCard = memo(function GridCard({
           </span>
         </div>
         <div className="gc-head-side gc-head-side--end">
-          {hasFrontPage(page) && flipped && (
+          {withFront && (
             <button
               type="button"
               className="gc-head-btn"
-              aria-label="Show the front page"
-              title="Show the front page"
+              aria-label={flipped ? "Show the card" : "Show the chat"}
+              title={flipped ? "Show the card" : "Show the chat"}
               onClick={(e) => {
                 e.stopPropagation();
-                setFlipped(false);
+                setFlipped(!flipped);
               }}
             >
-              <PanelTop size={12} />
+              {flipped ? <PanelTop size={12} /> : <MessageSquare size={12} />}
             </button>
           )}
           <WarmPill
@@ -2035,8 +2080,10 @@ const GridCard = memo(function GridCard({
           <FrontPage
             page={page}
             onAnswer={(label) => agent.send(label, { model, permissionMode })}
-            onClose={(how) => onDone(entry, how)}
-            onFlip={() => setFlipped(true)}
+            onDraft={(label) => {
+              setOptionDraft(`${label}: `);
+              setComposerOpen(true);
+            }}
           />
         ) : (
           <MessageList
@@ -2146,7 +2193,7 @@ const GridCard = memo(function GridCard({
               onEffortChange={settings.onEffortChange}
               chatCost={agent.meta.cost}
               chatStartedAt={chatStartedAt}
-              prefill={agent.turns.length === 0 ? agent.meta.handoffPrefill : null}
+              prefill={optionDraft ?? (agent.turns.length === 0 ? agent.meta.handoffPrefill : null)}
               simplified
             />
           </div>

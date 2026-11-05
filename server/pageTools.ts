@@ -29,16 +29,15 @@ const ok = (text = "ok") => ({ content: [{ type: "text" as const, text }] });
 const fail = (text: string) => ({ content: [{ type: "text" as const, text }], isError: true });
 
 const PLAIN =
-  "Write it as if explaining to a 10-year-old: short, simple sentences in everyday words. No jargon, acronyms, internal names or technical detail unless the user used them first. Every sentence must make sense on its own, without looking back: never use a short label for something (\"Dispatch didn't land\"); say what it is.";
+  "Write it as if explaining to a five-year-old: short, simple sentences in everyday words. No jargon, acronyms, internal names or technical detail unless the user used them first. Every sentence must make sense on its own, without looking back: never use a short label for something (\"Dispatch didn't land\"); say what it is.";
 
 export function createPageToolsServer(hooks: PageToolHooks) {
   const setCard = tool(
     "set_card",
-    "Set this item's card: a specific title of at most five words (\"Elevation Labs login\", not \"Bug fix\"), a summary of at most eight words saying the problem or ask in plain words (\"Any user can delete other accounts\"; never priority, status or age), and 1-3 one- or two-word tags for what it is at the highest level: the app or area, and the kind of work (\"Triage\", \"Bug\", \"PR review\", \"Customer\").",
+    "Set this item's card: a specific title of at most five words (\"Elevation Labs login\", not \"Bug fix\"), and a summary of at most eight words that a five-year-old would understand, saying the problem or ask (\"People can delete other people's accounts\"). One plain sentence: no semicolons, dashes or lists, and never priority, status or age.",
     {
       title: z.string().optional(),
       summary: z.string(),
-      tags: z.array(z.string()).max(3).optional(),
     },
     async () => ok(),
   );
@@ -82,7 +81,7 @@ export function createPageToolsServer(hooks: PageToolHooks) {
 
   const suggestOptions = tool(
     "suggest_options",
-    "Offer the user 1-4 answers they can pick with one click. The first is the front page's big action button, so make it the thing you recommend (\"Send the reply\", \"Land the fix\"). They can always type a different answer. The options clear once they answer.",
+    "Offer the user 1-4 answers. The first is the front page's big action button and sends at once, so make it the complete thing you recommend (\"Send the reply\", \"Land the fix\"). Any others start a message the user finishes typing. Every option must be a real, complete answer: never offer \"Something else\", \"Something's wrong\" or anything that only means \"let me explain\", since the user can always just type. The options clear once they answer.",
     {
       options: z
         .array(z.object({ label: z.string(), detail: z.string().optional() }))

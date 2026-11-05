@@ -10,20 +10,6 @@
   padding: var(--app-spacing-large) var(--app-spacing-large) var(--app-spacing-medium);
 }
 
-.front-page-tags {
-  display: flex;
-  gap: var(--app-spacing-small);
-  margin-bottom: var(--app-spacing-small);
-}
-
-.front-page-tag {
-  font-size: 11px;
-  padding: 1px 6px;
-  border: 1px solid var(--app-tool-border);
-  border-radius: var(--corner-radius-small);
-  color: var(--app-secondary-foreground);
-}
-
 .front-page-title {
   margin: 0;
   font-size: 17px;
@@ -39,7 +25,8 @@
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 0 var(--app-spacing-large) var(--app-spacing-large);
+  /* Clear of the window's floating Message button. */
+  padding: 0 var(--app-spacing-large) 64px;
   line-height: 1.5;
 }
 
@@ -73,31 +60,6 @@
   align-items: center;
   gap: var(--app-spacing-medium);
   margin: var(--app-spacing-large) 0;
-}
-
-.front-page-action {
-  padding: 10px 22px;
-  font-size: 15px;
-  font-weight: 600;
-  color: #fff;
-  background: var(--app-claude-orange);
-  border: none;
-  border-radius: var(--corner-radius-medium);
-  cursor: pointer;
-}
-
-.front-page-option {
-  padding: 6px 12px;
-  color: var(--app-foreground);
-  background: transparent;
-  border: 1px solid var(--app-tool-border);
-  border-radius: var(--corner-radius-medium);
-  cursor: pointer;
-}
-
-.front-page-action:hover,
-.front-page-option:hover {
-  filter: brightness(1.1);
 }
 
 .front-page-preview {
@@ -147,33 +109,6 @@
 
 .front-page-markdown {
   padding-bottom: var(--app-spacing-medium);
-}
-
-.front-page-foot {
-  display: flex;
-  gap: var(--app-spacing-small);
-  padding: var(--app-spacing-medium) var(--app-spacing-large);
-  border-top: 1px solid var(--app-tool-border);
-}
-
-.front-page-foot button {
-  padding: 4px 10px;
-  color: var(--app-secondary-foreground);
-  background: transparent;
-  border: 1px solid var(--app-tool-border);
-  border-radius: var(--corner-radius-small);
-  cursor: pointer;
-}
-
-.front-page-foot button:hover {
-  color: var(--app-foreground);
-}
-
-.front-page-foot .front-page-flip {
-  display: flex;
-  align-items: center;
-  gap: 4px;
-  margin-left: auto;
 }
 
 .page-tool-line {

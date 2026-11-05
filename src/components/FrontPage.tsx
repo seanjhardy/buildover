@@ -1,7 +1,7 @@
 import { useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { ChevronRight, Clock, MessageSquare } from "lucide-react";
+import { ChevronRight, Clock } from "lucide-react";
 import type { FrontPage as Page, FrontPanel } from "../lib/frontPage.js";
 import "../styles/front-page.css";
 
@@ -9,16 +9,16 @@ export type CloseKind = "done" | "not_now" | "not_relevant";
 
 interface Props {
   page: Page;
-  /** Send one of the agent's offered answers as the user's message. */
+  /** The big action: send it as the user's message. */
   onAnswer: (label: string) => void;
-  onClose: (kind: CloseKind) => void;
-  /** Turn the window over to the chat. */
-  onFlip: () => void;
+  /** Any other offered answer: start a message with it for the user to finish. */
+  onDraft: (label: string) => void;
 }
 
-// A window's front page: the agent's plain-language card, one big action, an
-// optional live preview, and the close buttons. The chat is on the back.
-export function FrontPage({ page, onAnswer, onClose, onFlip }: Props) {
+// A window's front page: the agent's plain-language card, one big action and
+// an optional live preview. The chat is on the back (the title bar flips it),
+// and the window's own composer stays available on both sides.
+export function FrontPage({ page, onAnswer, onDraft }: Props) {
   const [main, ...more] = page.options;
   const preview = [...page.panels].reverse().find((p) => p.format === "url");
   const panels = page.panels.filter((p) => p !== preview);
@@ -26,13 +26,6 @@ export function FrontPage({ page, onAnswer, onClose, onFlip }: Props) {
   return (
     <div className="front-page">
       <header className="front-page-head">
-        {page.tags.length > 0 && (
-          <div className="front-page-tags">
-            {page.tags.map((t) => (
-              <span key={t} className="front-page-tag">{t}</span>
-            ))}
-          </div>
-        )}
         {page.title && <h2 className="front-page-title">{page.title}</h2>}
         {page.summary && <p className="front-page-summary">{page.summary}</p>}
       </header>
@@ -51,11 +44,11 @@ export function FrontPage({ page, onAnswer, onClose, onFlip }: Props) {
 
         {main && (
           <div className="front-page-actions">
-            <button className="front-page-action" title={main.detail} onClick={() => onAnswer(main.label)}>
+            <button className="btn btn-primary front-page-action" title={main.detail} onClick={() => onAnswer(main.label)}>
               {main.label}
             </button>
             {more.map((o) => (
-              <button key={o.label} className="front-page-option" title={o.detail} onClick={() => onAnswer(o.label)}>
+              <button key={o.label} className="btn front-page-option" title={o.detail} onClick={() => onDraft(o.label)}>
                 {o.label}
               </button>
             ))}
@@ -72,15 +65,6 @@ export function FrontPage({ page, onAnswer, onClose, onFlip }: Props) {
           <PanelSection key={p.key} panel={p} />
         ))}
       </div>
-
-      <footer className="front-page-foot">
-        <button onClick={() => onClose("done")}>Done</button>
-        <button onClick={() => onClose("not_now")}>Not now</button>
-        <button onClick={() => onClose("not_relevant")}>Not relevant</button>
-        <button className="front-page-flip" onClick={onFlip} title="Show the chat">
-          <MessageSquare size={13} /> Chat
-        </button>
-      </footer>
     </div>
   );
 }
