@@ -13,6 +13,7 @@ import {
   loadSettings,
   loadSources,
   takeFetchCost,
+  type IdeasContext,
   type PipelineSettings,
   type SourceConfig,
   type SourceRow,
@@ -280,8 +281,11 @@ async function runTick(): Promise<void> {
   }
 
   const added = new Set<string>();
+  const atCap = (await researchAgents(store, settings)) === 0;
   for (const src of live) {
     if (!syncDue(src, store.syncedAt[src.id], settings)) continue;
+    // Coming up with ideas is research too: not once the budget is spent.
+    if (atCap && src.fetch.kind === "ideas") continue;
     const triedAt = store.triedAt?.[src.id];
     if (store.errors[src.id] && triedAt && Date.parse(triedAt) + RETRY_MS > Date.now()) continue;
     const startedAt = nowIso();
@@ -369,7 +373,12 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
     const room = src.rolling.active - open.filter((i) => !closed.has(i.key)).length;
     rows = room > 0 ? await fetchRows(src, { seen: mine.map((i) => i.key), room }) : [];
   } else if (src.feed) {
-    rows = await fetchRows(src, { seen: [], room: 0, since: store.syncedAt[src.id] });
+    rows = await fetchRows(src, {
+      seen: [],
+      room: 0,
+      since: store.syncedAt[src.id],
+      ...(src.fetch.kind === "ideas" ? { ideas: await ideasContext(store, src) } : {}),
+    });
   } else {
     rows = await fetchRows(src, { seen: [], room: 0 });
     const live = new Set(rows.map((r) => r.id));
@@ -432,6 +441,19 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
     added = true;
   }
   return added;
+}
+
+/** What an ideas source sees: the user's notes, open work, and every past idea's fate. */
+async function ideasContext(store: PipelineStore, src: SourceConfig): Promise<IdeasContext> {
+  const notes = (await readText(NOTES_FILE)).trim();
+  const open = store.items.filter((i) => i.source !== src.id && i.state !== "done").map((i) => i.title).slice(0, 60);
+  const past = store.items
+    .filter((i) => i.source === src.id)
+    .map((i) => ({
+      title: i.title,
+      outcome: i.state === "done" ? `closed: ${i.closedReason ?? "no reason given"}` : i.state === "new" ? "not looked at yet" : "still open",
+    }));
+  return { notes, open, past };
 }
 
 /** The row's own repo when it names a buildover repo, else the source's. */

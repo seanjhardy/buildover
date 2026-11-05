@@ -42,16 +42,21 @@ export function parseRows(text: string): unknown[] {
   return rows;
 }
 
+const FILE_TOOLS = ["Read", "Grep", "Glob"];
+
 export async function agentFetch(
   servers: string[],
   prompt: string,
   model: string | undefined,
+  /** Also let it read files here (read only). */
+  cwd?: string,
 ): Promise<{ rows: unknown[]; costUsd: number }> {
   const installed = readInstalledServers().filter((s) => servers.includes(s.id));
   const missing = servers.filter((id) => !installed.some((s) => s.id === id));
   if (missing.length) throw new Error(`MCP server not installed: ${missing.join(", ")}`);
 
   const canUseTool: CanUseTool = async (name, input) => {
+    if (cwd && FILE_TOOLS.includes(name)) return { behavior: "allow", updatedInput: input };
     const [, server, ...rest] = name.split("__");
     const tool = rest.join("__");
     if (!name.startsWith("mcp__") || !servers.includes(server)) {
@@ -68,13 +73,13 @@ export async function agentFetch(
       prompt: `${prompt}\n\n${ROWS_FORMAT}`,
       options: {
         model: model ?? MODEL,
-        tools: [],
+        tools: cwd ? FILE_TOOLS : [],
         mcpServers: toSdkMcpConfig(installed) as never,
         canUseTool,
         maxTurns: MAX_TURNS,
         persistSession: false,
         settingSources: [],
-        cwd: tmpdir(),
+        cwd: cwd ?? tmpdir(),
         abortController,
       },
     });

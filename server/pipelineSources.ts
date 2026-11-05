@@ -57,6 +57,16 @@ export interface AgentFetch {
   model?: string;
 }
 
+/** New ideas for the user, a few at a time, from what they work on and what
+ *  they made of earlier ideas. */
+export interface IdeasFetch {
+  kind: "ideas";
+  /** What kind of ideas, and about what. */
+  prompt: string;
+  count?: number;
+  model?: string;
+}
+
 export interface TokenSource {
   env?: string;
   /** A file holding the token; `pattern` (one capture group) picks it out, else the whole file. */
@@ -70,7 +80,7 @@ export interface SourceConfig {
   /** The buildover repo its chats live in. */
   repoPath: string;
   everyMinutes?: number;
-  fetch: SupabaseFetch | CommandFetch | AgentFetch;
+  fetch: SupabaseFetch | CommandFetch | AgentFetch | IdeasFetch;
   /** Absent: the query returns every open item and one that drops out is closed.
    *  Set: keep `active` items open at a time, topping up from the query. */
   rolling?: { active: number };
@@ -190,8 +200,48 @@ async function agentRows(src: SourceConfig, f: AgentFetch, since: string): Promi
   return rows as SourceRow[];
 }
 
+const IDEAS_MODEL = "claude-opus-5-5";
+
+/** What an ideas source is told about the user's work and its past ideas. */
+export interface IdeasContext {
+  notes: string;
+  /** Titles of work open right now, across sources. */
+  open: string[];
+  /** Every idea proposed before and what became of it. */
+  past: Array<{ title: string; outcome: string }>;
+}
+
+export function ideasPrompt(f: IdeasFetch, ctx: IdeasContext): string {
+  const count = f.count ?? 3;
+  return [
+    f.prompt,
+    "",
+    `Propose ${count} new ideas. Look through the code here as much as you need so each one is concrete and grounded. Each should be worth the user's time this week; fewer is fine if you can't find ${count} good ones.`,
+    ...(ctx.notes ? ["", "The user's standing notes on how they work and weigh work:", ctx.notes] : []),
+    ...(ctx.open.length ? ["", "What they're working on now:", ...ctx.open.map((t) => `- ${t}`)] : []),
+    ...(ctx.past.length
+      ? [
+          "",
+          "Ideas proposed before. Never propose any of these again, or a close variant; where they turned one down, their reason tells you what they don't want:",
+          ...ctx.past.map((p) => `- ${p.title} (${p.outcome})`),
+        ]
+      : []),
+    "",
+    'For each idea: id is a short kebab-case slug, title says the idea plainly, and data is {"idea": what it is and why it matters now, in a few sentences, "evidence": what you found that points to it}. No url, version or joins.',
+  ].join("\n");
+}
+
+async function ideaRows(src: SourceConfig, f: IdeasFetch, ctx: IdeasContext): Promise<SourceRow[]> {
+  const { rows, costUsd } = await agentFetch([], ideasPrompt(f, ctx), f.model ?? IDEAS_MODEL, src.repoPath);
+  fetchCosts.set(src.id, (fetchCosts.get(src.id) ?? 0) + costUsd);
+  return rows as SourceRow[];
+}
+
 /** The source's items: all open ones, up to `room` unseen ones (rolling), or what's new since `since` (feed). */
-export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: number; since?: string }): Promise<SourceRow[]> {
+export function fetchRows(
+  src: SourceConfig,
+  vars: { seen: string[]; room: number; since?: string; ideas?: IdeasContext },
+): Promise<SourceRow[]> {
   const f = src.fetch;
   const since = vars.since ?? new Date(Date.now() - 86_400_000).toISOString();
   const rows =
@@ -199,6 +249,8 @@ export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: numbe
       ? supabaseQuery<SourceRow>(f, fillQuery(f.query, vars))
       : f.kind === "agent"
         ? agentRows(src, f, since)
+        : f.kind === "ideas"
+          ? ideaRows(src, f, vars.ideas ?? { notes: "", open: [], past: [] })
         : runCommand<SourceRow>(f.command, { SEEN: JSON.stringify(vars.seen), ROOM: String(vars.room), SINCE: since });
   return rows.then((list) =>
     list
@@ -218,7 +270,7 @@ export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: numbe
 export async function checkClosed(src: SourceConfig, ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
   const f = src.fetch;
-  if (f.kind === "agent") return new Set();
+  if (f.kind === "agent" || f.kind === "ideas") return new Set();
   const query = f.kind === "supabase" ? f.checkQuery : f.checkCommand;
   if (!query) return new Set();
   const rows =

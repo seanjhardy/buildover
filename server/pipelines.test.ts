@@ -3,7 +3,7 @@ import { test } from "node:test";
 import { nextState, pickRelease, pickResearch, syncDue, weekStart, type PipelineItem } from "./pipelines.js";
 import { isWriteTool, parseRows } from "./pipelineAgentFetch.js";
 import type { SourceConfig } from "./pipelineSources.js";
-import { closedKeys, fillQuery } from "./pipelineSources.js";
+import { closedKeys, fillQuery, ideasPrompt } from "./pipelineSources.js";
 import { parseOrder } from "./pipelineRank.js";
 
 const at = "2026-11-05T10:00:00.000Z";
@@ -122,4 +122,14 @@ test("connector agents may only read, and their rows are parsed out of prose", (
   }
   assert.deepEqual(parseRows('Here you go:\n[{"id": "a", "title": "x"}]\nDone.'), [{ id: "a", title: "x" }]);
   assert.throws(() => parseRows("nothing new"));
+});
+
+test("ideas are told what was turned down and why", () => {
+  const prompt = ideasPrompt(
+    { kind: "ideas", prompt: "Ideas for the team.", count: 2 },
+    { notes: "", open: ["Fix login"], past: [{ title: "Dark mode", outcome: "closed: customers never asked" }] },
+  );
+  assert.match(prompt, /Propose 2 new ideas/);
+  assert.match(prompt, /- Fix login/);
+  assert.match(prompt, /- Dark mode \(closed: customers never asked\)/);
 });
