@@ -13,15 +13,13 @@ import {
   Bot,
   PanelTop,
   MessageSquare,
-  AlarmClock,
-  X,
 } from "lucide-react";
 import { api } from "../lib/api.js";
 import type { GridChatEntry, RecentChatEntry } from "../lib/api.js";
 import { useAgent, type ChatTurn } from "../hooks/useAgent.js";
 import { useSubagents } from "../hooks/useSubagents.js";
 import { MessageList } from "./MessageList.js";
-import { FrontPage, type CloseKind } from "./FrontPage.js";
+import { FrontPage } from "./FrontPage.js";
 import { useFrontPage } from "../hooks/useFrontPage.js";
 import { hasFrontPage } from "../lib/frontPage.js";
 import { MessageQueue } from "./MessageQueue.js";
@@ -464,13 +462,9 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   const gridChatIds = useMemo(() => new Set(entries.map((e) => e.chatId)), [entries]);
 
   const markDone = useCallback(
-    async (entry: GridChatEntry, how: CloseKind = "done") => {
+    async (entry: GridChatEntry) => {
       try {
-        const next = await edit(() =>
-          how === "done"
-            ? api.removeFromGrid(entry.chatId, entry.repoPath, true)
-            : api.closeGridChat(entry.chatId, entry.repoPath, how),
-        );
+        const next = await edit(() => api.removeFromGrid(entry.chatId, entry.repoPath, true));
         setEntries((prev) => reuseEntries(prev, next));
       } catch {
         /* ignore */
@@ -1750,7 +1744,7 @@ interface CardProps {
    *  continued in (a handoff), or a subagent chat it spawned. */
   onContinue: (from: GridChatEntry, chatId: string) => void | Promise<void>;
   /** Done, or from the front page also "not now" / "not relevant". */
-  onDone: (entry: GridChatEntry, how?: CloseKind) => void;
+  onDone: (entry: GridChatEntry) => void;
   composerOpen: boolean;
   onComposerOpenChange: (chatId: string, open: boolean) => void;
   onBeginResize: (e: React.PointerEvent, chatId: string, axis: "e" | "s" | "se") => void;
@@ -1980,34 +1974,6 @@ const GridCard = memo(function GridCard({
           >
             <Check size={12} />
           </button>
-          {withFront && (
-            <>
-              <button
-                type="button"
-                className="gc-head-btn"
-                aria-label="Not now"
-                title="Not now: hide it until the next sweep"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDone(entry, "not_now");
-                }}
-              >
-                <AlarmClock size={12} />
-              </button>
-              <button
-                type="button"
-                className="gc-head-btn"
-                aria-label="Not relevant"
-                title="Not relevant: close it, and note that things like it don't matter"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onDone(entry, "not_relevant");
-                }}
-              >
-                <X size={12} />
-              </button>
-            </>
-          )}
           <button
             type="button"
             className="gc-head-btn"

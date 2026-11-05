@@ -136,7 +136,6 @@ import {
   reorderGrid,
   createGridChat,
   markGridChatDone,
-  closeGridChat,
   listRecentChats,
 } from "./grid.js";
 import { ensureMasterChat } from "./master.js";
@@ -2390,23 +2389,6 @@ app.patch("/api/grid/reorder", async (req, res) => {
 });
 
 // Remove a chat from the grid. ?done=1 also finishes the chat (mark done).
-// Front-page close buttons other than Done: "not_now" snoozes the window until
-// the next sweep, "not_relevant" finishes it and notes it for the ranking.
-app.post("/api/grid/:chatId/close", async (req, res) => {
-  try {
-    const how = req.body?.how;
-    const repoPath = String(req.body?.repoPath ?? "").trim();
-    if ((how !== "not_now" && how !== "not_relevant") || !repoPath) {
-      res.status(400).json({ error: "how must be not_now or not_relevant, with repoPath" });
-      return;
-    }
-    await closeGridChat(req.params.chatId, repoPath, how);
-    res.json({ entries: await listGridChats() });
-  } catch (err) {
-    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
-  }
-});
-
 app.delete("/api/grid/:chatId", async (req, res) => {
   try {
     const chatId = req.params.chatId;

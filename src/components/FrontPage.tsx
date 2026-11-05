@@ -5,8 +5,6 @@ import { ChevronRight, Clock } from "lucide-react";
 import type { FrontPage as Page, FrontPanel } from "../lib/frontPage.js";
 import "../styles/front-page.css";
 
-export type CloseKind = "done" | "not_now" | "not_relevant";
-
 interface Props {
   page: Page;
   /** The big action: send it as the user's message. */

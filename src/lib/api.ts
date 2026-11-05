@@ -638,11 +638,6 @@ export const api = {
       "DELETE",
       `/api/grid/${encodeURIComponent(chatId)}?repoPath=${encodeURIComponent(repoPath)}${done ? "&done=1" : ""}`,
     ).then((r) => r.entries),
-  closeGridChat: (chatId: string, repoPath: string, how: "not_now" | "not_relevant") =>
-    send<{ entries: GridChatEntry[] }>("POST", `/api/grid/${encodeURIComponent(chatId)}/close`, {
-      repoPath,
-      how,
-    }).then((r) => r.entries),
 };
 
 // ── Caffeinate (keep Mac awake) ──────────────────────────────────────────────

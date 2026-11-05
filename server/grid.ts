@@ -14,9 +14,9 @@
  * the pair is a clean round trip.
  */
 
-import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { dirname, join } from "node:path";
+import { join } from "node:path";
 import {
   createChat,
   listChats,
@@ -24,8 +24,6 @@ import {
   setUserFinished,
 } from "./chats.js";
 import { getRepoMeta, listRecents } from "./repos.js";
-import { NOTES_FILE } from "./pageTools.js";
-import { nextSweep } from "./sweeps.js";
 import { DEFAULT_MODEL } from "../src/types.js";
 import type { ChatStatus, ChatSummary, Model, PermissionMode } from "../src/types.js";
 
@@ -236,29 +234,13 @@ export async function markGridChatDone(
   return removed;
 }
 
-/**
- * Close a window from its front page. "not_now" takes it off the canvas until
- * the next sweep; "not_relevant" finishes it and leaves a note for the ranking.
- */
-export async function closeGridChat(
-  chatId: string,
-  repoPath: string,
-  how: "not_now" | "not_relevant",
-): Promise<void> {
-  if (how === "not_relevant") {
-    const record = await readChat(repoPath, chatId).catch(() => null);
-    await markGridChatDone(chatId, repoPath);
-    if (record?.title) {
-      await mkdir(dirname(NOTES_FILE), { recursive: true }).catch(() => null);
-      await appendFile(NOTES_FILE, `- The user marked "${record.title}" as not relevant.\n`).catch(() => null);
-    }
-    return;
-  }
+/** Hide a window from the grid until `until` (it shows again early if it needs the user). */
+export async function snoozeGridChat(chatId: string, until: Date): Promise<void> {
   await withLock(async () => {
     const registry = await readGrid();
     const entry = registry.entries.find((e) => e.chatId === chatId);
     if (!entry) return;
-    entry.snoozedUntil = nextSweep(new Date()).toISOString();
+    entry.snoozedUntil = until.toISOString();
     await writeGrid(registry);
   });
 }

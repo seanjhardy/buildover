@@ -13,7 +13,8 @@ import { makeCoordinationMcp } from "./coordinationTools.js";
 import { MASTER_KEEP_WARM_HOURS, setMasterChatId } from "./master.js";
 import { makeMasterMcp } from "./masterTools.js";
 import { createPageToolsServer } from "./pageTools.js";
-import { markGridChatDone, readGrid } from "./grid.js";
+import { markGridChatDone, readGrid, snoozeGridChat } from "./grid.js";
+import { nextSweep } from "./sweeps.js";
 import { PAGE_SERVER, pageFromEvents, type PageWait } from "../src/lib/frontPage.js";
 import { coordinatorPrompt, masterPrompt, subagentPrompt } from "./prompts.js";
 import {
@@ -669,6 +670,10 @@ class AgentSession {
   // queue ScheduleWakeup uses, so it survives the CLI exiting and restarts.
   // Event waits are left to the pipeline checks.
   private async parkUntil(wait: PageWait): Promise<void> {
+    // Off the canvas until the time, or until the next sweep for a plain
+    // "not now". An event wait stays put until its checks exist.
+    const back = wait.until ? new Date(wait.until) : wait.event ? null : nextSweep(new Date());
+    if (back) await snoozeGridChat(this.chatId, back).catch(() => null);
     if (!wait.until) return;
     try {
       const queued = await enqueueChatTurn(this.repoPath, this.chatId, {

@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod/v4";
 import { PAGE_SERVER, type FrontPage, type PageWait } from "../src/lib/frontPage.js";
+import { nextSweep } from "./sweeps.js";
 
 // Page tools: how an agent talks to the user through its window's front page
 // instead of the chat. The handlers do little; the page is folded from these
@@ -93,7 +94,7 @@ export function createPageToolsServer(hooks: PageToolHooks) {
 
   const wait = tool(
     "wait",
-    "Park this item until a time or an event, e.g. when the user says \"come back tomorrow\" or \"wait for their reply\". It leaves the user's view until then. Say in the note what it's waiting for; give `event` precisely enough that a check can tell when it has happened.",
+    "Park this item until a time or an event, e.g. when the user says \"come back tomorrow\" or \"wait for their reply\". It leaves the user's view until then. Say in the note what it's waiting for; give `event` precisely enough that a check can tell when it has happened. When the user just says \"not now\" or \"later\", pass neither: it comes back at the next sweep.",
     {
       note: z.string().describe("what it's waiting for, shown on the card"),
       until: z.string().optional().describe("ISO time"),
@@ -106,14 +107,15 @@ export function createPageToolsServer(hooks: PageToolHooks) {
       if (at && at.getTime() <= Date.now())
         return fail(`NOT SAVED: ${at.toISOString()} is already in the past. Nothing is parked; don't tell the user it is.`);
       hooks.onWait?.({ note, ...(at ? { until: at.toISOString() } : {}), ...(event ? { event } : {}) });
-      const when = at?.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+      const back = at ?? (event ? null : nextSweep(new Date()));
+      const when = back?.toLocaleString("en-GB", { weekday: "short", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
       return ok(when ? `Saved: this item comes back on ${when}.` : "Saved: parked until the event happens or the user picks it back up.");
     },
   );
 
   const done = tool(
     "done",
-    "Mark this item finished. Only when the user agrees it's finished or it no longer needs anything.",
+    "Mark this item finished. Only when the user agrees it's finished or it no longer needs anything. When the user says it isn't relevant, first call remember with what kind of thing doesn't matter to them and why, if they said, so the ranking learns from it.",
     { note: z.string() },
     async ({ note }) => {
       hooks.onDone?.(note);
