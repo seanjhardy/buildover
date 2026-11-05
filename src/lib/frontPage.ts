@@ -44,6 +44,8 @@ export interface FrontPage {
   options: PageOption[];
   waiting?: PageWait;
   done?: string;
+  /** Can't wait for the next sweep: shown at once. */
+  urgent?: boolean;
 }
 
 /** One step of the history, in order: a page-tool call or a message from Sean. */
@@ -82,6 +84,7 @@ export function applyEntry(page: FrontPage, entry: PageEntry): FrontPage {
         title: str(i.title) ?? page.title,
         summary: str(i.summary) ?? page.summary,
         tags: tags ?? page.tags,
+        urgent: typeof i.urgent === "boolean" ? i.urgent : page.urgent,
       };
     }
     case "milestone": {

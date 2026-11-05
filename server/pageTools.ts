@@ -39,6 +39,10 @@ export function createPageToolsServer(hooks: PageToolHooks) {
     {
       title: z.string().optional(),
       summary: z.string(),
+      urgent: z
+        .boolean()
+        .optional()
+        .describe("only if it can't wait for the next scheduled check-in: customers can't use something right now, or someone is blocked now"),
     },
     async () => ok(),
   );

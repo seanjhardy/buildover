@@ -19,6 +19,7 @@ import type {
   SearchResult,
   SearchIndexStatus,
   TemplateInfo,
+  PipelinesView,
 } from "../types.js";
 import { httpBase } from "./serverOrigin.js";
 
@@ -603,6 +604,10 @@ export const api = {
   // ── Master agent ─────────────────────────────────────────────────────────
   /** Where the master chat lives; creates it on first call. */
   getMaster: () => getJson<MasterInfo>(`/api/master`),
+
+  // ── Pipelines ────────────────────────────────────────────────────────────
+  getPipelines: () => getJson<PipelinesView>(`/api/pipelines`),
+  releasePipelines: () => send<PipelinesView>("POST", `/api/pipelines/release`),
 
   // ── Grid ─────────────────────────────────────────────────────────────────
   listGrid: () =>

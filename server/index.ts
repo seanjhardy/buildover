@@ -139,6 +139,7 @@ import {
   listRecentChats,
 } from "./grid.js";
 import { ensureMasterChat } from "./master.js";
+import { pipelinesView, releaseNow, startPipelines } from "./pipelines.js";
 import { attachTerminalWss } from "./terminal.js";
 import { windDownIdleProcesses } from "./agent.js";
 import {
@@ -2326,6 +2327,26 @@ app.get("/api/master", async (_req, res) => {
 });
 
 // ---- Grid ----
+// Pipelines: source blocks and the budget meter. Inert without a private
+// <pipelines dir>/sources.json.
+app.get("/api/pipelines", async (_req, res) => {
+  try {
+    res.json(await pipelinesView());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Put the ready items on the canvas now instead of at the next sweep.
+app.post("/api/pipelines/release", async (_req, res) => {
+  try {
+    await releaseNow();
+    res.json(await pipelinesView());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.get("/api/grid", async (_req, res) => {
   try {
     const entries = await listGridChats();
@@ -3139,6 +3160,7 @@ void (async () => {
     console.log(`[server] listening on http://${HOST}:${PORT}`);
     console.log(`[server] websocket at ws://${HOST}:${PORT}/agent`);
     void startScheduler();
+    startPipelines();
     startSelfUpdateChecker();
   });
 })();

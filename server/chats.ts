@@ -260,6 +260,7 @@ export interface NewChatOpts {
   worktreeBranch?: string;
   context1m?: boolean;
   handoffFrom?: ChatRecord["handoffFrom"];
+  pipeline?: ChatRecord["pipeline"];
 }
 
 export async function createChat(
@@ -287,6 +288,7 @@ export async function createChat(
     ...(opts.worktreeBranch ? { worktreeBranch: opts.worktreeBranch } : {}),
     ...(opts.context1m ? { context1m: true } : {}),
     ...(opts.handoffFrom ? { handoffFrom: opts.handoffFrom } : {}),
+    ...(opts.pipeline ? { pipeline: opts.pipeline } : {}),
   };
   await writeJson(chatFilePath(repoPath, record.id), record);
   const index = await ensureIndexLoaded(repoPath);

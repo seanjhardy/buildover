@@ -992,3 +992,35 @@ export interface OrchestratorChatSnapshot {
   preview: string;
   updatedAt: string;
 }
+
+// ── Pipelines (server/pipelines.ts) ─────────────────────────────────────────
+
+export type ItemState = "new" | "working" | "ready" | "shown" | "waiting" | "done";
+
+export interface PipelineItemView {
+  key: string;
+  title: string;
+  summary?: string;
+  state: ItemState;
+  chatId?: string;
+  rank: number;
+  urgent?: boolean;
+  url?: string;
+}
+
+export interface PipelineSourceView {
+  id: string;
+  name: string;
+  repoPath: string;
+  counts: Record<ItemState, number>;
+  spendUsd: number;
+  error?: string;
+  items: PipelineItemView[];
+}
+
+export interface PipelinesView {
+  sources: PipelineSourceView[];
+  /** Weekly spend in API dollars against the cap (null until it can be worked out). */
+  budget: { spentUsd: number; capUsd: number | null; warnAt: number };
+  nextSweep: string;
+}
