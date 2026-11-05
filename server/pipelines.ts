@@ -12,6 +12,7 @@ import {
   fetchRows,
   loadSettings,
   loadSources,
+  takeFetchCost,
   type PipelineSettings,
   type SourceConfig,
   type SourceRow,
@@ -69,6 +70,8 @@ export interface PipelineItem {
   checkedFor?: string;
   /** The chat is mid-turn or asking for something, so nothing is sent to it. */
   busy?: boolean;
+  /** Another item's key whose chat this one joined; its news goes there. */
+  joinedTo?: string;
 }
 
 export interface PageFacts {
@@ -82,6 +85,8 @@ export interface PageFacts {
 export interface PipelineStore {
   items: PipelineItem[];
   syncedAt: Record<string, string>;
+  /** Last attempt per source, so a failing one backs off. */
+  triedAt?: Record<string, string>;
   /** Last sweep the engine released at. */
   releasedAt?: string;
   spend: { weekStart: string; usd: number; bySource: Record<string, number> };
@@ -99,6 +104,10 @@ const CHECK_MODEL = "claude-haiku-4-5-20251001";
 /** Event checks run this long before a sweep. */
 const CHECK_AHEAD_MS = 30 * 60_000;
 const CHECK_GRACE_MS = 2 * 60_000;
+/** A source whose last check failed waits this long before the next try. */
+const RETRY_MS = 15 * 60_000;
+/** Sources checked only before sweeps are checked this long before each. */
+const SYNC_AHEAD_MS = 60 * 60_000;
 
 const nowIso = () => new Date().toISOString();
 
@@ -272,15 +281,22 @@ async function runTick(): Promise<void> {
 
   const added = new Set<string>();
   for (const src of live) {
-    const due = Date.parse(store.syncedAt[src.id] ?? "") + (src.everyMinutes ?? 10) * 60_000;
-    if (Number.isFinite(due) && due > Date.now()) continue;
+    if (!syncDue(src, store.syncedAt[src.id], settings)) continue;
+    const triedAt = store.triedAt?.[src.id];
+    if (store.errors[src.id] && triedAt && Date.parse(triedAt) + RETRY_MS > Date.now()) continue;
+    const startedAt = nowIso();
+    (store.triedAt ??= {})[src.id] = startedAt;
     try {
       if (await syncSource(src, store)) added.add(src.id);
-      store.syncedAt[src.id] = nowIso();
+      store.syncedAt[src.id] = startedAt;
       delete store.errors[src.id];
     } catch (err) {
       store.errors[src.id] = err instanceof Error ? err.message : String(err);
     }
+    const cost = takeFetchCost(src.id);
+    rollWeek(store);
+    store.spend.usd += cost;
+    store.spend.bySource[src.id] = (store.spend.bySource[src.id] ?? 0) + cost;
   }
 
   await refreshItems(store);
@@ -315,6 +331,26 @@ async function runTick(): Promise<void> {
   await writeStore(store);
 }
 
+/** Whether a source is due a check: every few minutes, or once in the hour before each sweep. */
+export function syncDue(src: SourceConfig, syncedAt: string | undefined, settings: PipelineSettings, now = new Date()): boolean {
+  const last = Date.parse(syncedAt ?? "");
+  if (src.beforeSweeps) {
+    const opens = nextSweep(now, settings.sweeps).getTime() - SYNC_AHEAD_MS;
+    return now.getTime() >= opens && !(last >= opens);
+  }
+  return !Number.isFinite(last) || last + (src.everyMinutes ?? 10) * 60_000 <= now.getTime();
+}
+
+/** Add news to an item's pending wake. */
+function addWake(item: PipelineItem, news: string) {
+  if (!item.wake) item.wake = news;
+  else if (!item.wake.includes(news)) item.wake += `\n\n${news}`;
+}
+
+const NEWS = "There's news on this at the source since you last looked. See what changed, act on it, and update the front page.";
+const joinedNews = (src: SourceConfig, r: SourceRow) =>
+  [`Someone brought this up on ${src.name}:`, "```json", JSON.stringify(r.data ?? r.title, null, 2).slice(0, 8_000), "```", "Take it into account, reply there if it needs one (ask the user first), and update the front page."].join("\n");
+
 function setState(item: PipelineItem, state: ItemState, reason?: string) {
   if (item.state === state) return;
   item.state = state;
@@ -332,6 +368,8 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
     for (const i of open) if (closed.has(i.key)) await closeItem(i, "Closed at the source");
     const room = src.rolling.active - open.filter((i) => !closed.has(i.key)).length;
     rows = room > 0 ? await fetchRows(src, { seen: mine.map((i) => i.key), room }) : [];
+  } else if (src.feed) {
+    rows = await fetchRows(src, { seen: [], room: 0, since: store.syncedAt[src.id] });
   } else {
     rows = await fetchRows(src, { seen: [], room: 0 });
     const live = new Set(rows.map((r) => r.id));
@@ -340,20 +378,44 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
   let added = false;
   for (const r of rows) {
     const existing = mine.find((i) => i.key === r.id);
+    const joinKey = existing?.joinedTo ?? r.joins;
+    const target = joinKey ? store.items.find((i) => i.key === joinKey && i.chatId) : undefined;
     if (existing) {
       // Still open at the source: refresh what the agent will see next time.
       existing.title = r.title;
       existing.data = r.data;
       existing.url = r.url;
       if (r.version !== undefined) {
-        if (existing.version !== undefined && r.version !== existing.version && existing.chatId) {
-          existing.wake = "There's news on this at the source since you last looked. See what changed, act on it, and update the front page.";
+        if (existing.version !== undefined && r.version !== existing.version) {
+          if (existing.joinedTo) target && addWake(target, joinedNews(src, r));
+          else if (existing.chatId) addWake(existing, NEWS);
         }
         existing.version = r.version;
       }
       continue;
     }
     const at = nowIso();
+    if (target) {
+      // It's about something already under way (a review request for a PR
+      // that has a chat): it goes to that chat instead of starting another.
+      addWake(target, joinedNews(src, r));
+      store.items.push({
+        source: src.id,
+        key: r.id,
+        title: r.title,
+        url: r.url,
+        data: r.data,
+        ...(r.version !== undefined ? { version: r.version } : {}),
+        repoPath: target.repoPath,
+        state: "done",
+        closedReason: `Joined "${target.title}"`,
+        joinedTo: target.key,
+        rank: Number.MAX_SAFE_INTEGER,
+        createdAt: at,
+        updatedAt: at,
+      });
+      continue;
+    }
     store.items.push({
       source: src.id,
       key: r.id,

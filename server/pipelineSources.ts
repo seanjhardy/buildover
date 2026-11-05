@@ -2,6 +2,7 @@ import { execFile } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { agentFetch } from "./pipelineAgentFetch.js";
 import { PIPELINES_DIR } from "./pageTools.js";
 
 // Pipeline sources: where work items come from. The engine is generic; what a
@@ -22,6 +23,8 @@ export interface SourceRow {
   version?: string;
   /** The buildover repo its chat should live in, when not the source's. */
   repoPath?: string;
+  /** Another item's key (e.g. a PR's URL) this belongs with: its news goes to that chat. */
+  joins?: string;
 }
 
 /** Read-only SQL on a Supabase project through the Management API. */
@@ -44,6 +47,16 @@ export interface CommandFetch {
   checkCommand?: string;
 }
 
+/** A small agent with installed MCP servers' tools (read only) that reports what's new. */
+export interface AgentFetch {
+  kind: "agent";
+  /** buildover MCP server ids, e.g. ["slack"]. */
+  servers: string[];
+  /** What to look for; {since} becomes the last check's time. */
+  prompt: string;
+  model?: string;
+}
+
 export interface TokenSource {
   env?: string;
   /** A file holding the token; `pattern` (one capture group) picks it out, else the whole file. */
@@ -57,10 +70,15 @@ export interface SourceConfig {
   /** The buildover repo its chats live in. */
   repoPath: string;
   everyMinutes?: number;
-  fetch: SupabaseFetch | CommandFetch;
+  fetch: SupabaseFetch | CommandFetch | AgentFetch;
   /** Absent: the query returns every open item and one that drops out is closed.
    *  Set: keep `active` items open at a time, topping up from the query. */
   rolling?: { active: number };
+  /** Rows are what's new since the last check (messages, emails); nothing
+   *  closes by dropping out, only when worked or closed by the user. */
+  feed?: boolean;
+  /** Check only shortly before each sweep instead of every few minutes. */
+  beforeSweeps?: boolean;
   /** Fields of `data` shown to the ranker, e.g. ["priority", "type", "due"]. */
   facts?: string[];
   /** Extra instructions for this source's agents. */
@@ -157,13 +175,31 @@ function runCommand<T>(command: string, env: Record<string, string>): Promise<T[
   });
 }
 
-/** The source's items (all open ones, or for a rolling source up to `room` unseen ones). */
-export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: number }): Promise<SourceRow[]> {
+const fetchCosts = new Map<string, number>();
+
+/** What fetching a source has cost since last asked (connector agents cost money). */
+export function takeFetchCost(sourceId: string): number {
+  const usd = fetchCosts.get(sourceId) ?? 0;
+  fetchCosts.delete(sourceId);
+  return usd;
+}
+
+async function agentRows(src: SourceConfig, f: AgentFetch, since: string): Promise<SourceRow[]> {
+  const { rows, costUsd } = await agentFetch(f.servers, f.prompt.replace(/\{since\}/g, since), f.model);
+  fetchCosts.set(src.id, (fetchCosts.get(src.id) ?? 0) + costUsd);
+  return rows as SourceRow[];
+}
+
+/** The source's items: all open ones, up to `room` unseen ones (rolling), or what's new since `since` (feed). */
+export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: number; since?: string }): Promise<SourceRow[]> {
   const f = src.fetch;
+  const since = vars.since ?? new Date(Date.now() - 86_400_000).toISOString();
   const rows =
     f.kind === "supabase"
       ? supabaseQuery<SourceRow>(f, fillQuery(f.query, vars))
-      : runCommand<SourceRow>(f.command, { SEEN: JSON.stringify(vars.seen), ROOM: String(vars.room) });
+      : f.kind === "agent"
+        ? agentRows(src, f, since)
+        : runCommand<SourceRow>(f.command, { SEEN: JSON.stringify(vars.seen), ROOM: String(vars.room), SINCE: since });
   return rows.then((list) =>
     list
       .filter((r) => r && r.id != null)
@@ -173,6 +209,7 @@ export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: numbe
         title: String(r.title ?? r.id),
         ...(r.version != null ? { version: String(r.version) } : {}),
         ...(typeof r.repoPath === "string" ? { repoPath: home(r.repoPath) } : {}),
+        ...(typeof r.joins === "string" && r.joins ? { joins: r.joins } : {}),
       })),
   );
 }
@@ -181,6 +218,7 @@ export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: numbe
 export async function checkClosed(src: SourceConfig, ids: string[]): Promise<Set<string>> {
   if (!ids.length) return new Set();
   const f = src.fetch;
+  if (f.kind === "agent") return new Set();
   const query = f.kind === "supabase" ? f.checkQuery : f.checkCommand;
   if (!query) return new Set();
   const rows =

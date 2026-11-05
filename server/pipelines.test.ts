@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { nextState, pickRelease, pickResearch, weekStart, type PipelineItem } from "./pipelines.js";
+import { nextState, pickRelease, pickResearch, syncDue, weekStart, type PipelineItem } from "./pipelines.js";
+import { isWriteTool, parseRows } from "./pipelineAgentFetch.js";
+import type { SourceConfig } from "./pipelineSources.js";
 import { closedKeys, fillQuery } from "./pipelineSources.js";
 import { parseOrder } from "./pipelineRank.js";
 
@@ -96,4 +98,28 @@ test("woken items go first and aren't released until their news is worked", () =
   assert.deepEqual(pickResearch(items, ["board"], 2, 3).map((i) => i.key), ["w2", "w1"]);
   assert.deepEqual(pickResearch(items, ["board"], 3, 3).map((i) => i.key), ["w2", "w1", "n1"]);
   assert.deepEqual(pickRelease(items, true, 3).map((i) => i.key), []);
+});
+
+test("before-sweep sources check once in the hour before each sweep", () => {
+  const src = { id: "mail", beforeSweeps: true } as SourceConfig;
+  const sweeps = { sweeps: ["09:30", "14:00"] };
+  const t = (h: number, m: number) => new Date(2026, 10, 5, h, m); // Thursday
+  assert.equal(syncDue(src, undefined, sweeps, t(12, 0)), false);
+  assert.equal(syncDue(src, undefined, sweeps, t(13, 10)), true);
+  assert.equal(syncDue(src, t(13, 5).toISOString(), sweeps, t(13, 30)), false);
+  assert.equal(syncDue(src, t(9, 0).toISOString(), sweeps, t(13, 30)), true);
+  const every = { id: "b", everyMinutes: 10 } as SourceConfig;
+  assert.equal(syncDue(every, t(12, 0).toISOString(), sweeps, t(12, 5)), false);
+  assert.equal(syncDue(every, t(12, 0).toISOString(), sweeps, t(12, 10)), true);
+});
+
+test("connector agents may only read, and their rows are parsed out of prose", () => {
+  for (const name of ["send_message", "chat_postMessage", "gmail_create_draft", "modifyLabels", "add_reaction"]) {
+    assert.equal(isWriteTool(name), true, name);
+  }
+  for (const name of ["search_messages", "conversations_history", "get_thread", "list_labels", "read_email", "get_address"]) {
+    assert.equal(isWriteTool(name), false, name);
+  }
+  assert.deepEqual(parseRows('Here you go:\n[{"id": "a", "title": "x"}]\nDone.'), [{ id: "a", title: "x" }]);
+  assert.throws(() => parseRows("nothing new"));
 });
