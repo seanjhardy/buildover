@@ -12,6 +12,8 @@ import { AgentTaskBlock } from "./AgentTaskBlock.js";
 import { WebBlock } from "./WebBlock.js";
 import { AttentionBlock } from "./AttentionBlock.js";
 import { GenericToolBlock } from "./GenericToolBlock.js";
+import { PageToolBlock } from "./PageToolBlock.js";
+import { pageToolName } from "../lib/frontPage.js";
 
 interface Props {
   name: string;
@@ -153,6 +155,12 @@ export function ToolUseBlock({ name, input, result, cwd }: Props) {
     // AskUserQuestion - show questions and answers
     if (name === "AskUserQuestion") {
       return <AskUserQuestionBlock input={i} result={result} />;
+    }
+
+    // Front-page tools: one line saying what went on the front
+    const pageTool = pageToolName(name);
+    if (pageTool) {
+      return <PageToolBlock tool={pageTool} input={i} result={result} />;
     }
 
     // Attention prompts
