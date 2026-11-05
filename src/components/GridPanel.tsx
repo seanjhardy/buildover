@@ -33,6 +33,7 @@ import { MasterButton } from "./MasterPanel.js";
 import { WarmPill } from "./WarmPill.js";
 import { GridQueue, timeAgo, type QueueItem } from "./GridQueue.js";
 import { GridSubagents, gridSubagents } from "./GridSubagents.js";
+import { GridSources } from "./GridSources.js";
 import {
   FADE_SCALE,
   FAR_SCALE,
@@ -1397,6 +1398,12 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
 
   return (
     <div className="grid-page gc-stage">
+      <GridSources
+        colorOf={colorOf}
+        onFocus={focusCard}
+        onOpenChat={openChat}
+        onGrid={(chatId) => gridChatIds.has(chatId)}
+      />
       <div className="gc-main">
         <div
           className="gc-viewport"

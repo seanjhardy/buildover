@@ -1,0 +1,209 @@
+/* ── Pipeline sources: a rail down the left of the canvas ── */
+
+.gs-rail {
+  --s-text: #e6e6e9;
+  --s-muted: #8d8d96;
+  --s-faint: #5c5c64;
+  flex: 0 0 240px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 12px;
+  overflow-y: auto;
+  border-right: 1px solid #1c1c20;
+  background: #0e0e10;
+  color: var(--s-text);
+  font-size: 12.5px;
+}
+
+.gs-faint {
+  color: var(--s-faint);
+}
+
+.gs-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gs-sweep {
+  color: var(--s-muted);
+}
+
+.gs-release {
+  height: 28px;
+  padding: 0 10px;
+}
+
+/* Budget */
+
+.gs-budget {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  color: var(--s-muted);
+}
+
+.gs-budget-line {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.gs-meter {
+  height: 4px;
+  border-radius: 2px;
+  background: #1f1f23;
+  overflow: hidden;
+}
+
+.gs-meter-fill {
+  height: 100%;
+  border-radius: 2px;
+  background: #6b6b75;
+  transition: width 0.4s ease;
+}
+
+.gs-budget--warn .gs-budget-line {
+  color: #e0b25c;
+}
+.gs-budget--warn .gs-meter-fill {
+  background: #e0b25c;
+}
+.gs-budget--over .gs-budget-line {
+  color: #e56b6b;
+}
+.gs-budget--over .gs-meter-fill {
+  background: #e56b6b;
+}
+
+/* A source */
+
+.gs-source {
+  --src: hsl(var(--repo-hue) calc(48% + var(--repo-tone) * 15%) calc(62% - var(--repo-tone) * 8%));
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding-left: 10px;
+  border-left: 2px solid var(--src);
+}
+
+.gs-source-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: -4px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--s-text);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  text-align: left;
+}
+
+.gs-source-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gs-chevron {
+  flex: none;
+  color: var(--s-faint);
+  transition: transform 0.15s ease;
+}
+.gs-chevron--open {
+  transform: rotate(90deg);
+}
+
+.gs-tally {
+  color: var(--s-muted);
+}
+
+.gs-error {
+  color: #e56b6b;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.gs-items {
+  display: flex;
+  flex-direction: column;
+  margin: 4px 0 0 -6px;
+}
+
+.gs-item {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 5px 6px;
+  border: 0;
+  border-radius: 6px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.gs-item:hover:not(:disabled) {
+  background: #19191c;
+}
+.gs-item:disabled {
+  cursor: default;
+}
+
+.gs-item-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+  border-radius: 50%;
+  background: var(--s-faint);
+}
+.gs-item--shown .gs-item-dot,
+.gs-item--ready .gs-item-dot {
+  background: var(--src);
+}
+.gs-item--working .gs-item-dot {
+  border: 1px solid var(--src);
+  background: none;
+  animation: gs-pulse 1.6s ease-in-out infinite;
+}
+
+@keyframes gs-pulse {
+  50% {
+    opacity: 0.3;
+  }
+}
+
+.gs-item-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.gs-item-title {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  line-height: 1.35;
+}
+
+.gs-urgent {
+  margin-right: 4px;
+  vertical-align: -2px;
+  color: #e56b6b;
+}
+
+.gs-item-state {
+  color: var(--s-faint);
+  font-size: 11.5px;
+}
