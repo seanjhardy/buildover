@@ -1003,6 +1003,8 @@ export interface PipelineItemView {
   summary?: string;
   state: ItemState;
   chatId?: string;
+  /** The repo its chat lives in (a source's items can span repos). */
+  repoPath: string;
   rank: number;
   urgent?: boolean;
   url?: string;

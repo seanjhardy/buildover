@@ -85,3 +85,15 @@ test("estimateRate learns dollars per weekly point within one window", async () 
   // A weekly reset in between is skipped.
   assert.equal(estimateRate([[s(0, 10), s(10, 12), s(12, 1, "w2"), s(22, 3, "w2")]]), 5);
 });
+
+test("woken items go first and aren't released until their news is worked", () => {
+  const items = [
+    item({ key: "n1", rank: 1 }),
+    item({ key: "w1", state: "ready", chatId: "c1", wake: "news", rank: 5 }),
+    item({ key: "w2", state: "done", chatId: "c2", wake: "news", rank: 2 }),
+    item({ key: "busy", state: "shown", chatId: "c3", wake: "news", busy: true }),
+  ];
+  assert.deepEqual(pickResearch(items, ["board"], 2, 3).map((i) => i.key), ["w2", "w1"]);
+  assert.deepEqual(pickResearch(items, ["board"], 3, 3).map((i) => i.key), ["w2", "w1", "n1"]);
+  assert.deepEqual(pickRelease(items, true, 3).map((i) => i.key), []);
+});

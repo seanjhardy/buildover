@@ -669,12 +669,12 @@ class AgentSession {
 
   // A timed `wait` from the page tools becomes a durable wakeup, the same
   // queue ScheduleWakeup uses, so it survives the CLI exiting and restarts.
-  // Event waits are left to the pipeline checks.
+  // Event waits are left to the pipeline checks before each sweep.
   private async parkUntil(wait: PageWait): Promise<void> {
-    // Off the canvas until the time, or until the next sweep for a plain
-    // "not now". An event wait stays put until its checks exist.
-    const back = wait.until ? new Date(wait.until) : wait.event ? null : nextSweep(new Date());
-    if (back) await snoozeGridChat(this.chatId, back).catch(() => null);
+    // Off the canvas until the time, or else until the next sweep (a plain
+    // "not now", or an event the checks look for before then).
+    const back = wait.until ? new Date(wait.until) : nextSweep(new Date());
+    await snoozeGridChat(this.chatId, back).catch(() => null);
     if (!wait.until) return;
     try {
       const queued = await enqueueChatTurn(this.repoPath, this.chatId, {

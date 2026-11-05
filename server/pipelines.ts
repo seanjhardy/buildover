@@ -5,7 +5,7 @@ import type { ChatStatus, ChatSummary, ItemState, PipelinesView } from "../src/t
 export type { ItemState };
 import { hasFrontPage, pageFromEvents } from "../src/lib/frontPage.js";
 import { createChat, listChats, readChat } from "./chats.js";
-import { addToGrid, markGridChatDone, readGrid } from "./grid.js";
+import { addToGrid, markGridChatDone, readGrid, snoozeGridChat } from "./grid.js";
 import { NOTES_FILE, PIPELINES_DIR } from "./pageTools.js";
 import {
   checkClosed,
@@ -26,7 +26,10 @@ import { sampleUsage, weeklyShareUsd } from "./spendLedger.js";
 // The pipeline engine. Each source's items get a hidden chat whose agent
 // researches them and writes a front page. Items that need the user wait for
 // the next sweep, when up to `slots` per source go onto the canvas; urgent ones
-// go at once. Items closed at the source close here, quietly.
+// go at once. Items closed at the source close here, quietly. News on an item
+// (its source row's version changes) wakes its chat again, reopening it if
+// closed, so one thing keeps one chat. Before each sweep a cheap check asks
+// every chat waiting on an event whether it has happened.
 //
 //   new ─research─▶ working ─turn ends─▶ ready ─sweep─▶ shown ─closed─▶ done
 //                      ▲          └─wait──▶ waiting ─wakes─┘
@@ -56,12 +59,24 @@ export interface PipelineItem {
   costSeen?: number;
   /** What the front page said when last read. */
   page?: PageFacts;
+  /** The source row's version when last synced. */
+  version?: string;
+  /** News to wake the chat with when an agent is free. */
+  wake?: string;
+  /** When an event check started in the chat, until it settles. */
+  checking?: string;
+  /** The sweep the last event check was for. */
+  checkedFor?: string;
+  /** The chat is mid-turn or asking for something, so nothing is sent to it. */
+  busy?: boolean;
 }
 
 export interface PageFacts {
   written?: boolean;
   waiting?: boolean;
   done?: string;
+  /** What it's waiting for, when it waits on an event. */
+  event?: string;
 }
 
 export interface PipelineStore {
@@ -80,6 +95,10 @@ const DEFAULT_SLOTS = 3;
 const DEFAULT_MODEL = "claude-opus-5-5";
 /** A just-started chat shows "idle" until its turn persists. */
 const START_GRACE_MS = 5 * 60_000;
+const CHECK_MODEL = "claude-haiku-4-5-20251001";
+/** Event checks run this long before a sweep. */
+const CHECK_AHEAD_MS = 30 * 60_000;
+const CHECK_GRACE_MS = 2 * 60_000;
 
 const nowIso = () => new Date().toISOString();
 
@@ -137,14 +156,23 @@ export function nextState(item: PipelineItem, info: ChatInfo, now: number): { st
 
 const byRank = (a: PipelineItem, b: PipelineItem) => a.rank - b.rank || a.createdAt.localeCompare(b.createdAt);
 
+/** Whether a woken item can be sent its news now. */
+const wakeable = (i: PipelineItem) => !!i.wake && !!i.chatId && i.state !== "working" && !i.busy && !i.checking;
+
 /**
- * Items to research now: the best new item of each source that has fewer than
- * `ahead` items researched and waiting, taking turns across sources, until
- * `maxAgents` are working.
+ * Items to work now, until `maxAgents` are working: woken items first (news on
+ * something already under way), then the best new item of each source that
+ * has fewer than `ahead` items researched and waiting, taking turns across
+ * sources.
  */
 export function pickResearch(items: PipelineItem[], sources: string[], maxAgents: number, ahead: number): PipelineItem[] {
   let free = maxAgents - items.filter((i) => i.state === "working").length;
   const out: PipelineItem[] = [];
+  for (const i of items.filter(wakeable).sort(byRank)) {
+    if (free <= 0) break;
+    out.push(i);
+    free--;
+  }
   const queues = sources.map((s) => {
     const mine = items.filter((i) => i.source === s);
     const queued = mine.filter((i) => i.state === "working" || i.state === "ready").length;
@@ -168,7 +196,8 @@ export function pickRelease(items: PipelineItem[], sweep: boolean, slots: number
   for (const s of sources) {
     const mine = items.filter((i) => i.source === s);
     let shown = mine.filter((i) => i.state === "shown").length;
-    for (const i of mine.filter((x) => x.state === "ready").sort(byRank)) {
+    // A woken item's page is stale until its news has been worked.
+    for (const i of mine.filter((x) => x.state === "ready" && !x.wake).sort(byRank)) {
       if (i.urgent) out.push(i), shown++;
       else if (sweep && shown < slots) out.push(i), shown++;
     }
@@ -264,8 +293,10 @@ async function runTick(): Promise<void> {
   await sampleUsage().catch(() => undefined);
   const agents = await researchAgents(store, settings);
   for (const item of pickResearch(store.items, live.map((s) => s.id), agents, settings.slots ?? DEFAULT_SLOTS)) {
-    await startResearch(live.find((s) => s.id === item.source)!, item, settings);
+    const src = live.find((s) => s.id === item.source)!;
+    await (item.state === "new" ? startResearch(src, item, settings) : startWake(src, item, settings));
   }
+  await startChecks(store, settings);
 
   const sweepDue = forceRelease || (!!store.releasedAt && nextSweep(new Date(store.releasedAt), settings.sweeps).getTime() <= Date.now());
   store.releasedAt ??= nowIso();
@@ -314,6 +345,12 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
       existing.title = r.title;
       existing.data = r.data;
       existing.url = r.url;
+      if (r.version !== undefined) {
+        if (existing.version !== undefined && r.version !== existing.version && existing.chatId) {
+          existing.wake = "There's news on this at the source since you last looked. See what changed, act on it, and update the front page.";
+        }
+        existing.version = r.version;
+      }
       continue;
     }
     const at = nowIso();
@@ -323,7 +360,8 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
       title: r.title,
       url: r.url,
       data: r.data,
-      repoPath: src.repoPath,
+      ...(r.version !== undefined ? { version: r.version } : {}),
+      repoPath: await rowRepo(r, src),
       state: "new",
       rank: Number.MAX_SAFE_INTEGER,
       createdAt: at,
@@ -332,6 +370,12 @@ async function syncSource(src: SourceConfig, store: PipelineStore): Promise<bool
     added = true;
   }
   return added;
+}
+
+/** The row's own repo when it names a buildover repo, else the source's. */
+async function rowRepo(r: SourceRow, src: SourceConfig): Promise<string> {
+  if (r.repoPath && r.repoPath !== src.repoPath && (await getRepoMeta(r.repoPath).catch(() => null))) return r.repoPath;
+  return src.repoPath;
 }
 
 async function closeItem(item: PipelineItem, reason: string): Promise<void> {
@@ -356,7 +400,12 @@ async function refreshItems(store: PipelineStore): Promise<void> {
       const record = await readChat(item.repoPath, item.chatId!).catch(() => null);
       if (record) {
         const page = pageFromEvents(record.events);
-        item.page = { written: hasFrontPage(page), waiting: !!page.waiting, ...(page.done ? { done: page.done } : {}) };
+        item.page = {
+          written: hasFrontPage(page),
+          waiting: !!page.waiting,
+          ...(page.waiting?.event ? { event: page.waiting.event } : {}),
+          ...(page.done ? { done: page.done } : {}),
+        };
         item.summary = page.summary ?? item.summary;
         item.urgent = page.urgent ?? item.urgent;
         const cost = record.cost?.totalUsd ?? 0;
@@ -366,6 +415,18 @@ async function refreshItems(store: PipelineStore): Promise<void> {
         item.costSeen = cost;
       }
       item.seenAt = summary.updatedAt;
+    }
+    const status = summary?.status;
+    item.busy = status === "running" || status === "queued" || status === "awaiting_input";
+    if (item.checking && status && !item.busy && Date.now() - Date.parse(item.checking) > CHECK_GRACE_MS) {
+      delete item.checking;
+      if (item.page?.waiting) {
+        // Still waiting: keep it off the canvas through the sweep it was checked for.
+        const after = nextSweep(new Date(Date.parse(item.checkedFor ?? nowIso()) + 60_000));
+        await snoozeGridChat(item.chatId!, after).catch(() => null);
+      } else {
+        item.wake = "What you were waiting for has happened (see the check above). Carry on with the work and update the front page.";
+      }
     }
     const next = nextState(item, { status: summary?.status ?? null, onGrid: grid.has(item.chatId!) }, Date.now());
     if (next.state === "done" && item.state !== "shown") await markGridChatDone(item.chatId!, item.repoPath).catch(() => null);
@@ -398,7 +459,7 @@ async function researchAgents(store: PipelineStore, settings: PipelineSettings):
 
 async function startResearch(src: SourceConfig, item: PipelineItem, settings: PipelineSettings): Promise<void> {
   const model = src.model ?? settings.model ?? DEFAULT_MODEL;
-  const record = await createChat(src.repoPath, {
+  const record = await createChat(item.repoPath, {
     model,
     permissionMode: "bypassPermissions",
     title: item.title,
@@ -408,9 +469,51 @@ async function startResearch(src: SourceConfig, item: PipelineItem, settings: Pi
   item.startedAt = nowIso();
   setState(item, "working");
   const text = await researchPrompt(src, item);
-  void getSession(src.repoPath, record.id)
+  void getSession(item.repoPath, record.id)
     .runTurn({ text, model, permissionMode: "bypassPermissions" })
     .catch((err) => console.warn(`[pipelines] research on ${item.key} failed:`, err instanceof Error ? err.message : err));
+}
+
+/** Send a woken item's news to its chat. */
+async function startWake(src: SourceConfig, item: PipelineItem, settings: PipelineSettings): Promise<void> {
+  const model = src.model ?? settings.model ?? DEFAULT_MODEL;
+  const text = [
+    item.wake,
+    ...(item.url ? ["", `Link: ${item.url}`] : []),
+    ...(item.data !== undefined ? ["", "Source data now:", "```json", JSON.stringify(item.data, null, 2).slice(0, 12_000), "```"] : []),
+  ].join("\n");
+  delete item.wake;
+  delete item.closedReason;
+  // The new turn clears any wait or close on the page.
+  item.page = { written: item.page?.written };
+  item.startedAt = nowIso();
+  if (item.state !== "shown") setState(item, "working");
+  void getSession(item.repoPath, item.chatId!)
+    .runTurn({ text, model, permissionMode: "bypassPermissions" })
+    .catch((err) => console.warn(`[pipelines] waking ${item.key} failed:`, err instanceof Error ? err.message : err));
+}
+
+/** Shortly before each sweep, ask each chat waiting on an event whether it has happened. */
+async function startChecks(store: PipelineStore, settings: PipelineSettings): Promise<void> {
+  const upcoming = nextSweep(new Date(), settings.sweeps);
+  if (upcoming.getTime() - Date.now() > CHECK_AHEAD_MS) return;
+  const sweep = upcoming.toISOString();
+  const due = store.items.filter(
+    (i) => i.chatId && i.page?.event && (i.state === "waiting" || i.state === "shown") && !i.busy && !i.checking && !i.wake && i.checkedFor !== sweep,
+  );
+  for (const item of due) {
+    item.checking = nowIso();
+    item.checkedFor = sweep;
+    const text = [
+      `Quick check, don't do the work yet. You're waiting for: "${item.page!.event}".`,
+      "Find out whether it has happened, looking only as far as you need.",
+      "If it hasn't, call wait again with the same event and note, then stop.",
+      "If it has, say in one line what happened and stop; you'll be asked to carry on.",
+    ].join(" ");
+    void getSession(item.repoPath, item.chatId!)
+      .runTurn({ text, model: CHECK_MODEL, permissionMode: "bypassPermissions" })
+      .catch((err) => console.warn(`[pipelines] checking ${item.key} failed:`, err instanceof Error ? err.message : err));
+  }
 }
 
 // ── Read model for the canvas ───────────────────────────────────────────────
@@ -432,7 +535,17 @@ export async function pipelinesView(): Promise<PipelinesView> {
         counts,
         spendUsd: store.spend.bySource[src.id] ?? 0,
         ...(store.errors[src.id] ? { error: store.errors[src.id] } : {}),
-        items: items.map(({ key, title, summary, state, chatId, rank, urgent, url }) => ({ key, title, summary, state, chatId, rank, urgent, url })),
+        items: items.map(({ key, title, summary, state, chatId, repoPath, rank, urgent, url }) => ({
+          key,
+          title,
+          summary,
+          state,
+          chatId,
+          repoPath,
+          rank,
+          urgent,
+          url,
+        })),
       };
     }),
     budget: { spentUsd: store.spend.usd, capUsd: await budgetCap(settings), warnAt: settings.budget?.warnAt ?? 0.75 },

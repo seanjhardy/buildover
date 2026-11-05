@@ -17,6 +17,11 @@ export interface SourceRow {
   title: string;
   url?: string;
   data?: unknown;
+  /** Changes when there's news on the item (e.g. its latest comment's time).
+   *  A change wakes the item's chat, reopening it if it was closed. */
+  version?: string;
+  /** The buildover repo its chat should live in, when not the source's. */
+  repoPath?: string;
 }
 
 /** Read-only SQL on a Supabase project through the Management API. */
@@ -159,7 +164,17 @@ export function fetchRows(src: SourceConfig, vars: { seen: string[]; room: numbe
     f.kind === "supabase"
       ? supabaseQuery<SourceRow>(f, fillQuery(f.query, vars))
       : runCommand<SourceRow>(f.command, { SEEN: JSON.stringify(vars.seen), ROOM: String(vars.room) });
-  return rows.then((list) => list.filter((r) => r && r.id != null).map((r) => ({ ...r, id: String(r.id), title: String(r.title ?? r.id) })));
+  return rows.then((list) =>
+    list
+      .filter((r) => r && r.id != null)
+      .map((r) => ({
+        ...r,
+        id: String(r.id),
+        title: String(r.title ?? r.id),
+        ...(r.version != null ? { version: String(r.version) } : {}),
+        ...(typeof r.repoPath === "string" ? { repoPath: home(r.repoPath) } : {}),
+      })),
+  );
 }
 
 /** For a rolling source: which of its open keys are closed (or gone) at the source. */

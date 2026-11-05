@@ -192,7 +192,7 @@ export function GridSources({ colorOf, onFocus, onOpenChat, onGrid }: Props) {
           onOpen={(item) => {
             if (!item.chatId) return;
             if (onGrid(item.chatId)) onFocus(item.chatId);
-            else onOpenChat(s.repoPath, item.chatId);
+            else onOpenChat(item.repoPath, item.chatId);
           }}
         />
       ))}
