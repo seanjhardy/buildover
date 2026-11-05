@@ -76,3 +76,12 @@ test("parseOrder covers every item once; weekStart is Monday", () => {
   assert.equal(monday.getDay(), 1);
   assert.equal(monday.getDate(), 2);
 });
+
+test("estimateRate learns dollars per weekly point within one window", async () => {
+  const { estimateRate } = await import("./spendLedger.js");
+  const s = (usd: number, util: number, resetsAt = "w1") => ({ at: at, usd, util, resetsAt });
+  assert.equal(estimateRate([[s(0, 10), s(5, 11)]]), null); // too little movement yet
+  assert.equal(estimateRate([[s(0, 10), s(10, 12), s(20, 14)]]), 5);
+  // A weekly reset in between is skipped.
+  assert.equal(estimateRate([[s(0, 10), s(10, 12), s(12, 1, "w2"), s(22, 3, "w2")]]), 5);
+});

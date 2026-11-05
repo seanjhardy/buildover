@@ -15,6 +15,7 @@ import { makeMasterMcp } from "./masterTools.js";
 import { createPageToolsServer } from "./pageTools.js";
 import { markGridChatDone, readGrid, snoozeGridChat } from "./grid.js";
 import { nextSweep } from "./sweeps.js";
+import { noteSpend } from "./spendLedger.js";
 import { PAGE_SERVER, pageFromEvents, type PageWait } from "../src/lib/frontPage.js";
 import { coordinatorPrompt, masterPrompt, subagentPrompt } from "./prompts.js";
 import {
@@ -1960,6 +1961,7 @@ class AgentSession {
       if (tagged.type === "result") {
         const delta = this.recordTurnCost(tagged.totalCostUsd, args.silent === true);
         if (delta !== undefined) tagged.totalCostUsd = delta;
+        noteSpend(this.claudeAccountId, delta ?? 0);
       }
       args.onEvent?.(tagged);
       if (tagged.type === "assistant") {

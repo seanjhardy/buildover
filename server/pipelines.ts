@@ -21,6 +21,7 @@ import { notifyAgentNeedsInput } from "./push.js";
 import { getRepoMeta } from "./repos.js";
 import { getSession } from "./sessions.js";
 import { nextSweep } from "./sweeps.js";
+import { sampleUsage, weeklyShareUsd } from "./spendLedger.js";
 
 // The pipeline engine. Each source's items get a hidden chat whose agent
 // researches them and writes a front page. Items that need the user wait for
@@ -260,11 +261,10 @@ async function runTick(): Promise<void> {
       .catch((err) => console.warn(`[pipelines] ranking ${src.id} failed:`, err instanceof Error ? err.message : err));
   }
 
-  if (!overBudget(store, settings)) {
-    const slots = settings.slots ?? DEFAULT_SLOTS;
-    for (const item of pickResearch(store.items, live.map((s) => s.id), settings.maxAgents ?? DEFAULT_MAX_AGENTS, slots)) {
-      await startResearch(live.find((s) => s.id === item.source)!, item, settings);
-    }
+  await sampleUsage().catch(() => undefined);
+  const agents = await researchAgents(store, settings);
+  for (const item of pickResearch(store.items, live.map((s) => s.id), agents, settings.slots ?? DEFAULT_SLOTS)) {
+    await startResearch(live.find((s) => s.id === item.source)!, item, settings);
   }
 
   const sweepDue = forceRelease || (!!store.releasedAt && nextSweep(new Date(store.releasedAt), settings.sweeps).getTime() <= Date.now());
@@ -378,14 +378,22 @@ function rollWeek(store: PipelineStore) {
   if (store.spend.weekStart !== start) store.spend = { weekStart: start, usd: 0, bySource: {} };
 }
 
-/** The weekly cap in API dollars, or null when it can't be known yet. */
-export function budgetCap(settings: PipelineSettings): number | null {
-  return settings.budget?.weeklyUsd ?? null;
+const DEFAULT_SHARE = 0.02;
+
+/** The weekly cap in API dollars, or null while the rate is still being learned. */
+export async function budgetCap(settings: PipelineSettings): Promise<number | null> {
+  return settings.budget?.weeklyUsd ?? (await weeklyShareUsd(settings.budget?.share ?? DEFAULT_SHARE));
 }
 
-function overBudget(store: PipelineStore, settings: PipelineSettings): boolean {
-  const cap = budgetCap(settings);
-  return cap !== null && store.spend.usd >= cap;
+/**
+ * At the cap, no new research starts (ranking and checks carry on). While the
+ * cap is still unknown, research runs one agent at a time so its own spend
+ * teaches the rate.
+ */
+async function researchAgents(store: PipelineStore, settings: PipelineSettings): Promise<number> {
+  const cap = await budgetCap(settings);
+  if (cap === null) return 1;
+  return store.spend.usd >= cap ? 0 : settings.maxAgents ?? DEFAULT_MAX_AGENTS;
 }
 
 async function startResearch(src: SourceConfig, item: PipelineItem, settings: PipelineSettings): Promise<void> {
@@ -427,7 +435,7 @@ export async function pipelinesView(): Promise<PipelinesView> {
         items: items.map(({ key, title, summary, state, chatId, rank, urgent, url }) => ({ key, title, summary, state, chatId, rank, urgent, url })),
       };
     }),
-    budget: { spentUsd: store.spend.usd, capUsd: budgetCap(settings), warnAt: settings.budget?.warnAt ?? 0.75 },
+    budget: { spentUsd: store.spend.usd, capUsd: await budgetCap(settings), warnAt: settings.budget?.warnAt ?? 0.75 },
     nextSweep: nextSweep(new Date(), settings.sweeps).toISOString(),
   };
 }
