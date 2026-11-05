@@ -11,6 +11,10 @@
  * It is kept warm aggressively (MASTER_KEEP_WARM_HOURS) because it is the chat
  * the user returns to most often, and a cold restart on a large transcript
  * costs far more than the pings do (see the keep-warm notes in sessions.ts).
+ *
+ * After MASTER_IDLE_CLEAR_HOURS without a message it starts over: the next
+ * request for it gets a fresh chat (the old transcript is kept, it just stops
+ * being *the* master chat), so a new day never opens on yesterday's context.
  */
 
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -31,7 +35,22 @@ export const MASTER_REPO_PATH = join(BUILDOVER_DIR, "master");
  * Deliberately longer than the per-chat default: this is the chat the user
  * dips in and out of all day.
  */
-export const MASTER_KEEP_WARM_HOURS = 4;
+export const MASTER_KEEP_WARM_HOURS = 2;
+
+/** Idle time after which the master chat is cleared to a fresh one. Matches
+ *  the warm window: warming a chat that is about to be cleared is wasted. */
+export const MASTER_IDLE_CLEAR_HOURS = 2;
+
+/** When the master chat last had a message, or null if it never has. */
+function lastMessageMs(record: { events: { type: string; ts?: string }[] }): number | null {
+  for (let i = record.events.length - 1; i >= 0; i--) {
+    const e = record.events[i];
+    if (e.type !== "user_message" || !e.ts) continue;
+    const ms = Date.parse(e.ts);
+    if (Number.isFinite(ms)) return ms;
+  }
+  return null;
+}
 
 /** The prompt cache TTL the keep-warm machinery works against (1h, minus a
  *  margin) — shared with the client's warm indicator via /api/master. */
@@ -91,7 +110,18 @@ export async function ensureMasterChat(model?: Model): Promise<MasterInfo> {
     const existing = await readRegistry();
     if (existing?.chatId) {
       const record = await readChat(MASTER_REPO_PATH, existing.chatId).catch(() => null);
-      if (record) {
+      const lastMs = record ? lastMessageMs(record) : null;
+      const idle =
+        record != null &&
+        lastMs != null &&
+        record.status !== "running" &&
+        record.status !== "queued" &&
+        Date.now() - lastMs >= MASTER_IDLE_CLEAR_HOURS * 3_600_000;
+      if (record && idle) {
+        // Gone quiet: stop warming the old transcript and fall through to a
+        // fresh chat.
+        await setKeepWarm(MASTER_REPO_PATH, existing.chatId, false).catch(() => null);
+      } else if (record) {
         // Keep-warm is not optional for the master chat; re-assert it in case
         // it was toggled off from a generic chat control.
         if (!record.keepWarm) {
@@ -104,8 +134,8 @@ export async function ensureMasterChat(model?: Model): Promise<MasterInfo> {
           model: record.model,
         };
       }
-      // Registry pointed at a chat that no longer exists — fall through and
-      // make a fresh one.
+      // Registry pointed at a chat that no longer exists (or it went idle) —
+      // fall through and make a fresh one.
     }
 
     const record = await createChat(MASTER_REPO_PATH, {
@@ -119,7 +149,7 @@ export async function ensureMasterChat(model?: Model): Promise<MasterInfo> {
     await atomicWrite(MASTER_FILE, {
       chatId: record.id,
       repoPath: MASTER_REPO_PATH,
-      createdAt: new Date().toISOString(),
+      createdAt: existing?.createdAt ?? new Date().toISOString(),
     } satisfies MasterRegistry);
     return {
       repoPath: MASTER_REPO_PATH,

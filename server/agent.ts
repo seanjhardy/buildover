@@ -674,6 +674,10 @@ export class ClaudeLiveQuery {
   }
 
   private openSink(args: RunArgs): Promise<void> {
+    // One turn at a time per process. A second turn opening over the first
+    // would leave the first's promise unresolved and its chat stuck running,
+    // so end it first.
+    if (this.sink) this.endTurn(this.sink);
     clearTimeout(this.idleTimer);
     this.markActive();
     this.unsolicitedPending = false;
@@ -953,6 +957,20 @@ export class ClaudeLiveQuery {
           // Remember this snapshot so the Tools & MCP panel can preview the
           // available tools before a chat has started.
           void updateToolsCache(message.tools ?? [], message.mcp_servers ?? []);
+        } else if (message.subtype === "thinking_tokens") {
+          // With thinking display omitted the block streams no text, so a long
+          // think looks like a hung chat. The CLI's running token estimate
+          // rides on the live thinking block to show it is still working.
+          const p = this.partial;
+          if (p?.blockType === "thinking" && typeof message.estimated_tokens === "number") {
+            emit({
+              type: "assistant_partial",
+              id: p.id,
+              blockType: "thinking",
+              text: p.text,
+              thinkingTokens: message.estimated_tokens,
+            });
+          }
         } else if (message.subtype === "api_retry") {
           // The CLI hit a retryable API error and is backing off. Surface it
           // as a non-fatal status instead of leaving the chat looking hung.

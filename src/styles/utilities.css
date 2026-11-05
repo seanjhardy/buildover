@@ -3,6 +3,17 @@
   display: inline-flex;
   gap: 3px;
 }
+.streaming-pulse {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.streaming-pulse-label {
+  font-size: 11px;
+  color: var(--app-secondary-foreground, inherit);
+  opacity: 0.7;
+  font-variant-numeric: tabular-nums;
+}
 .thinking-pulse span {
   width: 4px;
   height: 4px;

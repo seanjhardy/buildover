@@ -23,6 +23,7 @@
 @import "./terminal.css";
 @import "./market.css";
 @import "./grid.css";
+@import "./grid-canvas.css";
 @import "./update-banner.css";
 @import "./activity-bar.css";
 @import "./pull-requests.css";

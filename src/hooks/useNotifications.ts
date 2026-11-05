@@ -10,6 +10,12 @@ const ATTENTION_STATUSES = new Set<ChatStatus>(["awaiting_input", "error"]);
 // Statuses that trigger a native macOS notification on transition into them.
 const NOTIFY_STATUSES = new Set<ChatStatus>(["awaiting_input", "agent_done", "error"]);
 
+// Statuses a chat can be *leaving* for a notification to fire. Only a turn
+// that was actually live can finish, block, or fail — anything else (a chat
+// list refresh, a reconnect, an index rebuild flipping idle ↔ agent_done) is
+// old state being re-observed, and notifying on it spammed every old chat.
+const LIVE_STATUSES = new Set<ChatStatus>(["running", "queued", "awaiting_input"]);
+
 function repoName(repoPath: string): string {
   return repoPath.split(/[\\/]/).filter(Boolean).pop() ?? repoPath;
 }
@@ -61,8 +67,16 @@ export function useNotifications(
   // ── Status transitions → badge + notifications ──────────────────────────
   useEffect(() => {
     const api = window.electronNotifications;
+    // The installed phone PWA gets real Web Push from the server (idle-gated),
+    // so in-page notifications there would only duplicate it.
+    const standalone =
+      window.matchMedia?.("(display-mode: standalone)").matches ||
+      (navigator as { standalone?: boolean }).standalone === true;
     const webNotify =
-      !api && typeof Notification !== "undefined" && Notification.permission === "granted";
+      !api &&
+      !standalone &&
+      typeof Notification !== "undefined" &&
+      Notification.permission === "granted";
     if (!api && !webNotify) return;
 
     let attentionCount = 0;
@@ -95,14 +109,14 @@ export function useNotifications(
           }
         }
 
-        // Fire a native notification on transition INTO a notify-worthy status.
-        // Checked independently of hasTransitioned so that the notifiedRef dedup
-        // key acts as the single source of truth — guarding against any code path
-        // (race conditions, React StrictMode double-invocations, server replays,
-        // etc.) that could deliver the same notify-worthy status more than once.
+        // Fire a native notification only on a real transition from a live
+        // status INTO a notify-worthy one. The notifiedRef dedup key still
+        // guards against the same transition being delivered twice (StrictMode
+        // double-invocations, server replays, etc.).
         if (
+          hasTransitioned &&
+          LIVE_STATUSES.has(prev) &&
           NOTIFY_STATUSES.has(chat.status) &&
-          prev !== undefined &&                          // don't notify on first load
           !notified.has(`${chat.id}:${chat.status}`)
         ) {
           notified.add(`${chat.id}:${chat.status}`);

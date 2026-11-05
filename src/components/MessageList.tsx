@@ -7,12 +7,14 @@ import {
   useRef,
   useState,
 } from "react";
+import { PARTIAL_TURN_PREFIX } from "../hooks/useAgent.js";
 import type { BranchInfo, ChatTurn } from "../hooks/useAgent.js";
 import type { Attachment, ChatKind, ContentBlock } from "../types.js";
 import { condenseTranscript } from "../lib/condenseTranscript.js";
 import type { CondensedRow } from "../lib/condenseTranscript.js";
 import { ActivityGroup } from "./ActivityGroup.js";
 import { AssistantMessage } from "./AssistantMessage.js";
+import { PromptPeek } from "./PromptPeek.js";
 import { UserMessage } from "./UserMessage.js";
 import { SystemMessage } from "./SystemMessage.js";
 import { TimestampDivider } from "./TimestampDivider.js";
@@ -60,9 +62,39 @@ interface Props {
 type RenderedTurn = Exclude<ChatTurn, { kind: "tool_results" }>;
 type MessageItem = RenderedTurn | { kind: "__streaming__" };
 
+// The CLI's running token estimate for a thinking block still being
+// generated. Hidden thinking streams no text, so this is the only sign that a
+// long think is progressing rather than stuck.
+function partialThinkingTokens(turns: ChatTurn[]): number | undefined {
+  const last = turns[turns.length - 1];
+  if (last?.kind !== "assistant" || !last.id.startsWith(PARTIAL_TURN_PREFIX)) return undefined;
+  const block = last.content[0];
+  return block?.type === "thinking" ? block.liveTokens : undefined;
+}
+
+function formatTokens(n: number): string {
+  return n < 1000 ? String(n) : `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+}
+
+function StreamingPulse({ thinkingTokens }: { thinkingTokens?: number }) {
+  return (
+    <div className="streaming-pulse">
+      <div className="thinking-pulse" aria-label="thinking">
+        <span />
+        <span />
+        <span />
+      </div>
+      {thinkingTokens !== undefined && thinkingTokens > 0 && (
+        <span className="streaming-pulse-label">Thinking · ~{formatTokens(thinkingTokens)} tokens</span>
+      )}
+    </div>
+  );
+}
+
 function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scrollRef, jumpBarRef, chatId, chatKind, branchInfo, onForkMessage, onSwitchBranch, onRevert }: Props) {
   // The scroll container div. Also exposed to the jump bar.
   const containerRef = useRef<HTMLDivElement>(null);
+  const contentRef = useRef<HTMLDivElement>(null);
   const historySentinelRef = useRef<HTMLDivElement>(null);
 
   // This records user intent, not a scroll-position snapshot. Layout shifts and
@@ -128,6 +160,7 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
     ? [...renderedTurns, { kind: "__streaming__" }]
     : renderedTurns;
   const isEmpty = turns.length === 0 && !isStreaming;
+  const liveThinkingTokens = isStreaming ? partialThinkingTokens(turns) : undefined;
   const isHydrating = isEmpty && !historyReady;
 
   // Render only the newest history initially. Unlike height-based
@@ -388,7 +421,9 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const inner = el.firstElementChild;
+    // The prompt peek's anchor comes first in a populated list, so observe the
+    // transcript itself rather than whichever child happens to lead.
+    const inner = contentRef.current ?? el.firstElementChild;
     const observer = new ResizeObserver(() => {
       if (isPinnedRef.current) el.scrollTop = el.scrollHeight;
       jumpBarRef?.current?.notifyUpdate?.();
@@ -420,11 +455,7 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
   ) => {
     if (item.kind === "__streaming__") {
       return (
-        <div key="__streaming__" className="thinking-pulse" aria-label="thinking">
-          <span />
-          <span />
-          <span />
-        </div>
+        <StreamingPulse key="__streaming__" thinkingTokens={liveThinkingTokens} />
       );
     }
     if (item.kind === "user") {
@@ -515,7 +546,12 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
 
   return (
     <div className="message-list" ref={containerRef}>
-      <div className="message-list-content">
+      <PromptPeek
+        containerRef={containerRef}
+        items={userItems}
+        onJump={scrollToMessage}
+      />
+      <div className="message-list-content" ref={contentRef}>
         {historyStart > 0 && (
           <div
             ref={historySentinelRef}
@@ -541,11 +577,7 @@ function MessageListInner({ turns, isStreaming, historyReady = true, cwd, scroll
             )
           : visibleItems.map((item) => renderItem(item))}
         {condensedRows && isStreaming && (
-          <div className="thinking-pulse" aria-label="thinking">
-            <span />
-            <span />
-            <span />
-          </div>
+          <StreamingPulse thinkingTokens={liveThinkingTokens} />
         )}
       </div>
     </div>

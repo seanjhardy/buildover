@@ -25,7 +25,7 @@ import {
 } from "./chats.js";
 import { getRepoMeta, listRecents } from "./repos.js";
 import { DEFAULT_MODEL } from "../src/types.js";
-import type { ChatSummary, Model, PermissionMode } from "../src/types.js";
+import type { ChatStatus, ChatSummary, Model, PermissionMode } from "../src/types.js";
 
 const BUILDOVER_DIR = join(homedir(), ".buildover");
 const GRID_FILE = join(BUILDOVER_DIR, "grid.json");
@@ -45,13 +45,52 @@ export interface GridRegistry {
   updatedAt: string;
 }
 
+/** A chat this one spawned as a subagent (spawn_subagent). */
+export interface GridSubagentChat {
+  id: string;
+  title: string;
+  task?: string;
+  status: ChatStatus;
+}
+
 /** A grid entry enriched with its chat summary + repo name for the client. */
 export interface GridChatEntry extends GridEntry {
   repoName: string;
   chat: ChatSummary;
+  /** Its subagent chats that are still at work, then the few it spawned last
+   *  that aren't; absent when it has none. Kept small, as the grid polls. */
+  subagents?: GridSubagentChat[];
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
+
+/** Finished subagent chats a window lists under the working ones. */
+const RECENT_SUBAGENTS = 3;
+
+const AT_WORK: ReadonlySet<ChatStatus> = new Set(["running", "queued", "awaiting_input"]);
+
+/** Each chat's subagent chats, newest first: every one at work, then the
+ *  latest few of the rest. */
+function subagentsByParent(summaries: ChatSummary[]): Map<string, GridSubagentChat[]> {
+  const byParent = new Map<string, ChatSummary[]>();
+  for (const s of summaries) {
+    if (!s.parentChatId) continue;
+    const list = byParent.get(s.parentChatId) ?? [];
+    list.push(s);
+    byParent.set(s.parentChatId, list);
+  }
+  const result = new Map<string, GridSubagentChat[]>();
+  for (const [parentId, children] of byParent) {
+    children.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+    const atWork = children.filter((c) => AT_WORK.has(c.status));
+    const rest = children.filter((c) => !AT_WORK.has(c.status)).slice(0, RECENT_SUBAGENTS);
+    result.set(
+      parentId,
+      [...atWork, ...rest].map((c) => ({ id: c.id, title: c.title, task: c.task, status: c.status })),
+    );
+  }
+  return result;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -222,13 +261,15 @@ export async function listGridChats(): Promise<GridChatEntry[]> {
     }
     const summaries = await listChats(repoPath).catch(() => [] as ChatSummary[]);
     const byId = new Map(summaries.map((s) => [s.id, s]));
+    const children = subagentsByParent(summaries);
     for (const e of entries) {
       const chat = byId.get(e.chatId);
       if (!chat) {
         stale.push(e.chatId);
         continue;
       }
-      result.push({ ...e, repoName: meta.name, chat });
+      const subagents = children.get(e.chatId);
+      result.push({ ...e, repoName: meta.name, chat, ...(subagents && { subagents }) });
     }
   }
 

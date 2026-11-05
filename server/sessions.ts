@@ -414,6 +414,11 @@ class AgentSession {
   private pendingAttentions = new Map<string, PendingAttention>();
   private abort?: AbortController;
   private running = false;
+  // True while runTurn awaits its pre-start checks (chat kind, usage limits),
+  // before `running` is set. Counts as busy so a second turn arriving in that
+  // window parks instead of also starting: two turns on one process overwrite
+  // each other's output sink, and the loser hangs the chat as "running" forever.
+  private starting = false;
   // Structural chat operations (edit/resend, branch switch, revert) can arrive
   // while an aborted turn is still unwinding, or while an invisible compact
   // turn is running. These waiters let those operations wait for the session
@@ -491,7 +496,7 @@ class AgentSession {
   }
 
   isRunning(): boolean {
-    return this.running;
+    return this.running || this.starting;
   }
 
   private waitUntilIdle(): Promise<void> {
@@ -1444,7 +1449,7 @@ class AgentSession {
   // A steered message the CLI ran as its own turn is already in the
   // transcript (see steer), so it gets no header.
   private startBackgroundTurn(live: ClaudeLiveQuery, notes: string[], steered = false): void {
-    if (this.running) {
+    if (this.running || this.starting) {
       this.pendingAdoption = { live, notes, steered };
       return;
     }
@@ -1546,6 +1551,19 @@ class AgentSession {
     });
   }
 
+  // A turn that gave up before starting (usage-limit queue, keep-warm skip,
+  // error) never reaches the finally block that hands the session on, so
+  // whatever parked behind it while it was starting is handed on here.
+  private resumeAfterAbortedStart(): void {
+    const adoption = this.pendingAdoption;
+    if (adoption?.live.hasPendingUnsolicitedTurn()) {
+      this.pendingAdoption = undefined;
+      this.startBackgroundTurn(adoption.live, adoption.notes, adoption.steered);
+    } else if (this.pendingUserTurns.length > 0) {
+      void this.runTurn(this.pendingUserTurns.shift()!);
+    }
+  }
+
   // Kicks off a turn in the background. Resolves immediately; the actual work
   // streams through emit/persistence/broadcast.
   //
@@ -1584,7 +1602,7 @@ class AgentSession {
   }): Promise<void> {
     if (args.adoptLive) {
       if (!args.adoptLive.hasPendingUnsolicitedTurn()) return;
-      if (this.running) {
+      if (this.running || this.starting) {
         this.pendingAdoption = {
           live: args.adoptLive,
           notes: args.text ? [args.text] : [],
@@ -1593,7 +1611,7 @@ class AgentSession {
         return;
       }
     }
-    if (this.running) {
+    if (this.running || this.starting) {
       // A turn is already in flight (a normal visible turn, or an invisible
       // auto-compact). Rather than rejecting the message — which would surface
       // a "Chat already running" error and make the composer feel broken — we
@@ -1629,72 +1647,86 @@ class AgentSession {
         this.pendingUserTurns.push({ ...args, isRetry: true });
         return;
       }
+      // Already persisted (e.g. a queued turn whose drain lost the race with
+      // another turn): park it too, or it is dropped.
+      if (!args.silent) {
+        this.pendingUserTurns.push(args);
+        return;
+      }
       throw new Error("Chat already running");
     }
 
-    // Subagents always run on Haiku 4.5, enforced here by chat kind — the one
-    // path every turn (first turn, resumed turn, coordinator feedback, queued
-    // turn) flows through. This is the source of truth, independent of whatever
-    // model the spawner stored or the caller passed.
-    {
-      const kindRecord = await readChat(this.repoPath, this.chatId);
-      if ((kindRecord?.kind ?? "user") === "subagent" && args.model !== SUBAGENT_MODEL) {
-        args = { ...args, model: SUBAGENT_MODEL };
+    this.starting = true;
+    let started = false;
+    try {
+      // Subagents always run on Haiku 4.5, enforced here by chat kind — the one
+      // path every turn (first turn, resumed turn, coordinator feedback, queued
+      // turn) flows through. This is the source of truth, independent of whatever
+      // model the spawner stored or the caller passed.
+      {
+        const kindRecord = await readChat(this.repoPath, this.chatId);
+        if ((kindRecord?.kind ?? "user") === "subagent" && args.model !== SUBAGENT_MODEL) {
+          args = { ...args, model: SUBAGENT_MODEL };
+        }
       }
-    }
 
-    // Check usage limit before starting a new turn. A blocked turn is queued
-    // until its own provider resets; it is never moved to another model.
-    // Cursor / Codex models check their own provider's limits. An adopted
-    // background turn has already run.
-    if (!args.silent && !args.adoptLive) {
-      if (isCursorModel(args.model)) {
-        const cursorBlock = await getCursorUsageLimitBlock();
-        if (cursorBlock) {
-          await this.queueForUsageLimit(args, cursorBlock);
-          return;
-        }
-      } else if (getModelProvider(args.model) === "openai") {
-        const codexBlock = await getCodexUsageLimitBlock();
-        if (codexBlock) {
-          await this.queueForUsageLimit(args, codexBlock);
-          return;
-        }
-      } else if (isClaudeModel(args.model)) {
-        // Switches to another logged-in account with headroom first (when
-        // auto-switch is on) before queueing.
-        const account = await pickAccountForTurn();
-        const usageBlock = await getUsageLimitBlock(args.model, account.configDir ?? undefined);
-        if (usageBlock) {
-          await this.queueForUsageLimit(args, usageBlock);
-          return;
+      // Check usage limit before starting a new turn. A blocked turn is queued
+      // until its own provider resets; it is never moved to another model.
+      // Cursor / Codex models check their own provider's limits. An adopted
+      // background turn has already run.
+      if (!args.silent && !args.adoptLive) {
+        if (isCursorModel(args.model)) {
+          const cursorBlock = await getCursorUsageLimitBlock();
+          if (cursorBlock) {
+            await this.queueForUsageLimit(args, cursorBlock);
+            return;
+          }
+        } else if (getModelProvider(args.model) === "openai") {
+          const codexBlock = await getCodexUsageLimitBlock();
+          if (codexBlock) {
+            await this.queueForUsageLimit(args, codexBlock);
+            return;
+          }
+        } else if (isClaudeModel(args.model)) {
+          // Switches to another logged-in account with headroom first (when
+          // auto-switch is on) before queueing.
+          const account = await pickAccountForTurn();
+          const usageBlock = await getUsageLimitBlock(args.model, account.configDir ?? undefined);
+          if (usageBlock) {
+            await this.queueForUsageLimit(args, usageBlock);
+            return;
+          }
         }
       }
-    }
 
-    if (args.keepAlive) {
-      // Pings are best-effort: skip when the plan is out of usage (or an
-      // opt-in concurrency cap is saturated) rather than waiting or queueing.
-      turnSlots.setMax((await readPrefs()).maxConcurrentTurns);
-      // Every one of these gives up on this ping — but never on the chain.
-      if (this.running) {
-        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
-        return;
+      if (args.keepAlive) {
+        // Pings are best-effort: skip when the plan is out of usage (or an
+        // opt-in concurrency cap is saturated) rather than waiting or queueing.
+        turnSlots.setMax((await readPrefs()).maxConcurrentTurns);
+        // Every one of these gives up on this ping — but never on the chain.
+        if (this.running) {
+          this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
+          return;
+        }
+        const account = await getActiveClaudeAccount();
+        if (await getUsageLimitBlock(args.model, account.configDir ?? undefined)) {
+          this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
+          return;
+        }
+        if (this.running) {
+          this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
+          return;
+        }
+        if (!turnSlots.tryAcquire()) {
+          this.scheduleKeepWarm(KEEP_WARM_RETRY_MS);
+          return;
+        }
+        this.holdsSlot = true;
       }
-      const account = await getActiveClaudeAccount();
-      if (await getUsageLimitBlock(args.model, account.configDir ?? undefined)) {
-        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
-        return;
-      }
-      if (this.running) {
-        this.scheduleKeepWarm(KEEP_WARM_BUSY_RETRY_MS);
-        return;
-      }
-      if (!turnSlots.tryAcquire()) {
-        this.scheduleKeepWarm(KEEP_WARM_RETRY_MS);
-        return;
-      }
-      this.holdsSlot = true;
+      started = true;
+    } finally {
+      this.starting = false;
+      if (!started) this.resumeAfterAbortedStart();
     }
 
     this.running = true;
@@ -1734,6 +1766,7 @@ class AgentSession {
     if (!begun) {
       this.running = false;
       this.releaseSlot();
+      this.resumeAfterAbortedStart();
       throw new Error(`Chat ${this.chatId} not found`);
     }
     const { record, isFirstUserTurn } = begun;

@@ -658,9 +658,10 @@
 .chat-status-icon.error {
   color: var(--app-error);
 }
-.chat-status-icon .spin {
+/* The box spins, not the svg: Chromium won't run an svg's transform animation
+   on the compositor, so a spinning svg repaints the page every frame. */
+.chat-status-icon.running {
   animation: chat-spin 1s linear infinite;
-  transform-origin: center;
 }
 @keyframes chat-spin {
   to {

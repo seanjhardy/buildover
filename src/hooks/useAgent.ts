@@ -1112,7 +1112,7 @@ function appendTurnIfNew(prev: ChatTurn[], turn: ChatTurn): ChatTurn[] {
 }
 
 // Turns showing a block the model is still generating (assistant_partial).
-const PARTIAL_TURN_PREFIX = "partial:";
+export const PARTIAL_TURN_PREFIX = "partial:";
 
 function withoutPartials(prev: ChatTurn[]): ChatTurn[] {
   return prev.some((t) => t.id.startsWith(PARTIAL_TURN_PREFIX))
@@ -1207,7 +1207,7 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         id: PARTIAL_TURN_PREFIX + event.id,
         content: [
           event.blockType === "thinking"
-            ? { type: "thinking", thinking: event.text }
+            ? { type: "thinking", thinking: event.text, liveTokens: event.thinkingTokens }
             : { type: "text", text: event.text },
         ],
       };
@@ -1215,6 +1215,16 @@ function applyAgentEvent(event: AgentEvent, s: Setters): void {
         const i = prev.findIndex((t) => t.id === turn.id);
         if (i === -1) return [...withoutPartials(prev), turn];
         const next = prev.slice();
+        // Text deltas carry no token estimate; keep the last one so the
+        // progress label doesn't flicker away between estimates.
+        const prevBlock = prev[i].kind === "assistant" ? prev[i].content[0] : undefined;
+        const block = turn.content[0];
+        if (
+          block?.type === "thinking" && block.liveTokens === undefined &&
+          prevBlock?.type === "thinking" && prevBlock.liveTokens !== undefined
+        ) {
+          turn.content = [{ ...block, liveTokens: prevBlock.liveTokens }];
+        }
         next[i] = turn;
         return next;
       });

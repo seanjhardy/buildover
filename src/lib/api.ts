@@ -3,6 +3,7 @@ import type {
   EffortLevel,
   ChatHandoffTo,
   ChatRecord,
+  ChatStatus,
   ChatSummary,
   CreateProjectRequest,
   CreateProjectResult,
@@ -154,6 +155,14 @@ export interface Dashboard {
   updatedAt: string;
 }
 
+/** A chat a grid chat spawned as a subagent (spawn_subagent). */
+export interface GridSubagentChat {
+  id: string;
+  title: string;
+  task?: string;
+  status: ChatStatus;
+}
+
 export interface GridChatEntry {
   chatId: string;
   repoPath: string;
@@ -161,6 +170,8 @@ export interface GridChatEntry {
   order: number;
   addedAt: string;
   chat: ChatSummary;
+  /** Its subagent chats still at work, then the latest few of the rest. */
+  subagents?: GridSubagentChat[];
 }
 
 export interface MasterInfo {

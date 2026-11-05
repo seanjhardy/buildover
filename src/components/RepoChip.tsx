@@ -1,30 +1,12 @@
-/** Repo identity on a grid card: a pill that sits in the card header next to
- *  the warmth pill, so the header reads as one row of status rather than a
- *  title with a stray label underneath.
- *
- *  Identity is carried twice over, strongest first:
- *    - colour, derived from the repo path, so six cards from three projects are
- *      distinguishable without reading anything;
- *    - a two-letter monogram, which never truncates;
- *    - the repo name, which does truncate (and is dropped entirely by a
- *      container query when the card header gets narrow — see grid.css).
- *  The hues are muted and deliberately avoid the 20–40° clay band, which the
- *  grid reserves for attention and interaction. */
+/** Repo identity colours for the Grid canvas: each repo's windows, tint and
+ *  border take a hue derived from its path, so windows from three projects are
+ *  distinguishable without reading anything. The hues are muted and avoid the
+ *  red/orange band, which is spoken for by attention and cost warnings. */
 
 export interface RepoColor {
   hue: number;
   /** 0 | 1 — the brightness tier that goes with the hue. */
   tone: number;
-}
-
-interface Props {
-  repoName: string;
-  repoPath: string;
-  /** Colour to use. Defaults to this repo's own hashed colour; the grid passes
-   *  a de-collided one so no two repos on screen share a swatch. */
-  color?: RepoColor;
-  /** Extra classes (e.g. a placement variant). */
-  className?: string;
 }
 
 // Twelve hues walking the cool half of the wheel, ~20-25° apart so neighbours
@@ -96,31 +78,7 @@ export function assignRepoColors(paths: Iterable<string>): Map<string, RepoColor
   return out;
 }
 
-/** "creature-curator" → "CC", "buildover" → "BU", "api_v2" → "AV". */
-export function repoMonogram(repoName: string): string {
-  const parts = repoName
-    .split(/[^A-Za-z0-9]+|(?<=[a-z0-9])(?=[A-Z])/)
-    .filter(Boolean);
-  if (parts.length >= 2) return (parts[0][0] + parts[1][0]).toUpperCase();
-  const word = parts[0] ?? repoName;
-  return word.slice(0, 2).toUpperCase();
-}
-
-export function RepoChip({ repoName, repoPath, color, className }: Props) {
-  const { hue, tone } = color ?? repoColor(repoPath);
-  return (
-    <span
-      className={`repo-chip${className ? ` ${className}` : ""}`}
-      style={{
-        ["--repo-hue" as string]: String(hue),
-        ["--repo-tone" as string]: String(tone),
-      }}
-      title={repoPath}
-    >
-      <span className="repo-chip-mark" aria-hidden>
-        {repoMonogram(repoName)}
-      </span>
-      <span className="repo-chip-name">{repoName}</span>
-    </span>
-  );
+/** CSS custom properties that carry a repo colour into grid styles. */
+export function repoColorVars(color: RepoColor): Record<string, string> {
+  return { "--repo-hue": String(color.hue), "--repo-tone": String(color.tone) };
 }

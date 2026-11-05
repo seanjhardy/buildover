@@ -56,6 +56,7 @@
 .message-list-content > [data-turn-kind],
 .message-list-content > .result-line,
 .message-list-content > .thinking-pulse,
+.message-list-content > .streaming-pulse,
 .message-list-content > .tool-group {
   width: 100%;
   box-sizing: border-box;
@@ -66,6 +67,71 @@
   height: 1px;
   flex: 0 0 1px;
   pointer-events: none;
+}
+
+/* ---- Prompt peek: resting the pointer on the top edge of a chat shows the
+   user's message that has scrolled off above. The zero-height sticky anchor
+   pins it to the top of the viewport without taking room in the transcript. */
+.prompt-peek-anchor {
+  position: sticky;
+  top: 0;
+  height: 0;
+  z-index: 30;
+}
+
+.prompt-peek {
+  position: absolute;
+  top: 8px;
+  left: var(--app-spacing-large);
+  right: var(--app-spacing-large);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 12px;
+  font: inherit;
+  text-align: left;
+  color: var(--app-primary-foreground);
+  background: color-mix(in srgb, var(--app-secondary-background) 94%, transparent);
+  backdrop-filter: blur(8px);
+  border: 1px solid var(--app-primary-border-color);
+  border-radius: var(--corner-radius-large);
+  box-shadow: 0 6px 24px rgba(0, 0, 0, 0.4);
+  cursor: pointer;
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-4px);
+  transition: opacity 120ms ease, transform 120ms ease, border-color 120ms ease,
+    visibility 0s linear 120ms;
+}
+
+.prompt-peek--open {
+  opacity: 1;
+  visibility: visible;
+  transform: none;
+  transition: opacity 120ms ease, transform 120ms ease, border-color 120ms ease;
+}
+
+.prompt-peek:hover {
+  border-color: color-mix(in srgb, var(--app-claude-orange) 45%, var(--app-primary-border-color));
+}
+
+.prompt-peek-label {
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--app-claude-orange);
+}
+
+.prompt-peek-text {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 6;
+  overflow: hidden;
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
 }
 
 /* Hairline separator carrying a friendly timestamp centred in the rule. */

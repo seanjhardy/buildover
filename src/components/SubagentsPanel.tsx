@@ -24,7 +24,7 @@ interface Props {
 // How often an expanded running task's output is re-fetched.
 const OUTPUT_POLL_MS = 2_000;
 
-function formatElapsed(ms: number): string {
+export function formatElapsed(ms: number): string {
   const s = Math.max(0, Math.floor(ms / 1000));
   if (s < 60) return `${s}s`;
   const m = Math.floor(s / 60);
@@ -32,14 +32,14 @@ function formatElapsed(ms: number): string {
   return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-function taskDuration(task: AgentTask, now: number): string {
+export function taskDuration(task: AgentTask, now: number): string {
   const start = Date.parse(task.startedAt);
   const end = task.endedAt ? Date.parse(task.endedAt) : now;
   return formatElapsed(end - start);
 }
 
 // Ticks once a second while `active`, so running rows show a live duration.
-function useNow(active: boolean): number {
+export function useNow(active: boolean): number {
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
     if (!active) return;

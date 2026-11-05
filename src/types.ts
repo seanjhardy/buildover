@@ -103,7 +103,8 @@ export interface Attachment {
 
 export type ContentBlock =
   | { type: "text"; text: string }
-  | { type: "thinking"; thinking: string }
+  // liveTokens: only on a block still being generated (see assistant_partial).
+  | { type: "thinking"; thinking: string; liveTokens?: number }
   | { type: "tool_use"; id: string; name: string; input: unknown }
   | {
       type: "tool_result";
@@ -787,6 +788,9 @@ export type AgentEvent =
       id: string;
       blockType: "text" | "thinking";
       text: string;
+      // CLI's running estimate of the thinking block's size, so a think with
+      // no visible text still shows progress.
+      thinkingTokens?: number;
     }
   | {
       type: "user_tool_results";

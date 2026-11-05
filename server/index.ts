@@ -218,6 +218,7 @@ import type {
   OrchestratorEvent,
   PermissionMode,
 } from "../src/types.js";
+import { killChildCliProcesses, reapOrphanedCliProcesses } from "./cliProcesses.js";
 
 const PORT = Number(process.env.PORT ?? 8787);
 // Bind to loopback by default so the server is never directly exposed on the
@@ -225,6 +226,13 @@ const PORT = Number(process.env.PORT ?? 8787);
 // which reverse-proxies from the tailnet to 127.0.0.1:PORT here — so the
 // tailnet is the only network boundary. Set HOST=0.0.0.0 to override for LAN.
 const HOST = process.env.HOST ?? "127.0.0.1";
+
+// Without this the Claude CLIs the SDK spawned outlive a restart and keep
+// running their turns unattended. Electron stops the server with SIGTERM.
+process.on("exit", killChildCliProcesses);
+for (const signal of ["SIGTERM", "SIGINT", "SIGHUP"] as const) {
+  process.once(signal, () => process.exit(0));
+}
 
 process.on("unhandledRejection", (reason) => {
   console.error("[server] unhandled rejection:", reason);
@@ -3121,6 +3129,9 @@ async function recoverMasterChat(): Promise<void> {
 }
 
 void (async () => {
+  // Left over from a server that was killed outright, so its exit hook never ran.
+  const reaped = reapOrphanedCliProcesses();
+  if (reaped) console.log(`[server] killed ${reaped} orphaned Claude CLI process(es)`);
   await recoverStaleChats();
   await recoverMasterChat();
   httpServer.listen(PORT, HOST, () => {

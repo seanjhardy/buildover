@@ -1,0 +1,1469 @@
+/* ============================================================ */
+/* Grid canvas — pan/zoom board of chat windows                  */
+/* ============================================================ */
+
+/* JS sets --z (the zoom) on .gc-canvas once a zoom comes to rest (at every
+   step when zoomed far out, where the transcripts are hidden). It is
+   registered as non-inheriting, so it restyles just the handful of elements
+   that take it with `--z: inherit` (window, edges, label, fillets, handles)
+   and never the transcripts inside. Lines and corners divide by it so they
+   stay the same size on screen at any zoom. The window colours are registered
+   the same way, so switching to the zoomed-out look doesn't restyle the
+   transcripts either. Nothing here blurs at rest; mid-zoom the canvas is
+   scaled as one picture (gc-canvas--zooming) and sharpens when it stops. */
+@property --z {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
+/* The zoomed-out look fades in with the zoom, so it can't wait for a rest:
+   while it shows, JS sets --far (how far into it, 0 to 1) and --zl (the zoom)
+   at every step, registered the same way. The label fades by --far and sizes
+   itself by --zl; the edges and fillets blend to the repo's colour by --far. */
+@property --far {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 0;
+}
+
+@property --zl {
+  syntax: "<number>";
+  inherits: false;
+  initial-value: 1;
+}
+
+@property --gc-bg {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #161618;
+}
+
+@property --gc-edge {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #2c2c31;
+}
+
+@property --gc-seam {
+  syntax: "<color>";
+  inherits: false;
+  initial-value: #232327;
+}
+
+.grid-page.gc-stage {
+  position: relative;
+  flex-direction: row;
+  background: #0b0b0c;
+}
+
+/* The board, left of the queue. */
+.gc-main {
+  position: relative;
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.gc-viewport {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  background-color: #0b0b0c;
+  touch-action: none;
+}
+
+/* The dot grid is a layer of its own, one pitch (22px × the zoom, at most
+   27.5px) wider and taller than the viewport. JS slides it by under a pitch,
+   so a pan moves it on the compositor instead of repainting it. */
+.gc-dots {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: calc(100% + 28px);
+  height: calc(100% + 28px);
+  background-image: radial-gradient(circle, rgba(255, 255, 255, 0.06) 1px, transparent 1.3px);
+  pointer-events: none;
+  will-change: transform;
+}
+
+.gc-viewport--panning {
+  cursor: grabbing;
+}
+
+/* The box a left drag across the board draws: every window it touches is
+   selected. JS places it in screen px, so its line stays crisp at any zoom. */
+.gc-marquee {
+  position: absolute;
+  left: 0;
+  top: 0;
+  display: none;
+  border: 1px solid rgba(111, 157, 255, 0.85);
+  border-radius: 3px;
+  background: rgba(111, 157, 255, 0.08);
+  pointer-events: none;
+}
+
+.gc-viewport--selecting {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.gc-viewport--selecting > .gc-marquee {
+  display: block;
+}
+
+.gc-canvas {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 0;
+  height: 0;
+  transform-origin: 0 0;
+  --head-h: 38px;
+}
+
+/* While the scale moves, keep the canvas's pixels and just scale them, rather
+   than re-rasterising every transcript at each step. */
+.gc-canvas--zooming {
+  will-change: transform;
+}
+
+/* A spinner or pulse in a window that's off screen (JS marks it data-away) or
+   hidden by the far-out look has nothing on the compositor to move, so
+   Chromium would tick it on the main thread and re-layer the whole board every
+   frame. Pause those. They're named rather than matched with *, so a window
+   coming into view restyles a few dots, not its whole transcript: a new
+   looping animation inside a window belongs in this list. */
+:is(.gc-card[data-away], .gc-canvas--far .gc-card)
+  :is(.chat-status-icon.running, .thinking-pulse span, .message-list-hydrating-indicator span,
+    .activity-group-live, .chat-banner-spinner, .mic-rec-dot, .mic-spinner, .gc-agents-spinner) {
+  animation-play-state: paused;
+}
+
+/* Repo colours, for the dot in the title bar and the zoomed-out look. Close
+   up a window is plain grey, and it takes its repo's colour as it zooms out.
+   Its fill fades in on the label, over the transcript; the window's own
+   background only switches once that covers it. The edges are drawn over the
+   label and the fillets outside it, so those blend by --far themselves. */
+.gc-tinted {
+  --far: inherit;
+  --repo: hsl(var(--repo-hue) calc(48% + var(--repo-tone) * 15%) calc(62% - var(--repo-tone) * 8%));
+  --repo-text: hsl(var(--repo-hue) calc(50% + var(--repo-tone) * 15%) calc(74% - var(--repo-tone) * 8%));
+  --repo-bg: color-mix(in srgb, var(--repo) 16%, #161618);
+  --gc-edge: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--repo) 42%, #161618) calc(var(--far) * 100%),
+    #2c2c31
+  );
+  --gc-seam: color-mix(
+    in srgb,
+    color-mix(in srgb, var(--repo) 26%, #161618) calc(var(--far) * 100%),
+    #232327
+  );
+}
+
+.gc-canvas--far .gc-card {
+  --gc-bg: var(--repo-bg);
+}
+
+/* ── Window ── */
+
+.gc-card {
+  --z: inherit;
+  --zl: inherit;
+  position: absolute;
+  left: calc(var(--c) * var(--cell-w));
+  top: calc(var(--r) * var(--cell-h));
+  width: var(--cell-w);
+  height: var(--cell-h);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  background: var(--gc-bg);
+  border-radius: calc(20px / var(--z));
+}
+
+/* Only the focused window takes text selection; dragging on any other one
+   selects windows or moves the selection. */
+.gc-card:not(.gc-card--focused) {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+/* Joined edges: square corners where windows meet. */
+.gc-card.gc-n {
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+.gc-card.gc-e {
+  border-top-right-radius: 0;
+  border-bottom-right-radius: 0;
+}
+.gc-card.gc-s {
+  border-bottom-right-radius: 0;
+  border-bottom-left-radius: 0;
+}
+.gc-card.gc-w {
+  border-top-left-radius: 0;
+  border-bottom-left-radius: 0;
+}
+
+/* Edges are drawn on an overlay rather than as a real border, so changing
+   their width with the zoom never reflows the transcript. Each window draws
+   its top and left; right and bottom only where nothing is joined — so a
+   shared edge is exactly one line. */
+.gc-edges {
+  --z: inherit;
+  --gc-edge: inherit;
+  --gc-seam: inherit;
+  position: absolute;
+  inset: 0;
+  z-index: 4;
+  pointer-events: none;
+  border-radius: inherit;
+  border: calc(1px / var(--z)) solid var(--gc-edge);
+}
+.gc-n > .gc-edges {
+  border-top-color: var(--gc-seam);
+}
+.gc-w > .gc-edges {
+  border-left-color: var(--gc-seam);
+}
+.gc-e > .gc-edges {
+  border-right-width: 0;
+}
+.gc-s > .gc-edges {
+  border-bottom-width: 0;
+}
+
+/* The focused window — the one arrows move from, Enter types into and whose
+   title bar drags the selection: a bright full ring, over its neighbours and
+   the inner corners beside it. */
+.gc-card--focused {
+  z-index: 8;
+}
+.gc-card--focused > .gc-edges {
+  border: calc(2px / var(--z)) solid #e4e4e8;
+}
+
+.gc-card--focused .gc-head {
+  cursor: grab;
+}
+
+.gc-canvas:not(.gc-canvas--live) .gc-card--focused {
+  cursor: grab;
+}
+
+/* The rest of the selection: a blue ring. Grabbing any part of one moves
+   every selected window. */
+.gc-card--selected {
+  z-index: 7;
+  cursor: grab;
+}
+.gc-card--selected > .gc-edges {
+  border: calc(2px / var(--z)) solid #6f9dff;
+}
+
+/* Needs you — asking something, finished, or stopped on an error: a ring in
+   the status colour just inside the edge, so it still shows inside the focus
+   and selection rings, thicker far out. */
+.gc-card--awaiting_input {
+  --gc-status: #d9b44a;
+}
+.gc-card--agent_done {
+  --gc-status: #89d185;
+}
+.gc-card--error {
+  --gc-status: #e2776f;
+}
+
+.gc-card--attention > .gc-edges {
+  box-shadow: inset 0 0 0 calc(2px / var(--z)) var(--gc-status);
+}
+.gc-canvas--far .gc-card--attention > .gc-edges {
+  box-shadow: inset 0 0 0 calc(3px / var(--z)) var(--gc-status);
+}
+/* Inside a focus or selection ring, a dark hairline keeps the two colours
+   from running together. */
+.gc-card--attention:is(.gc-card--focused, .gc-card--selected) > .gc-edges {
+  box-shadow:
+    inset 0 0 0 calc(1px / var(--z)) #0b0b0c,
+    inset 0 0 0 calc(3px / var(--z)) var(--gc-status);
+}
+.gc-canvas--far .gc-card--attention:is(.gc-card--focused, .gc-card--selected) > .gc-edges {
+  box-shadow:
+    inset 0 0 0 calc(1.5px / var(--z)) #0b0b0c,
+    inset 0 0 0 calc(4.5px / var(--z)) var(--gc-status);
+}
+
+/* On getting there, a glow swells inside the ring a few times, then goes. It
+   only moves opacity, so it stays on the compositor; off screen it waits, and
+   plays when the window comes into view. */
+.gc-card--attention > .gc-edges::after {
+  --z: inherit;
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  box-shadow: inset 0 0 calc(36px / var(--z)) calc(3px / var(--z))
+    color-mix(in srgb, var(--gc-status) 55%, transparent);
+  opacity: 0;
+  animation: gc-attention-in 0.9s ease-in-out 3;
+}
+
+.gc-card[data-away] > .gc-edges::after {
+  animation-play-state: paused;
+}
+
+@keyframes gc-attention-in {
+  50% {
+    opacity: 1;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gc-card--attention > .gc-edges::after {
+    animation: none;
+  }
+}
+
+.gc-card--dragging {
+  z-index: 10;
+}
+
+.gc-card--settling {
+  transition: transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.gc-card--arranging {
+  transition: transform 0.42s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+/* Inner curve where an L of windows bends: fills the empty cell's corner with
+   the windows' colour, leaving a quarter-circle hole edged by a line that
+   carries on from the windows' own edges. */
+.gc-fillet {
+  --z: inherit;
+  --gc-bg: color-mix(in srgb, var(--repo-bg) calc(var(--far) * 100%), #161618);
+  --fr: calc(20px / var(--z));
+  --fh: calc(1px / var(--z));
+  position: absolute;
+  z-index: 6;
+  width: calc(var(--fr) + var(--fh));
+  height: calc(var(--fr) + var(--fh));
+  pointer-events: none;
+  background: radial-gradient(
+    circle at var(--at),
+    transparent var(--fr),
+    var(--gc-edge) var(--fr),
+    var(--gc-edge) calc(var(--fr) + var(--fh)),
+    var(--gc-bg) calc(var(--fr) + var(--fh))
+  );
+}
+.gc-fillet--rb {
+  left: calc(var(--x) * var(--cell-w) - var(--fh));
+  top: calc(var(--y) * var(--cell-h) - var(--fh));
+  --at: 100% 100%;
+}
+.gc-fillet--lb {
+  left: calc(var(--x) * var(--cell-w) - var(--fr));
+  top: calc(var(--y) * var(--cell-h) - var(--fh));
+  --at: 0% 100%;
+}
+.gc-fillet--rt {
+  left: calc(var(--x) * var(--cell-w) - var(--fh));
+  top: calc(var(--y) * var(--cell-h) - var(--fr));
+  --at: 100% 0%;
+}
+.gc-fillet--lt {
+  left: calc(var(--x) * var(--cell-w) - var(--fr));
+  top: calc(var(--y) * var(--cell-h) - var(--fr));
+  --at: 0% 0%;
+}
+
+/* Where dragged windows will land. */
+.gc-ghost {
+  --z: inherit;
+  position: absolute;
+  z-index: 0;
+  left: calc(var(--c) * var(--cell-w));
+  top: calc(var(--r) * var(--cell-h));
+  width: var(--cell-w);
+  height: var(--cell-h);
+  border-radius: calc(20px / var(--z));
+  background: rgba(255, 255, 255, 0.03);
+  outline: calc(1px / var(--z)) dashed rgba(255, 255, 255, 0.24);
+  outline-offset: calc(-1px / var(--z));
+  pointer-events: none;
+}
+
+/* "+" beside a repo's block: a new chat in that repo, in the free cell it sits
+   in, just past the edge that window would share with the block. JS shows it
+   (gc-add--shown) while the pointer is over the block. It sits at (--x, --y)
+   and stays the same size on screen at any zoom, offset 24px into the cell
+   along (--dx, --dy); it grows out of the block's edge as it appears. */
+.gc-add {
+  --z: inherit;
+  position: absolute;
+  z-index: 9;
+  left: calc(var(--x) * var(--cell-w));
+  top: calc(var(--y) * var(--cell-h));
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  border: 1px solid color-mix(in srgb, var(--repo) 45%, #2a2a2f);
+  border-radius: 50%;
+  background: #19191c;
+  color: var(--repo-text);
+  cursor: pointer;
+  transform-origin: 0 0;
+  transform: scale(calc(1 / var(--z)))
+    translate(calc(var(--dx) * 24px - 50%), calc(var(--dy) * 24px - 50%));
+  scale: 0.8;
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.14s ease,
+    scale 0.14s ease,
+    visibility 0s linear 0.14s;
+}
+
+.gc-add--shown {
+  scale: 1;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.14s ease,
+    scale 0.14s ease;
+}
+
+.gc-add:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--repo) 75%, #2a2a2f);
+  background: color-mix(in srgb, var(--repo) 20%, #19191c);
+  color: #fff;
+}
+
+.gc-add:disabled {
+  cursor: default;
+}
+
+.gc-add--shown:disabled {
+  opacity: 0.5;
+}
+
+/* The cell the "+" will fill, outlined while it's hovered. */
+.gc-add-slot {
+  opacity: 0;
+  transition: opacity 0.14s ease;
+}
+
+.gc-add:is(:hover, :focus-visible):not(:disabled) + .gc-add-slot {
+  opacity: 1;
+}
+
+/* ── Title bar: drag the focused window by it, double-click to zoom in ── */
+
+.gc-head {
+  flex: 0 0 var(--head-h);
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+  container: gc-head / inline-size;
+}
+
+/* Needs you: the title bar takes the status colour. */
+.gc-card--attention .gc-head {
+  background: color-mix(in srgb, var(--gc-status) 14%, transparent);
+  border-bottom-color: color-mix(in srgb, var(--gc-status) 32%, transparent);
+}
+
+.gc-head-side {
+  flex: 0 0 auto;
+  min-width: 92px;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.gc-head-side--end {
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.gc-head-title {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  font-size: 12.5px;
+}
+
+.gc-head-status {
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+/* …and its icon becomes a pill that says why ("Needs input", "Finished"),
+   down to the bare icon on a narrow window so the name keeps its room. */
+.gc-head-status--flag {
+  align-items: center;
+  gap: 3px;
+  height: 20px;
+  padding: 0 8px 0 2px;
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--gc-status) 22%, transparent);
+  color: var(--gc-status);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.gc-head-status--flag .chat-status-icon {
+  width: 16px;
+  height: 16px;
+  color: inherit;
+}
+
+@container gc-head (max-width: 500px) {
+  .gc-head-status--flag {
+    padding: 0 2px;
+  }
+  .gc-head-status-text {
+    display: none;
+  }
+}
+
+.gc-head-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  color: #ededed;
+}
+
+.gc-head-repo {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 40%;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 11.5px;
+  color: rgba(255, 255, 255, 0.42);
+}
+
+.gc-head-repo-dot {
+  width: 6px;
+  height: 6px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  background: var(--repo);
+}
+
+.gc-head-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: none;
+  border-radius: 7px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.45);
+  cursor: pointer;
+}
+
+.gc-head-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #f2f2f2;
+}
+
+/* ── Subagents: while any are working, a spinner and a count float over the
+   top right of the transcript; clicking it opens a list under it of what each
+   one is doing. The float spans the window so the list can take its width,
+   but only the badge and the list take presses. ── */
+
+.gc-agents {
+  position: absolute;
+  top: calc(var(--head-h) + 10px);
+  right: 12px;
+  left: 12px;
+  z-index: 5;
+  max-height: calc(100% - var(--head-h) - 20px);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 6px;
+  pointer-events: none;
+}
+
+.gc-agents-badge {
+  pointer-events: auto;
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 26px;
+  padding: 0 10px 0 8px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 13px;
+  background: rgba(24, 24, 27, 0.94);
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.4);
+  color: #ececee;
+  font: inherit;
+  font-size: 12px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.gc-agents-badge:hover,
+.gc-agents-badge--open {
+  border-color: rgba(255, 255, 255, 0.26);
+  background: #232327;
+}
+
+/* One of them is waiting on you. */
+.gc-agents-badge--waiting {
+  border-color: rgba(217, 180, 74, 0.6);
+}
+
+.gc-agents-spinner {
+  flex-shrink: 0;
+  box-sizing: border-box;
+  width: 13px;
+  height: 13px;
+  border: 2px solid color-mix(in srgb, var(--app-claude-orange) 25%, transparent);
+  border-top-color: var(--app-claude-orange);
+  border-radius: 50%;
+  animation: gc-agents-spin 0.9s linear infinite;
+}
+
+@keyframes gc-agents-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* All that's left is waiting on you. */
+.gc-agents-dot {
+  flex-shrink: 0;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9b44a;
+}
+
+/* None left at work (the list is still open). */
+.gc-agents-done {
+  flex-shrink: 0;
+  color: #89d185;
+}
+
+.gc-agents-panel {
+  pointer-events: auto;
+  flex: 0 1 auto;
+  min-height: 0;
+  width: min(380px, 100%);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 12px;
+  background: #1c1c1f;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  color: #e8e8ea;
+  font-size: 12px;
+}
+
+.gc-agents-head {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 9px 12px 8px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  color: rgba(255, 255, 255, 0.55);
+  font-size: 11px;
+}
+
+.gc-agents-title {
+  font-weight: 600;
+  color: #e8e8ea;
+}
+
+.gc-agents-count {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.gc-agents-list {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 4px;
+}
+
+.gc-agent {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 8px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+}
+
+.gc-agent--chat {
+  cursor: pointer;
+}
+
+.gc-agent--chat:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Stopped ones stay listed for a while, quietly. */
+.gc-agent--done {
+  opacity: 0.55;
+}
+
+.gc-agent-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.gc-agent-top {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  min-height: 18px;
+}
+
+.gc-agent-type {
+  flex-shrink: 0;
+  max-width: 40%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px 6px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.6);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.gc-agent-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gc-agent-time {
+  flex-shrink: 0;
+  font-size: 10.5px;
+  font-variant-numeric: tabular-nums;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.gc-agent-flag {
+  flex-shrink: 0;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(217, 180, 74, 0.18);
+  color: #d9b44a;
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.gc-agent-open {
+  flex-shrink: 0;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.gc-agent--chat:hover .gc-agent-open {
+  color: #f2f2f2;
+}
+
+.gc-agent-meta {
+  font-size: 10.5px;
+  color: rgba(255, 255, 255, 0.45);
+}
+
+.gc-agent-summary {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: 11px;
+  line-height: 1.4;
+  color: rgba(255, 255, 255, 0.62);
+}
+
+.gc-agent-stop {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+}
+
+.gc-agent-stop:hover {
+  border-color: #f85149;
+  color: #f85149;
+}
+
+/* ── Transcript + dock ── */
+
+.gc-card-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+/* The full chat view reserves a big top gap for its floating header; a grid
+   window has its own title bar instead. */
+.gc-card-body .message-list-content {
+  padding: 14px 16px;
+  gap: 14px;
+}
+
+.gc-card-dock {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gc-card-dock > .permission {
+  padding: 10px 12px;
+}
+
+.gc-card-composer {
+  padding: 0;
+}
+
+.gc-card-composer-slot--hidden {
+  display: none;
+}
+
+/* Seam-free composer on the window's own background (so an inner corner
+   beside it matches): one top rule separates it from the transcript. */
+.gc-card-dock .composer,
+.gc-card-dock .message-queue {
+  margin: 0;
+  border: 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 0;
+  background: transparent;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+.gc-card-dock .composer::after,
+.gc-card-dock .message-queue::after {
+  display: none;
+}
+
+.gc-card-dock .composer:focus-within {
+  border-top-color: rgba(255, 255, 255, 0.16);
+}
+
+.gc-card-dock .message-queue + .gc-card-composer-slot > .composer {
+  border-top: 0;
+}
+
+/* "Message" pill, revealed on hover. */
+.gc-card-bubble {
+  position: absolute;
+  left: 50%;
+  bottom: 16px;
+  z-index: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 34px;
+  padding: 0 16px;
+  border: 1px solid rgba(0, 0, 0, 0.5);
+  border-radius: 999px;
+  background: #f0f0f0;
+  color: #111;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 600;
+  cursor: pointer;
+  opacity: 0;
+  transform: translate(-50%, 6px);
+  pointer-events: none;
+  transition: opacity 0.14s ease, transform 0.14s ease;
+}
+
+.gc-canvas--live .gc-card:hover .gc-card-bubble {
+  opacity: 1;
+  transform: translate(-50%, 0);
+  pointer-events: auto;
+}
+
+.gc-card-bubble:hover {
+  background: #fff;
+}
+
+/* Zoomed out, the board owns every pointer: a window is focused by clicking
+   it, moved by dragging it once selected, and its contents can't be clicked
+   into. */
+.gc-canvas:not(.gc-canvas--live) .gc-card-body,
+.gc-canvas:not(.gc-canvas--live) .gc-card-dock,
+.gc-canvas:not(.gc-canvas--live) .gc-head-btn,
+.gc-canvas:not(.gc-canvas--live) .gc-agents-badge,
+.gc-canvas:not(.gc-canvas--live) .warm-pill {
+  pointer-events: none;
+}
+
+.gc-canvas:not(.gc-canvas--live) .gc-agents-panel {
+  visibility: hidden;
+}
+
+/* ── Far out: a coloured tile with the title, instead of an unreadable
+   transcript. The tile is the label, filled with the repo's colour: it fades
+   in over the window as the board zooms out, and the window's parts are
+   hidden only once it covers them, so they aren't painted far out. The label
+   isn't laid out at all until it's needed. ── */
+
+.gc-canvas--far .gc-head,
+.gc-canvas--far .gc-card-body,
+.gc-canvas--far .gc-card-dock,
+.gc-canvas--far .gc-card-bubble,
+.gc-canvas--far .gc-agents {
+  visibility: hidden;
+}
+
+/* Its --z is the zoom at every step (--zl), not the one at rest: it shows
+   mid-zoom, and its title keeps its size on screen through the fade. */
+.gc-label {
+  --far: inherit;
+  --zl: inherit;
+  --z: var(--zl);
+  position: absolute;
+  inset: 0;
+  z-index: 3;
+  display: none;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: calc(6px / var(--z));
+  padding: 9%;
+  background: var(--repo-bg);
+  opacity: var(--far);
+  text-align: center;
+  pointer-events: none;
+}
+
+.gc-canvas:is(.gc-canvas--fading, .gc-canvas--far) .gc-label {
+  display: flex;
+}
+
+/* Mid-fade it's a layer of its own, so its opacity changes on the compositor
+   rather than repainting the transcript under it at every step. */
+.gc-canvas--fading .gc-label {
+  will-change: opacity;
+}
+
+.gc-label > * {
+  --z: inherit;
+}
+
+.gc-label-repo {
+  display: inline-flex;
+  align-items: center;
+  gap: calc(6px / var(--z));
+  max-width: 100%;
+  font-size: min(calc(10.5px / var(--z)), calc(var(--cell-w) * 0.045));
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, 0.5);
+}
+
+/* Needs you: a solid badge in the status colour, saying why, over the repo. */
+.gc-label-flag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35em;
+  max-width: 100%;
+  padding: 0.3em 0.85em 0.3em 0.5em;
+  border-radius: 999px;
+  background: var(--gc-status);
+  color: #141416;
+  font-size: min(calc(11px / var(--z)), calc(var(--cell-w) * 0.05));
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.gc-label-flag .chat-status-icon {
+  width: 1.3em;
+  height: 1.3em;
+  color: inherit;
+}
+
+.gc-label-flag svg {
+  width: 1.1em;
+  height: 1.1em;
+}
+
+.gc-label-title {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+  font-size: min(calc(17px / var(--z)), calc(var(--cell-w) * 0.085));
+  font-weight: 600;
+  line-height: 1.2;
+  color: #fff;
+}
+
+/* Subagents at work, under the rest. */
+.gc-label-agents {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.4em;
+  max-width: 100%;
+  margin-top: calc(4px / var(--z));
+  padding: 0.3em 0.85em 0.3em 0.6em;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--app-claude-orange) 18%, transparent);
+  color: var(--app-claude-orange);
+  font-size: min(calc(11px / var(--z)), calc(var(--cell-w) * 0.05));
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.gc-label-agents svg {
+  flex-shrink: 0;
+  width: 1.2em;
+  height: 1.2em;
+}
+
+/* ── Resize: any window's edge resizes the whole grid ── */
+
+.gc-resize {
+  --z: inherit;
+  position: absolute;
+  z-index: 7;
+}
+
+.gc-resize--e {
+  top: var(--head-h);
+  right: 0;
+  bottom: calc(20px / var(--z));
+  width: calc(7px / var(--z));
+  cursor: ew-resize;
+}
+
+.gc-resize--s {
+  left: 0;
+  right: calc(20px / var(--z));
+  bottom: 0;
+  height: calc(7px / var(--z));
+  cursor: ns-resize;
+}
+
+.gc-resize--se {
+  right: 0;
+  bottom: 0;
+  width: calc(20px / var(--z));
+  height: calc(20px / var(--z));
+  cursor: nwse-resize;
+}
+
+.gc-canvas--resizing,
+.gc-canvas--resizing * {
+  user-select: none;
+}
+
+/* ── Toolbar ── */
+
+.gc-toolbar {
+  position: absolute;
+  top: 14px;
+  left: 14px;
+  z-index: 30;
+  display: flex;
+  gap: 6px;
+}
+
+.gc-tool-btn,
+.master-fab {
+  border: 1px solid #2a2a2f;
+  background: #19191c;
+}
+
+.gc-tool-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 32px;
+  padding: 0 12px;
+  border-radius: 10px;
+  color: #e8e8e8;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.gc-tool-btn--icon {
+  width: 32px;
+  padding: 0;
+  justify-content: center;
+}
+
+.gc-tool-btn:hover:not(:disabled) {
+  background: #232327;
+}
+
+.gc-tool-btn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* ── Queue: every chat waiting on the user, as a rolling reel (the
+   Decisions app's list) ── */
+
+.gc-queue {
+  --q-s1: #19191c;
+  --q-s2: #1f1f23;
+  --q-s3: #27272c;
+  --q-text: #e6e6e9;
+  --q-muted: #8d8d96;
+  --q-faint: #5c5c64;
+  --q-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
+  position: relative;
+  flex: 0 0 300px;
+  overflow: hidden;
+  border-left: 1px solid #1c1c20;
+  background: #0e0e10;
+  -webkit-mask-image: linear-gradient(#000, #000 calc(100% - 90px), transparent);
+  mask-image: linear-gradient(#000, #000 calc(100% - 90px), transparent);
+}
+
+.gc-queue--scrolled {
+  -webkit-mask-image: linear-gradient(transparent, #000 90px, #000 calc(100% - 90px), transparent);
+  mask-image: linear-gradient(transparent, #000 90px, #000 calc(100% - 90px), transparent);
+}
+
+.gc-reel {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 12px;
+  padding: 0 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: transform 380ms var(--q-ease);
+}
+
+.gc-qcard {
+  --src: hsl(var(--repo-hue) calc(48% + var(--repo-tone) * 15%) calc(62% - var(--repo-tone) * 8%));
+  position: relative;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  border-radius: 12px;
+  background: linear-gradient(100deg, color-mix(in srgb, var(--src) 22%, var(--q-s1)), var(--q-s1) 70%);
+  color: var(--q-text);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transform-origin: center;
+  transition:
+    transform 380ms var(--q-ease),
+    opacity 380ms var(--q-ease),
+    background 150ms;
+}
+
+.gc-qcard:hover {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--src) 26%, var(--q-s2)), var(--q-s2) 70%);
+}
+
+.gc-qcard--cursor {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--src) 30%, var(--q-s2)), var(--q-s2) 75%);
+}
+
+.gc-qcard--open {
+  background: linear-gradient(100deg, color-mix(in srgb, var(--src) 38%, var(--q-s3)), var(--q-s2) 85%);
+}
+
+.gc-qcard:focus-visible {
+  outline: 2px solid rgba(255, 255, 255, 0.5);
+  outline-offset: 2px;
+}
+
+.gc-qcard-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.gc-qcard-title {
+  overflow-wrap: anywhere;
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.35;
+}
+
+.gc-qcard-summary {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  margin-top: 3px;
+  overflow-wrap: anywhere;
+  font-size: 12.5px;
+  line-height: 1.4;
+  color: var(--q-muted);
+}
+
+.gc-qcard-repo {
+  color: color-mix(in srgb, var(--src) 55%, var(--q-text));
+}
+
+.gc-qstatus {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  margin-top: 1px;
+}
+
+.gc-qstatus-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #d9b44a;
+}
+
+.gc-qstatus--agent_done {
+  color: #89d185;
+}
+
+.gc-qstatus--error {
+  color: #e2776f;
+}
+
+.gc-queue-empty {
+  position: absolute;
+  top: 45%;
+  width: 100%;
+  text-align: center;
+  font-size: 13px;
+  color: var(--q-faint);
+}
+
+/* ============================================================ */
+/* Master agent — floating button + popover                      */
+/* ============================================================ */
+
+.master-fab {
+  position: absolute;
+  left: 18px;
+  bottom: 18px;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 46px;
+  height: 46px;
+  border-radius: 50%;
+  color: #e6c46e;
+  cursor: pointer;
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+
+.master-fab:hover {
+  transform: scale(1.05);
+  background: #232327;
+}
+
+.master-fab--open {
+  background: #2a2a2f;
+}
+
+.master-fab-badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #ff5f57;
+  box-shadow: 0 0 0 2px #19191c;
+}
+
+/* A small panel just above the button, growing out of it. Nothing behind it is
+   dimmed: the board stays in view, and a press anywhere else shuts it. */
+.master-popover {
+  position: absolute;
+  left: 18px;
+  bottom: 74px;
+  z-index: 50;
+  width: min(420px, calc(100% - 36px));
+  height: min(560px, calc(100% - 92px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid #2a2a2f;
+  border-radius: 14px;
+  background: #141416;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.5);
+  /* The button's centre: 23px in, 33px below the panel. */
+  transform-origin: 23px calc(100% + 33px);
+  transform: scale(0.94);
+  opacity: 0;
+  visibility: hidden;
+  transition:
+    opacity 0.14s ease,
+    transform 0.14s ease,
+    visibility 0s linear 0.14s;
+}
+
+.master-popover--open {
+  transform: none;
+  opacity: 1;
+  visibility: visible;
+  transition:
+    opacity 0.14s ease,
+    transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+
+.master-head {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 46px;
+  padding: 0 10px 0 16px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.master-head-icon {
+  flex-shrink: 0;
+  color: #e6c46e;
+}
+
+.master-head-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: #f0f0f0;
+}
+
+.master-head-status {
+  display: inline-flex;
+  align-items: center;
+}
+
+.master-head-note {
+  margin-left: auto;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+.master-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  margin-left: 4px;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: rgba(255, 255, 255, 0.5);
+  cursor: pointer;
+}
+
+.master-head > .master-close-btn:only-of-type {
+  margin-left: auto;
+}
+
+.master-close-btn:hover {
+  background: rgba(255, 255, 255, 0.07);
+  color: #f2f2f2;
+}
+
+/* Flex column, not a scroller: MessageList owns bottom pinning and must be the
+   only scroll container, exactly as in the full chat view and grid windows. */
+.master-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.master-body .message-list-content {
+  padding: 14px 16px;
+  gap: 14px;
+}
+
+.master-dock {
+  flex-shrink: 0;
+  padding: 0 10px 10px;
+}
+
+.master-empty {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.45);
+  text-align: center;
+}

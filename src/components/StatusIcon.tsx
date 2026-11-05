@@ -18,7 +18,6 @@ export function StatusIcon({ status }: Props) {
       return (
         <span className="chat-status-icon running" title="Running">
           <svg
-            className="spin"
             width="14"
             height="14"
             viewBox="0 0 16 16"

@@ -1,5 +1,6 @@
-import { useCallback, useEffect, useState } from "react";
-import { PanelLeftClose, PanelLeftOpen, Crown } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { Crown, X } from "lucide-react";
 import { api } from "../lib/api.js";
 import type { MasterInfo } from "../lib/api.js";
 import { useAgent } from "../hooks/useAgent.js";
@@ -14,42 +15,29 @@ import { WarmPill } from "./WarmPill.js";
 import type { GridChatSettings } from "./GridPanel.js";
 import type { Model, PermissionMode } from "../types.js";
 
-const COLLAPSED_KEY = "buildover.masterCollapsed";
 // Mirrors App / GridPanel: these tools are user checkpoints and always prompt.
 const ALWAYS_PROMPT_TOOLS = new Set(["ExitPlanMode", "RequestUserAttention", "AskUserQuestion"]);
+/** Re-ask where the Master lives this often: the server starts it afresh
+ *  after two idle hours, and the button should follow without a reload. */
+const MASTER_RECHECK_MS = 10 * 60_000;
 
 interface Props {
   settings: GridChatSettings;
 }
 
 /**
- * The Master agent: a permanent cross-repo chat pinned down the left of the
- * Grid page. It's an ordinary buildover chat (same transcript, prompts, queue
- * and Composer) living in its own home directory, with a cross-repo toolset
- * that lets it see, message and keep-warm every other chat.
+ * The Master agent: a permanent cross-repo chat behind a floating button at
+ * the bottom left of the Grid page, opening into a small popover above it. It's
+ * an ordinary buildover chat (same transcript, prompts, queue and Composer)
+ * living in its own home directory, with a cross-repo toolset that lets it
+ * see, message and keep-warm every other chat. The chat stays mounted while
+ * the popover is shut, so the button's badge can show when it wants you.
  */
-export function MasterPanel({ settings }: Props) {
+export function MasterButton({ settings }: Props) {
   const [info, setInfo] = useState<MasterInfo | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [collapsed, setCollapsed] = useState(() => {
-    try {
-      return localStorage.getItem(COLLAPSED_KEY) === "1";
-    } catch {
-      return false;
-    }
-  });
-
-  const toggleCollapsed = useCallback(() => {
-    setCollapsed((prev) => {
-      const next = !prev;
-      try {
-        localStorage.setItem(COLLAPSED_KEY, next ? "1" : "0");
-      } catch {
-        /* ignore */
-      }
-      return next;
-    });
-  }, []);
+  const [open, setOpen] = useState(false);
+  const [wantsYou, setWantsYou] = useState(false);
 
   // Provisioned server-side on first request; retry quietly on a cold start.
   useEffect(() => {
@@ -68,77 +56,141 @@ export function MasterPanel({ settings }: Props) {
         });
     };
     load();
+    const recheck = setInterval(load, MASTER_RECHECK_MS);
     return () => {
       cancelled = true;
       if (timer) clearTimeout(timer);
+      clearInterval(recheck);
     };
   }, []);
 
-  // A handoff moves the Master role to a fresh chat server-side; re-read where
-  // it now lives so this panel follows it.
+  // A handoff (or two idle hours) moves the Master role to a fresh chat
+  // server-side; re-read where it now lives so this follows it.
   const reload = useCallback(async () => {
-    setInfo(await api.getMaster());
+    const next = await api.getMaster();
+    setInfo((prev) =>
+      prev && prev.chatId === next.chatId && prev.model === next.model ? prev : next,
+    );
   }, []);
 
-  if (collapsed) {
-    return (
-      <div className="master-panel master-panel--collapsed">
-        <button
-          type="button"
-          className="master-collapse-btn"
-          title="Show the Master agent"
-          onClick={toggleCollapsed}
-        >
-          <PanelLeftOpen size={15} />
-        </button>
-        <span className="master-collapsed-label">Master</span>
-      </div>
-    );
-  }
+  const openPopover = useCallback(() => {
+    setOpen(true);
+    void reload().catch(() => undefined);
+  }, [reload]);
+
+  // A press anywhere else shuts the popover. "Inside" is judged on the React
+  // tree, so its portals (the MCP panel, an image, a context menu) count: the
+  // document resets the mark as the press starts, the popover or button sets
+  // it as the press reaches them, and the verdict waits for the event to
+  // finish, so a handler that stops the press on its way can't hide it.
+  const pressedInsideRef = useRef(false);
+  const markPressInside = useCallback(() => {
+    pressedInsideRef.current = true;
+  }, []);
+  useEffect(() => {
+    if (!open) return;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const onDown = () => {
+      pressedInsideRef.current = false;
+      clearTimeout(timer);
+      timer = setTimeout(() => {
+        if (!pressedInsideRef.current) setOpen(false);
+      });
+    };
+    document.addEventListener("pointerdown", onDown, true);
+    return () => {
+      document.removeEventListener("pointerdown", onDown, true);
+      clearTimeout(timer);
+    };
+  }, [open]);
 
   return (
-    <div className="master-panel">
-      {info ? (
-        <MasterChat
-          key={info.chatId}
-          info={info}
-          settings={settings}
-          onCollapse={toggleCollapsed}
-          onReload={reload}
-        />
-      ) : (
-        <>
-          <header className="master-head">
-            <Crown size={14} className="master-head-icon" />
-            <span className="master-head-title">Master</span>
-            <button
-              type="button"
-              className="master-collapse-btn"
-              title="Hide the Master agent"
-              onClick={toggleCollapsed}
-            >
-              <PanelLeftClose size={15} />
-            </button>
-          </header>
-          <div className="master-empty">{error ? `Unavailable — ${error}` : "Starting…"}</div>
-        </>
-      )}
-    </div>
+    <>
+      <button
+        type="button"
+        className={`master-fab${open ? " master-fab--open" : ""}`}
+        title="Master agent"
+        aria-label="Open the Master agent"
+        aria-expanded={open}
+        onPointerDownCapture={markPressInside}
+        onClick={() => (open ? setOpen(false) : openPopover())}
+      >
+        <Crown size={18} />
+        {wantsYou && !open && <span className="master-fab-badge" aria-label="Wants you" />}
+      </button>
+
+      <div
+        className={`master-popover${open ? " master-popover--open" : ""}`}
+        role="dialog"
+        aria-label="Master agent"
+        aria-hidden={!open}
+        onPointerDownCapture={markPressInside}
+      >
+        {info ? (
+          <MasterChat
+            key={info.chatId}
+            info={info}
+            settings={settings}
+            open={open}
+            onClose={() => setOpen(false)}
+            onReload={reload}
+            onWantsYou={setWantsYou}
+          />
+        ) : (
+          <>
+            <header className="master-head">
+              <Crown size={14} className="master-head-icon" />
+              <span className="master-head-title">Master</span>
+              <button
+                type="button"
+                className="master-close-btn"
+                title="Close"
+                onClick={() => setOpen(false)}
+              >
+                <X size={15} />
+              </button>
+            </header>
+            <div className="master-empty">{error ? `Unavailable — ${error}` : "Starting…"}</div>
+          </>
+        )}
+      </div>
+    </>
   );
 }
 
 function MasterChat({
   info,
   settings,
-  onCollapse,
+  open,
+  onClose,
   onReload,
+  onWantsYou,
 }: {
   info: MasterInfo;
   settings: GridChatSettings;
-  onCollapse: () => void;
+  open: boolean;
+  onClose: () => void;
   onReload: () => Promise<void>;
+  onWantsYou: (wants: boolean) => void;
 }) {
   const agent = useAgent(info.repoPath, info.chatId);
+  const status = agent.status ?? "idle";
+  const wantsYou =
+    status === "awaiting_input" ||
+    status === "agent_done" ||
+    status === "error" ||
+    agent.pendingAttention != null;
+  useEffect(() => onWantsYou(wantsYou), [wantsYou, onWantsYou]);
+
+  // Opening the popover puts the caret straight in the message box.
+  const composerRef = useRef<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => {
+      composerRef.current?.querySelector<HTMLTextAreaElement>("textarea.composer-input")?.focus();
+    }, 60);
+    return () => clearTimeout(t);
+  }, [open]);
   const [mcpOpen, setMcpOpen] = useState(false);
   const [handoffBusy, setHandoffBusy] = useState(false);
   const [handoffError, setHandoffError] = useState<string | null>(null);
@@ -218,16 +270,12 @@ function MasterChat({
         <Crown size={14} className="master-head-icon" />
         <span className="master-head-title">Master</span>
         <span className="master-head-status">
-          <StatusIcon status={agent.status ?? "idle"} />
+          <StatusIcon status={status} />
         </span>
+        <span className="master-head-note">Starts fresh after 2 quiet hours</span>
         <WarmPill lastApiAtMs={lastApiAtMs} locked managedHours={info.keepWarmHours} />
-        <button
-          type="button"
-          className="master-collapse-btn"
-          title="Hide the Master agent"
-          onClick={onCollapse}
-        >
-          <PanelLeftClose size={15} />
+        <button type="button" className="master-close-btn" title="Close" onClick={onClose}>
+          <X size={15} />
         </button>
       </header>
 
@@ -269,7 +317,7 @@ function MasterChat({
         {agent.pendingPermission && !agent.pendingAttention && (
           <PermissionPrompt pending={agent.pendingPermission} onRespond={agent.respondPermission} />
         )}
-        <div className="composer-dock">
+        <div className="composer-dock" ref={composerRef}>
           <MessageQueue
             queue={agent.messageQueue}
             usageQueuedTurns={agent.queuedTurns}
@@ -309,18 +357,22 @@ function MasterChat({
             chatCost={agent.meta.cost}
             chatStartedAt={chatStartedAt}
             prefill={agent.turns.length === 0 ? agent.meta.handoffPrefill : null}
+            // The narrow bar the grid windows use: the popover is about as small.
+            simplified
           />
         </div>
       </div>
 
-      {mcpOpen && (
-        <McpPanel
-          tools={agent.tools}
-          mcpServers={agent.mcpServers}
-          cwd={agent.cwd}
-          onClose={() => setMcpOpen(false)}
-        />
-      )}
+      {mcpOpen &&
+        createPortal(
+          <McpPanel
+            tools={agent.tools}
+            mcpServers={agent.mcpServers}
+            cwd={agent.cwd}
+            onClose={() => setMcpOpen(false)}
+          />,
+          document.body,
+        )}
     </>
   );
 }
