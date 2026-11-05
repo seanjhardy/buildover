@@ -1,4 +1,4 @@
-import type { ContentBlock } from "../types.js";
+import type { ChatEvent, ContentBlock } from "../types.js";
 
 // A chat's front page: the plain-language card its agent writes for Sean with
 // the page tools (server/pageTools.ts). Nothing is stored separately; like the
@@ -176,4 +176,14 @@ export function pageEntries(
     }
   }
   return out;
+}
+
+/** The page as the server sees it, from a chat's persisted events. */
+export function pageFromEvents(events: ChatEvent[]): FrontPage {
+  const items: Array<{ user: true } | { blocks: ContentBlock[] }> = [];
+  for (const e of events) {
+    if (e.type === "user_message" && (e.origin ?? "user") === "user") items.push({ user: true });
+    else if (e.type === "assistant" || e.type === "user_tool_results") items.push({ blocks: e.content });
+  }
+  return foldPage(pageEntries(items));
 }

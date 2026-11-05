@@ -12,6 +12,7 @@ import {
   type RequestCompact,
   type RequestHandoff,
 } from "./customTools.js";
+import { approvalHooks, type ApprovalAnswer, type ApprovalRequest } from "./approvalPolicy.js";
 import { readInstalledServers, toSdkMcpConfig } from "./mcp-config.js";
 import { updateToolsCache } from "./mcp-tools-cache.js";
 import { readPrefs } from "./prefs.js";
@@ -128,6 +129,10 @@ export interface RunArgs {
   // runs under a non-primary Claude account (see claudeAccounts.ts). Omitted
   // for the primary account, which keeps its existing environment untouched.
   claudeConfigDir?: string;
+  // Holds significant actions (see approvalPolicy.ts) for the user's OK via
+  // the attention prompt. A PreToolUse hook, so it applies in bypass mode too.
+  // The groups set is owned by the session so one approval covers the job.
+  approvalGate?: { approvedGroups: Set<string> };
 }
 
 // Clamps the preferred effort to the highest level the model supports at or
@@ -508,6 +513,14 @@ export class ClaudeLiveQuery {
         },
         // Register custom tools (e.g. RequestUserAttention) so the SDK
         // knows about them and routes them through canUseTool → requestPermission.
+        ...(args.approvalGate
+          ? {
+              hooks: approvalHooks({
+                approvedGroups: args.approvalGate.approvedGroups,
+                ask: (req) => this.askApproval(req),
+              }),
+            }
+          : {}),
         mcpServers: {
           "buildover-custom-tools": customToolsServer,
           // Coordination tools for coordinator/subagent chats.
@@ -1372,6 +1385,19 @@ export class ClaudeLiveQuery {
       }
     }
     if (changed) this.publishTasks();
+  }
+
+  // An approval rides on the attention prompt: Continue allows the call,
+  // feedback refuses it with the user's reason, Stop refuses and ends the turn.
+  private async askApproval(req: ApprovalRequest): Promise<ApprovalAnswer> {
+    const ack = await this.args.requestAttentionAck({
+      attentionId: `approve-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      message: `Approve? ${req.why}.`,
+      summary: req.plain,
+    });
+    if (ack.interrupt) return { allow: false, interrupt: true };
+    if (ack.feedback?.trim()) return { allow: false, reason: ack.feedback };
+    return { allow: true };
   }
 
   // Latest TodoWrite list across every turn (same logic as the useTodos hook).

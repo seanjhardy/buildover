@@ -12,6 +12,9 @@ import {
 import { makeCoordinationMcp } from "./coordinationTools.js";
 import { MASTER_KEEP_WARM_HOURS, setMasterChatId } from "./master.js";
 import { makeMasterMcp } from "./masterTools.js";
+import { createPageToolsServer } from "./pageTools.js";
+import { markGridChatDone, readGrid } from "./grid.js";
+import { PAGE_SERVER, pageFromEvents, type PageWait } from "../src/lib/frontPage.js";
 import { coordinatorPrompt, masterPrompt, subagentPrompt } from "./prompts.js";
 import {
   createChat,
@@ -412,6 +415,9 @@ class AgentSession {
   private subscribers = new Set<Subscriber>();
   private pendingPermissions = new Map<string, PendingPermission>();
   private pendingAttentions = new Map<string, PendingAttention>();
+  // Approval groups (e.g. "database") the user has already OK'd in this chat;
+  // one approval covers the rest of the job.
+  private approvedGroups = new Set<string>();
   private abort?: AbortController;
   private running = false;
   // True while runTurn awaits its pre-start checks (chat kind, usage limits),
@@ -657,6 +663,35 @@ class AgentSession {
       attachments,
     };
     this.broadcast({ ...echo, origin, originLabel } as AgentEvent);
+  }
+
+  // A timed `wait` from the page tools becomes a durable wakeup, the same
+  // queue ScheduleWakeup uses, so it survives the CLI exiting and restarts.
+  // Event waits are left to the pipeline checks.
+  private async parkUntil(wait: PageWait): Promise<void> {
+    if (!wait.until) return;
+    try {
+      const queued = await enqueueChatTurn(this.repoPath, this.chatId, {
+        id: makeWakeupTurnId(),
+        text: `It's time to come back to this. You parked it: ${wait.note}`,
+        model: this.lastModel,
+        permissionMode: this.currentPermissionMode,
+        kind: "scheduled_wakeup",
+        origin: "system",
+        originLabel: "Waited until now",
+        createdAt: new Date().toISOString(),
+        runAfter: wait.until,
+        reason: wait.note,
+      });
+      if (queued && !queued.queuePaused) {
+        scheduleQueuedTurnDrain(this.repoPath, this.chatId, queued.queuedTurns?.[0]?.runAfter ?? wait.until);
+      }
+    } catch (err) {
+      console.warn(
+        `[page] failed to park ${this.chatId}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
   }
 
   private async record(
@@ -1810,8 +1845,12 @@ class AgentSession {
           : chatKind === "master"
             ? masterPrompt({ keepWarmHours: MASTER_KEEP_WARM_HOURS })
             : undefined;
+    const withFrontPage =
+      !!record.pipeline ||
+      (await readGrid().catch(() => null))?.entries.some((e) => e.chatId === this.chatId) === true;
     const coordination = {
       ...(systemPromptAppend ? { systemPromptAppend } : {}),
+      ...(record.pipeline ? { approvalGate: { approvedGroups: this.approvedGroups } } : {}),
       extraMcpServers: {
         "buildover-agents": makeCoordinationMcp({
           repoPath: this.repoPath,
@@ -1820,6 +1859,17 @@ class AgentSession {
           parentChatId: record.parentChatId,
           task: record.task,
         }),
+        // Front-page tools for windows on the grid and pipeline chats.
+        ...(withFrontPage
+          ? {
+              [PAGE_SERVER]: createPageToolsServer({
+                getPage: async () =>
+                  pageFromEvents((await readChat(this.repoPath, this.chatId))?.events ?? []),
+                onWait: (wait) => void this.parkUntil(wait),
+                onDone: () => void markGridChatDone(this.chatId, this.repoPath).catch(() => false),
+              }),
+            }
+          : {}),
         // The Master's cross-repo toolset (see masterTools.ts). Only this one
         // chat gets it — every other chat is scoped to its own repo.
         ...(chatKind === "master"

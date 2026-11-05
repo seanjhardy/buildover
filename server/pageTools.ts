@@ -17,7 +17,7 @@ export const NOTES_FILE = join(PIPELINES_DIR, "NOTES.md");
 
 export interface PageToolHooks {
   /** The page as folded from the history so far (for patch_panel and re-showing panels). */
-  getPage: () => FrontPage;
+  getPage: () => Promise<FrontPage>;
   /** The agent parked the item. Saved at once so a message that wakes the chat can't drop it. */
   onWait?: (wait: PageWait) => void;
   /** The agent closed the item. */
@@ -60,7 +60,7 @@ export function createPageToolsServer(hooks: PageToolHooks) {
       content: z.string().optional(),
     },
     async ({ key, content }) => {
-      const prev = hooks.getPage().panels.find((p) => p.key === key);
+      const prev = (await hooks.getPage()).panels.find((p) => p.key === key);
       if (content === undefined) {
         return prev ? ok(`Showing '${key}' v${prev.version}`) : fail(`No panel '${key}' yet; pass content.`);
       }
@@ -73,7 +73,7 @@ export function createPageToolsServer(hooks: PageToolHooks) {
     "Amend a panel without resending it: replace one exact snippet of its latest content.",
     { key: z.string(), find: z.string(), replace: z.string() },
     async ({ key, find }) => {
-      const prev = hooks.getPage().panels.find((p) => p.key === key);
+      const prev = (await hooks.getPage()).panels.find((p) => p.key === key);
       if (!prev) return fail(`No panel '${key}'; nothing changed.`);
       if (!prev.content.includes(find)) return fail("Snippet not found; nothing changed.");
       return ok(`Panel '${key}' v${prev.version + 1}`);

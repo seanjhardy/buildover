@@ -14,9 +14,9 @@
  * the pair is a clean round trip.
  */
 
-import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { appendFile, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   createChat,
   listChats,
@@ -24,6 +24,8 @@ import {
   setUserFinished,
 } from "./chats.js";
 import { getRepoMeta, listRecents } from "./repos.js";
+import { NOTES_FILE } from "./pageTools.js";
+import { nextSweep } from "./sweeps.js";
 import { DEFAULT_MODEL } from "../src/types.js";
 import type { ChatStatus, ChatSummary, Model, PermissionMode } from "../src/types.js";
 
@@ -38,6 +40,8 @@ export interface GridEntry {
   /** Ascending sort key; drag-to-reorder rewrites these. */
   order: number;
   addedAt: string;
+  /** "Not now": off the canvas until this time (the next sweep). */
+  snoozedUntil?: string;
 }
 
 export interface GridRegistry {
@@ -232,6 +236,33 @@ export async function markGridChatDone(
   return removed;
 }
 
+/**
+ * Close a window from its front page. "not_now" takes it off the canvas until
+ * the next sweep; "not_relevant" finishes it and leaves a note for the ranking.
+ */
+export async function closeGridChat(
+  chatId: string,
+  repoPath: string,
+  how: "not_now" | "not_relevant",
+): Promise<void> {
+  if (how === "not_relevant") {
+    const record = await readChat(repoPath, chatId).catch(() => null);
+    await markGridChatDone(chatId, repoPath);
+    if (record?.title) {
+      await mkdir(dirname(NOTES_FILE), { recursive: true }).catch(() => null);
+      await appendFile(NOTES_FILE, `- The user marked "${record.title}" as not relevant.\n`).catch(() => null);
+    }
+    return;
+  }
+  await withLock(async () => {
+    const registry = await readGrid();
+    const entry = registry.entries.find((e) => e.chatId === chatId);
+    if (!entry) return;
+    entry.snoozedUntil = nextSweep(new Date()).toISOString();
+    await writeGrid(registry);
+  });
+}
+
 // ── Read (enriched) ──────────────────────────────────────────────────────────
 
 /**
@@ -252,6 +283,7 @@ export async function listGridChats(): Promise<GridChatEntry[]> {
 
   const result: GridChatEntry[] = [];
   const stale: string[] = [];
+  const now = Date.now();
 
   for (const [repoPath, entries] of byRepo) {
     const meta = await getRepoMeta(repoPath).catch(() => null);
@@ -268,6 +300,8 @@ export async function listGridChats(): Promise<GridChatEntry[]> {
         stale.push(e.chatId);
         continue;
       }
+      // Snoozed until the next sweep, unless it is asking for the user now.
+      if (e.snoozedUntil && Date.parse(e.snoozedUntil) > now && chat.status !== "awaiting_input") continue;
       const subagents = children.get(e.chatId);
       result.push({ ...e, repoName: meta.name, chat, ...(subagents && { subagents }) });
     }

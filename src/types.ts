@@ -486,6 +486,11 @@ export interface ChatRecord {
   parentChatId?: string;
   /** For subagent chats: short description of the assigned task. */
   task?: string;
+  /** For chats working an item from an ingestion pipeline: which source and
+   *  item. These chats always write a front page, and significant actions
+   *  (emails, Slack posts, PR sign-off, landing on main, database writes)
+   *  wait for the user's approval even in bypass mode. */
+  pipeline?: { source: string; key: string };
   /** For code-editing subagent chats: the isolated git worktree its SDK
    *  session runs in, so its edits don't touch the live main working tree until
    *  merged back. Absent for research/read-only subagents and normal chats. */

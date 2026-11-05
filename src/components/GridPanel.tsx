@@ -11,12 +11,16 @@ import {
   Maximize,
   LayoutGrid,
   Bot,
+  PanelTop,
 } from "lucide-react";
 import { api } from "../lib/api.js";
 import type { GridChatEntry, RecentChatEntry } from "../lib/api.js";
 import { useAgent, type ChatTurn } from "../hooks/useAgent.js";
 import { useSubagents } from "../hooks/useSubagents.js";
 import { MessageList } from "./MessageList.js";
+import { FrontPage, type CloseKind } from "./FrontPage.js";
+import { useFrontPage } from "../hooks/useFrontPage.js";
+import { hasFrontPage } from "../lib/frontPage.js";
 import { MessageQueue } from "./MessageQueue.js";
 import { AttentionPrompt, PermissionPrompt } from "./PermissionPrompt.js";
 import { StatusIcon } from "./StatusIcon.js";
@@ -457,9 +461,13 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   const gridChatIds = useMemo(() => new Set(entries.map((e) => e.chatId)), [entries]);
 
   const markDone = useCallback(
-    async (entry: GridChatEntry) => {
+    async (entry: GridChatEntry, how: CloseKind = "done") => {
       try {
-        const next = await edit(() => api.removeFromGrid(entry.chatId, entry.repoPath, true));
+        const next = await edit(() =>
+          how === "done"
+            ? api.removeFromGrid(entry.chatId, entry.repoPath, true)
+            : api.closeGridChat(entry.chatId, entry.repoPath, how),
+        );
         setEntries((prev) => reuseEntries(prev, next));
       } catch {
         /* ignore */
@@ -1727,7 +1735,8 @@ interface CardProps {
   /** Opens a chat this one leads to in its own window: the one it was
    *  continued in (a handoff), or a subagent chat it spawned. */
   onContinue: (from: GridChatEntry, chatId: string) => void | Promise<void>;
-  onDone: (entry: GridChatEntry) => void;
+  /** Done, or from the front page also "not now" / "not relevant". */
+  onDone: (entry: GridChatEntry, how?: CloseKind) => void;
   composerOpen: boolean;
   onComposerOpenChange: (chatId: string, open: boolean) => void;
   onBeginResize: (e: React.PointerEvent, chatId: string, axis: "e" | "s" | "se") => void;
@@ -1763,6 +1772,10 @@ const GridCard = memo(function GridCard({
 }: CardProps) {
   const { chat } = entry;
   const agent = useAgent(entry.repoPath, entry.chatId);
+  // The front page the agent wrote, if any; the chat is on the back.
+  const page = useFrontPage(agent.turns);
+  const [flipped, setFlipped] = useState(false);
+  const showFront = hasFrontPage(page) && !flipped;
   // Prefer the live session status over the polled summary, which lags.
   const status = agent.status ?? chat.status;
   const attention = needsAttention(status);
@@ -1975,6 +1988,20 @@ const GridCard = memo(function GridCard({
           </span>
         </div>
         <div className="gc-head-side gc-head-side--end">
+          {hasFrontPage(page) && flipped && (
+            <button
+              type="button"
+              className="gc-head-btn"
+              aria-label="Show the front page"
+              title="Show the front page"
+              onClick={(e) => {
+                e.stopPropagation();
+                setFlipped(false);
+              }}
+            >
+              <PanelTop size={12} />
+            </button>
+          )}
           <WarmPill
             lastApiAtMs={lastApiAtMs}
             keepWarmUntil={keepWarmUntil}
@@ -2004,23 +2031,32 @@ const GridCard = memo(function GridCard({
       />
 
       <div className="gc-card-body">
-        <MessageList
-          turns={agent.turns}
-          isStreaming={agent.isStreaming}
-          historyReady={agent.historyReady}
-          cwd={agent.cwd ?? entry.repoPath}
-          branchInfo={agent.branchInfo}
-          onForkMessage={(userMessageId, newText, attachments) =>
-            agent.forkMessage(userMessageId, newText, attachments, {
-              model,
-              permissionMode,
-            })
-          }
-          onSwitchBranch={agent.switchBranch}
-          onRevert={agent.revertToCheckpoint}
-          chatId={entry.chatId}
-          chatKind={entry.chat.kind}
-        />
+        {showFront ? (
+          <FrontPage
+            page={page}
+            onAnswer={(label) => agent.send(label, { model, permissionMode })}
+            onClose={(how) => onDone(entry, how)}
+            onFlip={() => setFlipped(true)}
+          />
+        ) : (
+          <MessageList
+            turns={agent.turns}
+            isStreaming={agent.isStreaming}
+            historyReady={agent.historyReady}
+            cwd={agent.cwd ?? entry.repoPath}
+            branchInfo={agent.branchInfo}
+            onForkMessage={(userMessageId, newText, attachments) =>
+              agent.forkMessage(userMessageId, newText, attachments, {
+                model,
+                permissionMode,
+              })
+            }
+            onSwitchBranch={agent.switchBranch}
+            onRevert={agent.revertToCheckpoint}
+            chatId={entry.chatId}
+            chatKind={entry.chat.kind}
+          />
+        )}
       </div>
 
       <div className="gc-card-dock" ref={dockRef} onClick={(e) => e.stopPropagation()}>
