@@ -179,6 +179,22 @@ export type ChatStatus =
   | "finished"
   | "error";
 
+/** A priority tier the user (or the Master, on their say-so) put on a chat.
+ *  It overrides the automatic order of the grid's "needs you" list: urgent and
+ *  high rise above everything, medium sits with untiered chats, low sinks
+ *  below them, and waiting sits at the very bottom until its resurface date. */
+export type ChatTier = "urgent" | "high" | "medium" | "low" | "waiting";
+
+export const CHAT_TIERS: readonly ChatTier[] = ["urgent", "high", "medium", "low", "waiting"];
+
+export interface ChatPriority {
+  tier: ChatTier;
+  /** For "waiting": what it's waiting on (an email, a Slack reply, a PR review). */
+  waitingOn?: string;
+  /** For "waiting": ISO time it comes back up the list, flagged. */
+  resurfaceAt?: string;
+}
+
 // What kind of chat this is. "coordinator" is the always-present, undeletable
 // chat pinned at the top of each repo's sidebar that delegates work to
 // subagents. "subagent" chats are spawned by another chat (their parent) via
@@ -347,6 +363,8 @@ export interface ChatSummary {
   lastApiAt?: string;
   /** Mirrors ChatRecord.handoffTo?.chatId. */
   continuedInChatId?: string;
+  /** Mirrors ChatRecord.priority. */
+  priority?: ChatPriority;
 }
 
 // Persisted chat events. These are a superset of the live AgentEvent stream
@@ -514,6 +532,8 @@ export interface ChatRecord {
   /** Set on the fresh chat: where it came from, and the composer text to
    *  prefill (the note is never auto-sent). */
   handoffFrom?: { chatId: string; notePath: string; prefill?: string };
+  /** The user's priority tier for this chat. Absent === untiered. */
+  priority?: ChatPriority;
 }
 
 export interface QueuedChatTurn {

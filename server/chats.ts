@@ -17,14 +17,17 @@ import type {
   ChatEvent,
   ChatHandoffTo,
   ChatKind,
+  ChatPriority,
   ChatRecord,
   ChatStatus,
   ChatSummary,
+  ChatTier,
   Model,
   PermissionMode,
   QueuedChatTurn,
 } from "../src/types.js";
 import {
+  CHAT_TIERS,
   DEFAULT_MODEL,
   KEEP_WARM_BUDGET_HOURS,
 } from "../src/types.js";
@@ -793,6 +796,7 @@ export function toSummary(record: ChatRecord): ChatSummary {
     ...(record.keepWarmUntil ? { keepWarmUntil: record.keepWarmUntil } : {}),
     ...(record.cost?.lastApiAt ? { lastApiAt: record.cost.lastApiAt } : {}),
     ...(record.handoffTo ? { continuedInChatId: record.handoffTo.chatId } : {}),
+    ...(record.priority ? { priority: record.priority } : {}),
   };
 }
 
@@ -806,6 +810,42 @@ export async function setUserFinished(
     if (!record) return null;
     record.userMarkedFinished = finished;
     record.status = computeStatus(record);
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
+/** Checks and tidies a priority from outside: a known tier, and only a
+ *  waiting tier keeps its note and resurface date. Throws on bad input. */
+export function normalisePriority(input: unknown): ChatPriority {
+  const p = (input ?? {}) as Record<string, unknown>;
+  if (typeof p.tier !== "string" || !CHAT_TIERS.includes(p.tier as ChatTier)) {
+    throw new Error(`priority.tier must be one of ${CHAT_TIERS.join(", ")}`);
+  }
+  const out: ChatPriority = { tier: p.tier as ChatTier };
+  if (out.tier !== "waiting") return out;
+  if (typeof p.waitingOn === "string" && p.waitingOn.trim()) {
+    out.waitingOn = p.waitingOn.trim().slice(0, 200);
+  }
+  if (typeof p.resurfaceAt === "string" && p.resurfaceAt) {
+    const at = Date.parse(p.resurfaceAt);
+    if (!Number.isFinite(at)) throw new Error("priority.resurfaceAt must be a date");
+    out.resurfaceAt = new Date(at).toISOString();
+  }
+  return out;
+}
+
+/** Sets the chat's priority tier, or clears it with null. */
+export async function setPriority(
+  repoPath: string,
+  chatId: string,
+  priority: ChatPriority | null,
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return null;
+    if (priority) record.priority = priority;
+    else delete record.priority;
     await writeChat(repoPath, record);
     return record;
   });

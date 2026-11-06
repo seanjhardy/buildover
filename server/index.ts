@@ -30,6 +30,8 @@ import {
   setStarred,
   setTitle,
   setUserFinished,
+  normalisePriority,
+  setPriority,
   ensureCoordinatorChat,
   CoordinatorDeleteError,
   withComputedStatus,
@@ -1060,6 +1062,11 @@ app.patch("/api/chats/:chatId", async (req, res) => {
         (await setKeepWarm(repoPath, req.params.chatId, {
           addHours: req.body.keepWarmAddHours,
         })) ?? record;
+    }
+    // null clears the tier; an object sets it (see normalisePriority).
+    if (req.body?.priority !== undefined) {
+      const priority = req.body.priority === null ? null : normalisePriority(req.body.priority);
+      record = (await setPriority(repoPath, req.params.chatId, priority)) ?? record;
     }
     // Archiving / un-archiving / changing the warmth budget starts or stops its pings.
     if (

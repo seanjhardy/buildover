@@ -2,6 +2,7 @@ import type {
   AppPrefs,
   EffortLevel,
   ChatHandoffTo,
+  ChatPriority,
   ChatRecord,
   ChatStatus,
   ChatSummary,
@@ -365,6 +366,8 @@ export const api = {
       keepWarm?: boolean;
       /** Hours to add to the warmth budget (starts one if there is none). */
       keepWarmAddHours?: number;
+      /** Sets the chat's priority tier; null clears it. */
+      priority?: ChatPriority | null;
     },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
