@@ -30,8 +30,6 @@ import {
   setStarred,
   setTitle,
   setUserFinished,
-  normalisePriority,
-  setPriority,
   ensureCoordinatorChat,
   CoordinatorDeleteError,
   withComputedStatus,
@@ -142,6 +140,7 @@ import {
 } from "./grid.js";
 import { ensureMasterChat } from "./master.js";
 import { pipelinesView, releaseNow, runNow, startPipelines } from "./pipelines.js";
+import { addWait, placeChats, setTier, snooze, startWaitWatcher } from "./priority.js";
 import { attachTerminalWss } from "./terminal.js";
 import { windDownIdleProcesses } from "./agent.js";
 import {
@@ -1063,10 +1062,16 @@ app.patch("/api/chats/:chatId", async (req, res) => {
           addHours: req.body.keepWarmAddHours,
         })) ?? record;
     }
-    // null clears the tier; an object sets it (see normalisePriority).
+    // Priority tiers (see priority.ts): null clears the tier; `wait` puts the
+    // chat in waiting, watching a PR, a Slack or email reply, and/or a date.
     if (req.body?.priority !== undefined) {
-      const priority = req.body.priority === null ? null : normalisePriority(req.body.priority);
-      record = (await setPriority(repoPath, req.params.chatId, priority)) ?? record;
+      record = (await setTier(repoPath, req.params.chatId, req.body.priority)) ?? record;
+    }
+    if (req.body?.wait && typeof req.body.wait === "object") {
+      record = (await addWait(repoPath, req.params.chatId, req.body.wait)) ?? record;
+    }
+    if (req.body?.snoozedUntil !== undefined) {
+      record = (await snooze(repoPath, req.params.chatId, req.body.snoozedUntil || null)) ?? record;
     }
     // Archiving / un-archiving / changing the warmth budget starts or stops its pings.
     if (
@@ -2325,6 +2330,35 @@ app.get("/api/claude-connectors", async (_req, res) => {
 //
 // The master chat is provisioned on first request (and at startup) so the
 // client can simply ask where it lives.
+// Dragging cards about the grid's "needs you" list: each lands in a tier at a rank.
+app.post("/api/priorities/place", async (req, res) => {
+  try {
+    const items = Array.isArray(req.body?.items) ? req.body.items : [];
+    await placeChats(
+      items.filter(
+        (i: { repoPath?: unknown; chatId?: unknown; rank?: unknown }) =>
+          typeof i?.repoPath === "string" && typeof i.chatId === "string" && typeof i.rank === "number",
+      ),
+    );
+    res.json({ ok: true });
+  } catch (err) {
+    res.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// The "needs you" list's box: what the user types goes to the Master.
+app.post("/api/master/message", async (req, res) => {
+  try {
+    const text = typeof req.body?.text === "string" ? req.body.text.trim() : "";
+    if (!text) return res.status(400).json({ error: "Nothing to send" });
+    const master = await ensureMasterChat();
+    await getSession(master.repoPath, master.chatId).deliverMessage({ text });
+    res.json(master);
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.get("/api/master", async (_req, res) => {
   try {
     res.json(await ensureMasterChat());
@@ -3178,6 +3212,7 @@ void (async () => {
     console.log(`[server] websocket at ws://${HOST}:${PORT}/agent`);
     void startScheduler();
     startPipelines();
+    startWaitWatcher();
     startSelfUpdateChecker();
   });
 })();

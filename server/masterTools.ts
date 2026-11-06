@@ -13,13 +13,8 @@ import {
   type McpSdkServerConfigWithInstance,
 } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import {
-  normalisePriority,
-  readChat,
-  setKeepWarm,
-  setPriority,
-  setUserFinished,
-} from "./chats.js";
+import { readChat, setKeepWarm, setUserFinished } from "./chats.js";
+import { makePriorityTools, priorityLabel } from "./priorityTools.js";
 import { formatEventLines } from "./coordinationTools.js";
 import { addToGrid, createGridChat, listGridChats, removeFromGrid } from "./grid.js";
 import {
@@ -30,8 +25,8 @@ import {
 } from "./master.js";
 import { getRepoMeta, listRecents } from "./repos.js";
 import { getSession } from "./sessions.js";
-import { CHAT_TIERS, DEFAULT_MODEL, KEEP_WARM_BUDGET_HOURS } from "../src/types.js";
-import type { ChatPriority, Model } from "../src/types.js";
+import { DEFAULT_MODEL, KEEP_WARM_BUDGET_HOURS } from "../src/types.js";
+import type { Model } from "../src/types.js";
 
 export interface MasterCtx {
   repoPath: string;
@@ -56,14 +51,6 @@ function ago(iso: string): string {
   return `${Math.floor(mins / 1440)}d`;
 }
 
-/** "priority low", "priority waiting on PR review, resurfaces 2026-11-10". */
-function priorityLabel(p: ChatPriority): string {
-  const parts = [`priority ${p.tier}`];
-  if (p.waitingOn) parts.push(`on ${p.waitingOn}`);
-  if (p.resurfaceAt) parts.push(`resurfaces ${p.resurfaceAt.slice(0, 16).replace("T", " ")}Z`);
-  return parts.join(" ");
-}
-
 /** One chat as a compact status line for the Master's context. */
 function formatChatLine(e: AnyChatEntry, onGrid: Set<string>): string {
   const { chat } = e;
@@ -76,7 +63,8 @@ function formatChatLine(e: AnyChatEntry, onGrid: Set<string>): string {
       ? `keep-warm ${keepWarmHoursLeft(chat.keepWarmUntil) ?? 0}h of budget left`
       : null,
     onGrid.has(chat.id) ? "on grid" : null,
-    chat.priority ? priorityLabel(chat.priority) : null,
+    chat.priority ? `priority ${priorityLabel(chat.priority)}` : null,
+    chat.snoozedUntil && Date.parse(chat.snoozedUntil) > Date.now() ? `snoozed until ${chat.snoozedUntil}` : null,
     chat.queuePaused ? "queue paused" : null,
     chat.queuedTurn ? "turn queued" : null,
   ].filter(Boolean);
@@ -313,49 +301,6 @@ export function makeMasterMcp(ctx: MasterCtx): McpSdkServerConfigWithInstance {
     },
   );
 
-  const set_priority = tool(
-    "set_priority",
-    [
-      "Set or clear the user's priority tier on another chat.",
-      "Tiers order the grid's 'needs you' list and colour its cards, and they override its automatic order (questions, then errors, then finished, oldest first):",
-      "urgent and high rise to the top, medium sits with untiered chats, low sinks below them, and waiting sits at the very bottom, muted, until its resurfaceAt passes, when it comes back up flagged.",
-      "Only set a tier when the user asked for one (e.g. 'push those to low'); it is their call, and it sticks until changed. Call once per chat.",
-    ].join(" "),
-    {
-      chatId: z.string(),
-      repoPath: z.string(),
-      tier: z
-        .enum(["none", ...CHAT_TIERS] as [string, ...string[]])
-        .describe("The tier, or 'none' to clear it back to the automatic order."),
-      waitingOn: z
-        .string()
-        .optional()
-        .describe("For 'waiting': what it is waiting on, e.g. 'Dan's reply on Slack', 'PR #42 review'."),
-      resurfaceAt: z
-        .string()
-        .optional()
-        .describe("For 'waiting': ISO date/time it should come back up the list, flagged."),
-    },
-    async (args) => {
-      let priority: ChatPriority | null = null;
-      if (args.tier !== "none") {
-        try {
-          priority = normalisePriority(args);
-        } catch (e) {
-          return err(e instanceof Error ? e.message : String(e));
-        }
-      }
-      const record = await setPriority(args.repoPath, args.chatId, priority).catch(() => null);
-      if (!record) return err(`No chat ${args.chatId} in ${args.repoPath}.`);
-      console.log(`[master] priority ${args.tier} for "${record.title}" (${args.chatId})`);
-      return ok(
-        priority
-          ? `"${record.title}" is now ${priorityLabel(priority)}.`
-          : `Cleared the tier on "${record.title}"; it is back in the automatic order.`,
-      );
-    },
-  );
-
   const set_on_grid = tool(
     "set_on_grid",
     [
@@ -455,7 +400,7 @@ export function makeMasterMcp(ctx: MasterCtx): McpSdkServerConfigWithInstance {
       send_to_chat,
       set_keep_warm,
       set_finished,
-      set_priority,
+      ...makePriorityTools({}),
       set_on_grid,
       list_repos,
       start_chat,

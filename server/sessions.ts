@@ -2144,6 +2144,7 @@ class AgentSession {
         : args.text;
       const claudeTurn: RunArgs = {
         prompt: claudePrompt,
+        chat: { repoPath: this.repoPath, chatId: this.chatId },
         model: args.model,
         sessionId: claudeSessionId,
         // One-shot marker set by fork / branch-switch / revert: resume the

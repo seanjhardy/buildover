@@ -69,6 +69,8 @@ export type RawAgentEvent = DistOmit<
 
 export interface RunArgs {
   prompt: string;
+  /** The chat this turn runs in, for tools that act on it (set_priority…). */
+  chat?: { repoPath: string; chatId: string };
   model: Model;
   sessionId?: string;
   // When set (by fork / branch-switch / revert), resume `sessionId` only up
@@ -393,6 +395,7 @@ export class ClaudeLiveQuery {
       this.cwd,
       () => this.currentTodos(),
       (reason) => this.args.requestHandoff(reason),
+      this.args.chat,
     );
 
     const canUseTool: CanUseTool = async (toolName, input) => {

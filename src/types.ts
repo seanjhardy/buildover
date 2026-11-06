@@ -187,12 +187,37 @@ export type ChatTier = "urgent" | "high" | "medium" | "low" | "waiting";
 
 export const CHAT_TIERS: readonly ChatTier[] = ["urgent", "high", "medium", "low", "waiting"];
 
+/** Something outside buildover a waiting chat is watching for. */
+export type ChatWaitKind = "github" | "slack" | "email";
+
+export interface ChatWait {
+  id: string;
+  kind: ChatWaitKind;
+  /** github: the PR's URL. slack / email: who or what thread, in words the
+   *  connector agent can search for ("Dan's reply in #infra about the deploy"). */
+  target: string;
+  createdAt: string;
+  /** When the watcher last looked (PRs hourly, Slack and email every 3h). */
+  checkedAt?: string;
+  /** github: the PR's state when the wait started (or was last checked), so
+   *  any review, comment or merge after it counts as news. */
+  baseline?: string;
+}
+
 export interface ChatPriority {
   tier: ChatTier;
-  /** For "waiting": what it's waiting on (an email, a Slack reply, a PR review). */
+  /** For "waiting": what it's waiting on, in the user's words. */
   waitingOn?: string;
   /** For "waiting": ISO time it comes back up the list, flagged. */
   resurfaceAt?: string;
+  /** For "waiting": what the watcher is looking out for. */
+  waits?: ChatWait[];
+  /** For "waiting": set when a wait came good or its date passed. The chat is
+   *  back up the list, flagged with why, until its tier is changed. */
+  back?: { at: string; because: string };
+  /** A place the user dragged it to within its tier; lower is higher up.
+   *  Ranked chats sit above unranked ones. */
+  rank?: number;
 }
 
 // What kind of chat this is. "coordinator" is the always-present, undeletable
@@ -365,6 +390,8 @@ export interface ChatSummary {
   continuedInChatId?: string;
   /** Mirrors ChatRecord.priority. */
   priority?: ChatPriority;
+  /** Mirrors ChatRecord.snoozedUntil. */
+  snoozedUntil?: string;
 }
 
 // Persisted chat events. These are a superset of the live AgentEvent stream
@@ -534,6 +561,8 @@ export interface ChatRecord {
   handoffFrom?: { chatId: string; notePath: string; prefill?: string };
   /** The user's priority tier for this chat. Absent === untiered. */
   priority?: ChatPriority;
+  /** ISO time a snoozed chat comes back to the "needs you" list. */
+  snoozedUntil?: string;
 }
 
 export interface QueuedChatTurn {

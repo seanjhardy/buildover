@@ -797,6 +797,7 @@ export function toSummary(record: ChatRecord): ChatSummary {
     ...(record.cost?.lastApiAt ? { lastApiAt: record.cost.lastApiAt } : {}),
     ...(record.handoffTo ? { continuedInChatId: record.handoffTo.chatId } : {}),
     ...(record.priority ? { priority: record.priority } : {}),
+    ...(record.snoozedUntil ? { snoozedUntil: record.snoozedUntil } : {}),
   };
 }
 
@@ -835,17 +836,34 @@ export function normalisePriority(input: unknown): ChatPriority {
   return out;
 }
 
-/** Sets the chat's priority tier, or clears it with null. */
-export async function setPriority(
+/** Rewrites the chat's priority under its lock; return null to clear it. */
+export async function updatePriority(
   repoPath: string,
   chatId: string,
-  priority: ChatPriority | null,
+  change: (old: ChatPriority | undefined) => ChatPriority | null,
 ): Promise<ChatRecord | null> {
   return withChatLock(repoPath, chatId, async () => {
     const record = await readChat(repoPath, chatId);
     if (!record) return null;
-    if (priority) record.priority = priority;
+    const next = change(record.priority);
+    if (next) record.priority = next;
     else delete record.priority;
+    await writeChat(repoPath, record);
+    return record;
+  });
+}
+
+/** Snoozes the chat off the "needs you" list until an ISO time; null wakes it. */
+export async function setSnoozed(
+  repoPath: string,
+  chatId: string,
+  until: string | null,
+): Promise<ChatRecord | null> {
+  return withChatLock(repoPath, chatId, async () => {
+    const record = await readChat(repoPath, chatId);
+    if (!record) return null;
+    if (until) record.snoozedUntil = until;
+    else delete record.snoozedUntil;
     await writeChat(repoPath, record);
     return record;
   });

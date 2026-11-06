@@ -1,3 +1,4 @@
+import { makePriorityTools } from "./priorityTools.js";
 import {
   tool,
   createSdkMcpServer,
@@ -42,6 +43,7 @@ export function createCustomToolsServer(
   repoPath?: string,
   getCurrentTodos?: GetCurrentTodos,
   requestHandoff?: RequestHandoff,
+  chat?: { repoPath: string; chatId: string },
 ) {
   // RequestUserAttention: pauses the agent turn and surfaces a UI prompt.
   // Unlike the old implementation that returned immediately (making it
@@ -821,6 +823,8 @@ export function createCustomToolsServer(
       createScheduleTool,
       listSchedulesTool,
       deleteScheduleTool,
+      // Its own priority on the user's list, from what the user tells it.
+      ...(chat ? makePriorityTools({ self: chat }) : []),
     ],
   });
 }
