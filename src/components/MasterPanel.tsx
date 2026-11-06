@@ -78,6 +78,12 @@ export function MasterButton({ settings }: Props) {
     void reload().catch(() => undefined);
   }, [reload]);
 
+  // The grid's "tell the Master" box opens it to show the reply.
+  useEffect(() => {
+    window.addEventListener("buildover:open-master", openPopover);
+    return () => window.removeEventListener("buildover:open-master", openPopover);
+  }, [openPopover]);
+
   // A press anywhere else shuts the popover. "Inside" is judged on the React
   // tree, so its portals (the MCP panel, an image, a context menu) count: the
   // document resets the mark as the press starts, the popover or button sets

@@ -119,7 +119,8 @@ export async function placeChats(
   for (const it of items) {
     await updatePriority(it.repoPath, it.chatId, (old) => {
       if (!it.tier) return null;
-      const keep = old?.tier === it.tier ? old : { tier: it.tier };
+      // Dropped back into waiting, it waits afresh.
+      const keep = old?.tier === it.tier && !old.back ? old : { tier: it.tier };
       return { ...keep, rank: it.rank };
     });
   }

@@ -4,6 +4,8 @@ import type {
   ChatHandoffTo,
   ChatPriority,
   ChatRecord,
+  ChatTier,
+  ChatWaitKind,
   ChatStatus,
   ChatSummary,
   CreateProjectRequest,
@@ -368,6 +370,10 @@ export const api = {
       keepWarmAddHours?: number;
       /** Sets the chat's priority tier; null clears it. */
       priority?: ChatPriority | null;
+      /** Puts it in waiting, watching a PR / Slack / email reply and/or a date. */
+      wait?: { kind?: ChatWaitKind; target?: string; note?: string; resurfaceAt?: string };
+      /** Snoozes it off the "needs you" list until an ISO time; null wakes it. */
+      snoozedUntil?: string | null;
     },
   ) =>
     send<{ chat: ChatRecord }>("PATCH", `/api/chats/${chatId}`, {
@@ -607,6 +613,11 @@ export const api = {
   // ── Master agent ─────────────────────────────────────────────────────────
   /** Where the master chat lives; creates it on first call. */
   getMaster: () => getJson<MasterInfo>(`/api/master`),
+  /** Sends a message to the Master chat (from the "needs you" list's box). */
+  messageMaster: (text: string) => send<MasterInfo>("POST", `/api/master/message`, { text }),
+  /** Drag-and-drop on the "needs you" list: each chat lands in a tier at a rank. */
+  placeChats: (items: { repoPath: string; chatId: string; tier: ChatTier | null; rank: number }[]) =>
+    send<{ ok: true }>("POST", `/api/priorities/place`, { items }),
 
   // ── Pipelines ────────────────────────────────────────────────────────────
   getPipelines: () => getJson<PipelinesView>(`/api/pipelines`),

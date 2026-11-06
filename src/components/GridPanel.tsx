@@ -31,8 +31,8 @@ import { ChatBanners } from "./ChatBanners.js";
 import { McpPanel } from "./McpPanel.js";
 import { MasterButton } from "./MasterPanel.js";
 import { WarmPill } from "./WarmPill.js";
-import { GridQueue, timeAgo, type QueueItem } from "./GridQueue.js";
-import { compareQueue, isResurfaced, TIER_KEYS, TIER_LABEL } from "../lib/queueOrder.js";
+import { GridQueue, timeAgo, type QueueEditor, type QueueItem, type WaitInput } from "./GridQueue.js";
+import { compareQueue, isSnoozed, sectionOf, shortWhen, TIER_KEYS, TIER_LABEL } from "../lib/queueOrder.js";
 import { GridSubagents, gridSubagents } from "./GridSubagents.js";
 import { GridPipelineCard, pipelineCardId } from "./GridPipelineCard.js";
 import {
@@ -69,6 +69,7 @@ import { createValueStore, useStoreValue, type ValueStore } from "../lib/valueSt
 import { DEFAULT_MODEL, getModelProvider } from "../types.js";
 import type {
   ChatPriority,
+  ChatTier,
   ChatStatus,
   EffortLevel,
   Model,
@@ -1338,41 +1339,113 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         status,
         since: since.get(e.chatId)!,
         summary: report?.summary ?? "",
-        ...(e.chat.priority && {
-          priority: e.chat.priority,
-          resurfaced: isResurfaced(e.chat.priority, now),
-        }),
+        section: sectionOf(e.chat.priority, now),
+        ...(e.chat.priority && { priority: e.chat.priority }),
+        ...(isSnoozed(e.chat.snoozedUntil, now) && { snoozedUntil: e.chat.snoozedUntil }),
       });
     }
     return items.sort((a, b) => compareQueue(a, b, now));
   }, [entries, reports, colorOf, minute]);
 
   // ── Priority tiers ──
-  // Set from the queue's right-click menu, or with 1–5 (0 clears) on the
-  // selected window. Shown at once, then saved with the chat.
-  const [editingWaiting, setEditingWaiting] = useState<string | null>(null);
+  // Set from the queue (right-click, drag, the waiting and snooze editors), or
+  // with 1–5 (0 clears) and Z on the selected window. Shown at once, then
+  // saved with the chat.
+  const [queueEditor, setQueueEditor] = useState<QueueEditor>(null);
   const [tierHint, setTierHint] = useState<string | null>(null);
   const hintTimer = useRef(0);
+  const showHint = useCallback((text: string) => {
+    window.clearTimeout(hintTimer.current);
+    setTierHint(text);
+    hintTimer.current = window.setTimeout(() => setTierHint(null), 2500);
+  }, []);
+  /** Changes some chats on screen at once, then saves and re-reads. */
+  const changeChats = useCallback(
+    (change: (chat: GridChatEntry["chat"]) => GridChatEntry["chat"] | null, ids: Set<string>, save: () => Promise<unknown>) => {
+      setEntries((prev) =>
+        prev.map((e) => {
+          if (!ids.has(e.chatId)) return e;
+          const chat = change(e.chat);
+          return chat ? { ...e, chat } : e;
+        }),
+      );
+      void edit(save)
+        .catch(() => undefined)
+        .finally(() => void refresh());
+    },
+    [edit, refresh],
+  );
   const setPriority = useCallback(
     (chatId: string, priority: ChatPriority | null) => {
       const entry = entryById.get(chatId);
       if (!entry) return;
-      const withTier = (e: GridChatEntry): GridChatEntry => {
-        if (e.chatId !== chatId) return e;
-        const { priority: _old, ...chat } = e.chat;
-        return { ...e, chat: priority ? { ...chat, priority } : chat };
-      };
-      setEntries((prev) => prev.map(withTier));
-      window.clearTimeout(hintTimer.current);
-      setTierHint(
-        `${entry.chat.title || "New chat"}: ${priority ? TIER_LABEL[priority.tier] : "tier cleared"}`,
+      showHint(`${entry.chat.title || "New chat"}: ${priority ? TIER_LABEL[priority.tier] : "tier cleared"}`);
+      changeChats(
+        ({ priority: _old, ...chat }) => (priority ? { ...chat, priority } : chat),
+        new Set([chatId]),
+        () => api.patchChat(entry.repoPath, chatId, { priority }),
       );
-      hintTimer.current = window.setTimeout(() => setTierHint(null), 2500);
-      void edit(() => api.patchChat(entry.repoPath, chatId, { priority }))
-        .catch(() => undefined)
-        .finally(() => void refresh());
     },
-    [entryById, edit, refresh],
+    [entryById, changeChats, showHint],
+  );
+  const waitOn = useCallback(
+    (chatId: string, wait: WaitInput) => {
+      const entry = entryById.get(chatId);
+      if (!entry) return;
+      if (!wait.kind) return setPriority(chatId, { tier: "waiting", waitingOn: wait.note, resurfaceAt: wait.resurfaceAt });
+      showHint(`${entry.chat.title || "New chat"}: waiting`);
+      const now = new Date().toISOString();
+      changeChats(
+        (chat) => ({
+          ...chat,
+          priority: {
+            tier: "waiting",
+            ...(wait.note && { waitingOn: wait.note }),
+            ...(wait.resurfaceAt && { resurfaceAt: wait.resurfaceAt }),
+            waits: [{ id: "new", kind: wait.kind!, target: wait.target ?? "", createdAt: now }],
+          },
+        }),
+        new Set([chatId]),
+        () => api.patchChat(entry.repoPath, chatId, { wait }),
+      );
+    },
+    [entryById, changeChats, setPriority, showHint],
+  );
+  const snoozeChat = useCallback(
+    (chatId: string, until: string | null) => {
+      const entry = entryById.get(chatId);
+      if (!entry) return;
+      showHint(`${entry.chat.title || "New chat"}: ${until ? `snoozed until ${shortWhen(until, Date.now())}` : "awake"}`);
+      changeChats(
+        ({ snoozedUntil: _old, ...chat }) => (until ? { ...chat, snoozedUntil: until } : chat),
+        new Set([chatId]),
+        () => api.patchChat(entry.repoPath, chatId, { snoozedUntil: until }),
+      );
+    },
+    [entryById, changeChats, showHint],
+  );
+  const placeChats = useCallback(
+    (placed: { chatId: string; tier: ChatTier; rank: number }[]) => {
+      const byId = new Map(placed.map((p) => [p.chatId, p]));
+      const items = placed.flatMap((p) => {
+        const entry = entryById.get(p.chatId);
+        return entry ? [{ ...p, repoPath: entry.repoPath }] : [];
+      });
+      if (!items.length) return;
+      changeChats(
+        (chat) => {
+          const p = byId.get(chat.id);
+          if (!p) return null;
+          const old = chat.priority;
+          // Same tier keeps its wait; a new one starts afresh.
+          const keep = old?.tier === p.tier && !old.back ? old : undefined;
+          return { ...chat, priority: { ...keep, tier: p.tier, rank: p.rank } };
+        },
+        new Set(byId.keys()),
+        () => api.placeChats(items),
+      );
+    },
+    [entryById, changeChats],
   );
   const setPriorityRef = useRef(setPriority);
   setPriorityRef.current = setPriority;
@@ -1427,8 +1500,13 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         e.preventDefault();
         const tier = TIER_KEYS[e.key];
         // Waiting asks what it's waiting on, when the card is there to ask on.
-        if (tier === "waiting" && listedRef.current.has(id)) setEditingWaiting(id);
+        if (tier === "waiting" && listedRef.current.has(id)) setQueueEditor({ chatId: id, kind: "waiting" });
         else setPriorityRef.current(id, tier && { tier });
+        return;
+      }
+      if ((e.key === "z" || e.key === "Z") && listedRef.current.has(id)) {
+        e.preventDefault();
+        setQueueEditor({ chatId: id, kind: "snooze" });
         return;
       }
       if (e.key === "Enter") {
@@ -1714,8 +1792,11 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
           open={focusedId}
           onOpen={focusCard}
           onSetPriority={setPriority}
-          editingWaiting={editingWaiting}
-          onEditWaiting={setEditingWaiting}
+          onWait={waitOn}
+          onSnooze={snoozeChat}
+          onPlace={placeChats}
+          editor={queueEditor}
+          onEditor={setQueueEditor}
           hint={tierHint}
         />
       )}
@@ -2063,10 +2144,17 @@ const GridCard = memo(function GridCard({
 
   const title = chat.title || "New chat";
   const headFlag = status === "agent_done" ? undefined : ATTENTION_LABEL[status];
+  // Its tier shows as emphasis, not colour, so the repo's colour stays its own.
+  const prio = isSnoozed(chat.snoozedUntil, Date.now())
+    ? "snoozed"
+    : chat.priority && sectionOf(chat.priority, Date.now()) !== "medium"
+      ? sectionOf(chat.priority, Date.now())
+      : undefined;
 
   return (
     <div
       data-grid-card={entry.chatId}
+      data-prio={prio}
       className={`gc-card gc-tinted${sideClass}${attention ? ` gc-card--attention gc-card--${status}` : ""}${focused ? " gc-card--focused" : selected ? " gc-card--selected" : ""}`}
       style={
         {

@@ -328,6 +328,53 @@
   }
 }
 
+/* Its priority, as emphasis rather than colour so the repo's colour stays
+   its own: urgent breathes a slow bright ring, high has a brighter edge, and
+   low, waiting and snoozed windows sit back until hovered or picked. */
+.gc-card[data-prio="high"] > .gc-edges {
+  border-color: rgba(255, 255, 255, 0.42);
+}
+
+.gc-card[data-prio="urgent"] > .gc-edges::before {
+  --z: inherit;
+  content: "";
+  position: absolute;
+  inset: calc(-1px / var(--z));
+  border-radius: inherit;
+  border: calc(2px / var(--z)) solid rgba(255, 255, 255, 0.85);
+  opacity: 0.25;
+  animation: gc-prio-urgent 2.8s ease-in-out infinite;
+}
+
+.gc-card[data-away] > .gc-edges::before {
+  animation-play-state: paused;
+}
+
+@keyframes gc-prio-urgent {
+  50% {
+    opacity: 0.9;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gc-card[data-prio="urgent"] > .gc-edges::before {
+    animation: none;
+    opacity: 0.7;
+  }
+}
+
+.gc-card:is([data-prio="low"], [data-prio="waiting"], [data-prio="snoozed"]) {
+  transition: opacity 0.2s ease;
+}
+
+.gc-card:is([data-prio="low"], [data-prio="waiting"], [data-prio="snoozed"]):not(
+    .gc-card--focused,
+    .gc-card--selected,
+    :hover
+  ) {
+  opacity: 0.58;
+}
+
 .gc-card--dragging {
   z-index: 10;
 }
@@ -1180,14 +1227,23 @@
   --q-ease: cubic-bezier(0.2, 0.8, 0.2, 1);
   position: relative;
   flex: 0 0 300px;
+  display: flex;
+  flex-direction: column;
   overflow: hidden;
   border-left: 1px solid #1c1c20;
   background: #0e0e10;
+}
+
+.gc-qbody {
+  position: relative;
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   -webkit-mask-image: linear-gradient(#000, #000 calc(100% - 90px), transparent);
   mask-image: linear-gradient(#000, #000 calc(100% - 90px), transparent);
 }
 
-.gc-queue--scrolled {
+.gc-qbody--scrolled {
   -webkit-mask-image: linear-gradient(transparent, #000 90px, #000 calc(100% - 90px), transparent);
   mask-image: linear-gradient(transparent, #000 90px, #000 calc(100% - 90px), transparent);
 }
@@ -1196,12 +1252,46 @@
   position: absolute;
   left: 0;
   right: 0;
-  top: 12px;
+  top: 4px;
   padding: 0 16px;
   display: flex;
   flex-direction: column;
   gap: 8px;
   transition: transform 380ms var(--q-ease);
+}
+
+/* The box at the top: typed to the Master, which sorts the list. */
+.gc-qask {
+  flex: none;
+  padding: 12px 16px 8px;
+}
+
+.gc-qask-input {
+  width: 100%;
+  padding: 8px 11px;
+  border: 1px solid var(--q-s3);
+  border-radius: 9px;
+  background: var(--q-s1);
+  color: var(--q-text);
+  font: inherit;
+  font-size: 12.5px;
+}
+
+.gc-qask-input::placeholder {
+  color: var(--q-faint);
+}
+
+.gc-qask-input:focus {
+  outline: none;
+  border-color: #4a4a52;
+}
+
+.gc-qask-input--error::placeholder {
+  color: #e2776f;
+}
+
+.gc-qask-input:disabled {
+  opacity: 0.6;
 }
 
 .gc-qcard {
@@ -1306,16 +1396,61 @@
   color: var(--q-faint);
 }
 
-/* Priority tiers: a stripe down the card's left edge and a pill under its
-   title, in the tier's colour. Waiting cards are muted until their date
-   passes, then come back flagged. */
-.gc-qcard[data-tier="urgent"] { --tier: #ff5c62; }
-.gc-qcard[data-tier="high"] { --tier: #f5a142; }
-.gc-qcard[data-tier="medium"] { --tier: #5eaef0; }
-.gc-qcard[data-tier="low"] { --tier: #7c8189; }
-.gc-qcard[data-tier="waiting"] { --tier: #a98bf5; }
+/* Sections: a heading in the section's colour with a rule after it, and a
+   thin stripe down each card's left edge in the same colour. */
+[data-section="urgent"] { --sec: #ff5c62; }
+[data-section="back"] { --sec: #4fd1a5; }
+[data-section="high"] { --sec: #f5a142; }
+[data-section="medium"] { --sec: #5eaef0; }
+[data-section="low"] { --sec: #7c8189; }
+[data-section="waiting"] { --sec: #a98bf5; }
 
-.gc-qcard[data-tier]::before {
+.gc-qhead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 6px 2px -2px;
+  padding: 2px 0;
+  border: 0;
+  background: none;
+  color: var(--sec, var(--q-faint));
+  font: inherit;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  text-align: left;
+}
+
+.gc-qhead::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: color-mix(in srgb, var(--sec, var(--q-faint)) 30%, transparent);
+}
+
+.gc-qhead-count {
+  order: 2;
+  color: var(--q-faint);
+  font-weight: 500;
+}
+
+.gc-qhead--snoozed {
+  cursor: pointer;
+}
+
+.gc-qhead--snoozed:hover {
+  color: var(--q-muted);
+}
+
+.gc-qhead--drop {
+  padding: 8px 0;
+  border-radius: 8px;
+  outline: 1px dashed color-mix(in srgb, var(--sec) 70%, transparent);
+  outline-offset: 2px;
+}
+
+.gc-qcard[data-section]::before {
   content: "";
   position: absolute;
   left: 0;
@@ -1323,27 +1458,15 @@
   bottom: 10px;
   width: 3px;
   border-radius: 0 3px 3px 0;
-  background: var(--tier);
+  background: var(--sec);
 }
 
-.gc-qcard[data-tier="urgent"] {
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--tier) 45%, transparent);
+.gc-qcard[data-section="medium"]::before {
+  opacity: 0.5;
 }
 
-.gc-qtier {
-  align-self: flex-start;
-  max-width: 100%;
-  margin-top: 4px;
-  padding: 1px 7px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: color-mix(in srgb, var(--tier) 18%, transparent);
-  color: color-mix(in srgb, var(--tier) 80%, var(--q-text));
-  font-size: 11px;
-  font-weight: 500;
-  line-height: 1.5;
-  white-space: nowrap;
-  text-overflow: ellipsis;
+.gc-qcard[data-section="urgent"] {
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--sec) 45%, transparent);
 }
 
 .gc-qcard--muted {
@@ -1354,30 +1477,57 @@
   color: var(--q-muted);
 }
 
-.gc-qcard--back .gc-qtier {
-  background: color-mix(in srgb, var(--tier) 34%, transparent);
-  color: var(--q-text);
-  animation: gc-qtier-back 1.6s ease-in-out 3;
+.gc-qcard[draggable="true"] {
+  cursor: grab;
 }
 
-@keyframes gc-qtier-back {
-  50% { background: color-mix(in srgb, var(--tier) 60%, transparent); }
+.gc-qcard--dragging {
+  opacity: 0.35 !important;
 }
 
-/* The "waiting on" editor, opened under its card. */
-.gc-qwait {
+/* Where a dragged card will land: a bar above or below the card under it. */
+.gc-qcard[data-drop]::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--sec);
+}
+
+.gc-qcard[data-drop="before"]::after {
+  top: -5px;
+}
+
+.gc-qcard[data-drop="after"]::after {
+  bottom: -5px;
+}
+
+/* The waiting and snooze editors, opened under their card. */
+.gc-qedit {
+  --edit: #a98bf5;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 7px;
   margin-top: -2px;
   padding: 10px 12px;
   border-radius: 12px;
   background: var(--q-s2);
-  box-shadow: inset 0 0 0 1px color-mix(in srgb, #a98bf5 35%, transparent);
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--edit) 35%, transparent);
 }
 
-.gc-qwait-note,
-.gc-qwait-date {
+.gc-qedit--snooze {
+  --edit: #8d8d96;
+}
+
+.gc-qedit-label {
+  margin-top: 2px;
+  color: var(--q-faint);
+  font-size: 11px;
+}
+
+.gc-qedit-input {
   width: 100%;
   padding: 6px 8px;
   border: 1px solid var(--q-s3);
@@ -1389,20 +1539,19 @@
   color-scheme: dark;
 }
 
-.gc-qwait-note:focus,
-.gc-qwait-date:focus {
+.gc-qedit-input:focus {
   outline: none;
-  border-color: #a98bf5;
+  border-color: var(--edit);
 }
 
-.gc-qwait-when {
+.gc-qedit-chips {
   display: flex;
   flex-wrap: wrap;
   gap: 5px;
 }
 
-.gc-qwait-chip,
-.gc-qwait-btn {
+.gc-qedit-chip,
+.gc-qedit-btn {
   padding: 3px 9px;
   border: 0;
   border-radius: 999px;
@@ -1413,30 +1562,35 @@
   cursor: pointer;
 }
 
-.gc-qwait-chip:hover,
-.gc-qwait-btn:hover {
+.gc-qedit-chip:hover,
+.gc-qedit-btn:hover {
   color: var(--q-text);
 }
 
-.gc-qwait-chip--on {
-  background: color-mix(in srgb, #a98bf5 30%, var(--q-s3));
+.gc-qedit-chip--on {
+  background: color-mix(in srgb, var(--edit) 30%, var(--q-s3));
   color: var(--q-text);
 }
 
-.gc-qwait-actions {
+.gc-qedit-actions {
   display: flex;
   justify-content: flex-end;
   gap: 6px;
 }
 
-.gc-qwait-btn--save {
-  background: #a98bf5;
+.gc-qedit-btn--save {
+  background: var(--edit);
   color: #141417;
   font-weight: 600;
 }
 
-.gc-qwait-btn--save:hover {
+.gc-qedit-btn--save:hover {
   color: #000;
+}
+
+.gc-qedit-btn:disabled {
+  opacity: 0.4;
+  cursor: default;
 }
 
 /* A passing line after a tier is set from the keyboard. */
