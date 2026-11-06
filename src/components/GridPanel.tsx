@@ -32,6 +32,7 @@ import { McpPanel } from "./McpPanel.js";
 import { MasterButton } from "./MasterPanel.js";
 import { WarmPill } from "./WarmPill.js";
 import { GridQueue, timeAgo, type QueueItem } from "./GridQueue.js";
+import { compareQueue, isResurfaced, TIER_KEYS, TIER_LABEL } from "../lib/queueOrder.js";
 import { GridSubagents, gridSubagents } from "./GridSubagents.js";
 import { GridPipelineCard, pipelineCardId } from "./GridPipelineCard.js";
 import {
@@ -67,6 +68,7 @@ import {
 import { createValueStore, useStoreValue, type ValueStore } from "../lib/valueStore.js";
 import { DEFAULT_MODEL, getModelProvider } from "../types.js";
 import type {
+  ChatPriority,
   ChatStatus,
   EffortLevel,
   Model,
@@ -127,14 +129,6 @@ interface ChatReport {
   /** What it's asking, or the last thing it said; only kept while it needs you. */
   summary: string;
 }
-
-/** Queue order: questions first (an agent is blocked on them), then errors,
- *  then finished chats. */
-const QUEUE_RANK: Partial<Record<ChatStatus, number>> = {
-  awaiting_input: 0,
-  error: 1,
-  agent_done: 2,
-};
 
 const ARROW_DIRS: Record<string, Dir | undefined> = {
   ArrowLeft: "left",
@@ -1313,7 +1307,16 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
     });
   }, []);
 
+  // Waiting chats come back up when their date passes, so the order is
+  // re-worked out each minute as well as on every change.
+  const [minute, setMinute] = useState(() => Math.floor(Date.now() / 60_000));
+  useEffect(() => {
+    const t = window.setInterval(() => setMinute(Math.floor(Date.now() / 60_000)), 15_000);
+    return () => window.clearInterval(t);
+  }, []);
+
   const queueItems = useMemo<QueueItem[]>(() => {
+    const now = Date.now();
     const since = waitingSinceRef.current;
     const items: QueueItem[] = [];
     for (const e of entries) {
@@ -1335,12 +1338,46 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         status,
         since: since.get(e.chatId)!,
         summary: report?.summary ?? "",
+        ...(e.chat.priority && {
+          priority: e.chat.priority,
+          resurfaced: isResurfaced(e.chat.priority, now),
+        }),
       });
     }
-    return items.sort(
-      (a, b) => (QUEUE_RANK[a.status] ?? 3) - (QUEUE_RANK[b.status] ?? 3) || a.since - b.since,
-    );
-  }, [entries, reports, colorOf]);
+    return items.sort((a, b) => compareQueue(a, b, now));
+  }, [entries, reports, colorOf, minute]);
+
+  // ── Priority tiers ──
+  // Set from the queue's right-click menu, or with 1–5 (0 clears) on the
+  // selected window. Shown at once, then saved with the chat.
+  const [editingWaiting, setEditingWaiting] = useState<string | null>(null);
+  const [tierHint, setTierHint] = useState<string | null>(null);
+  const hintTimer = useRef(0);
+  const setPriority = useCallback(
+    (chatId: string, priority: ChatPriority | null) => {
+      const entry = entryById.get(chatId);
+      if (!entry) return;
+      const withTier = (e: GridChatEntry): GridChatEntry => {
+        if (e.chatId !== chatId) return e;
+        const { priority: _old, ...chat } = e.chat;
+        return { ...e, chat: priority ? { ...chat, priority } : chat };
+      };
+      setEntries((prev) => prev.map(withTier));
+      window.clearTimeout(hintTimer.current);
+      setTierHint(
+        `${entry.chat.title || "New chat"}: ${priority ? TIER_LABEL[priority.tier] : "tier cleared"}`,
+      );
+      hintTimer.current = window.setTimeout(() => setTierHint(null), 2500);
+      void edit(() => api.patchChat(entry.repoPath, chatId, { priority }))
+        .catch(() => undefined)
+        .finally(() => void refresh());
+    },
+    [entryById, edit, refresh],
+  );
+  const setPriorityRef = useRef(setPriority);
+  setPriorityRef.current = setPriority;
+  const listedRef = useRef(new Set<string>());
+  listedRef.current = new Set(queueItems.map((q) => q.chatId));
 
   // Keys, when nothing is being typed into: arrows move the focus to the
   // nearest window that way (from the one nearest the middle of the screen if
@@ -1386,6 +1423,14 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         return;
       }
       if (!id) return;
+      if (e.key in TIER_KEYS) {
+        e.preventDefault();
+        const tier = TIER_KEYS[e.key];
+        // Waiting asks what it's waiting on, when the card is there to ask on.
+        if (tier === "waiting" && listedRef.current.has(id)) setEditingWaiting(id);
+        else setPriorityRef.current(id, tier && { tier });
+        return;
+      }
       if (e.key === "Enter") {
         // A focused control inside a window keeps its own Enter. Anything else
         // focused (say the Grid button used to get here) would be "clicked".
@@ -1663,7 +1708,17 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
         </div>
       </div>
 
-      {n > 0 && <GridQueue items={queueItems} open={focusedId} onOpen={focusCard} />}
+      {n > 0 && (
+        <GridQueue
+          items={queueItems}
+          open={focusedId}
+          onOpen={focusCard}
+          onSetPriority={setPriority}
+          editingWaiting={editingWaiting}
+          onEditWaiting={setEditingWaiting}
+          hint={tierHint}
+        />
+      )}
 
       <MasterButton settings={cardSettings} />
     </div>
