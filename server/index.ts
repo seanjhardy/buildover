@@ -138,8 +138,9 @@ import {
   markGridChatDone,
   listRecentChats,
 } from "./grid.js";
+import { searchGridChats } from "./gridSearch.js";
 import { ensureMasterChat } from "./master.js";
-import { pipelinesView, releaseNow, runNow, startPipelines } from "./pipelines.js";
+import { pipelinesView, releaseNow, runNow, setPaused, startPipelines } from "./pipelines.js";
 import { addWait, placeChats, setTier, snooze, startWaitWatcher } from "./priority.js";
 import { attachTerminalWss } from "./terminal.js";
 import { windDownIdleProcesses } from "./agent.js";
@@ -2398,10 +2399,30 @@ app.post("/api/pipelines/:id/run", async (req, res) => {
   }
 });
 
+// Pause or resume one source: { paused: boolean }.
+app.post("/api/pipelines/:id/pause", async (req, res) => {
+  try {
+    setPaused(req.params.id, req.body?.paused !== false);
+    res.json(await pipelinesView());
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
 app.get("/api/grid", async (_req, res) => {
   try {
     const entries = await listGridChats();
     res.json({ entries });
+  } catch (err) {
+    res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+// Cmd+F on the grid: every grid chat mentioning the query, with snippets.
+app.get("/api/grid/search", async (req, res) => {
+  try {
+    const hits = await searchGridChats(String(req.query.q ?? ""));
+    res.json({ hits });
   } catch (err) {
     res.status(500).json({ error: err instanceof Error ? err.message : String(err) });
   }
@@ -2913,7 +2934,7 @@ wss.on("connection", (ws: WebSocket) => {
           const sub = subscriptions.get(msg.chatId);
           if (!sub) break;
           const session = getSession(sub.repoPath, msg.chatId);
-          session.interrupt();
+          await session.stop();
           break;
         }
         case "stop_background_task": {

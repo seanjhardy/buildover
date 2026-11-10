@@ -171,56 +171,6 @@ export function placeNew(
   return { c: maxC + 2, r: Math.min(...all.map((p) => p.r)) };
 }
 
-/** One block of a repo: its windows that join edge to edge. */
-export interface RepoGroup {
-  repo: string;
-  /** Reading order; the first one names the group. */
-  ids: string[];
-  /** The free cell beside the block where its next chat goes, or null when
-   *  other repos' windows box it in. */
-  slot: Cell | null;
-  /** Which side of `slot` the block lies on. */
-  side: keyof Sides;
-}
-
-/** Every repo's windows, split into the blocks they form, each with the cell
- *  its next chat would take. */
-export function repoGroups(
-  positions: Record<string, Cell>,
-  repoOf: (chatId: string) => string | undefined,
-): RepoGroup[] {
-  const occ = occupancy(positions);
-  const reading = Object.keys(positions).sort(
-    (a, b) => positions[a].r - positions[b].r || positions[a].c - positions[b].c,
-  );
-  const order = new Map(reading.map((id, i) => [id, i]));
-  const seen = new Set<string>();
-  const out: RepoGroup[] = [];
-  for (const first of reading) {
-    const repo = repoOf(first);
-    if (seen.has(first) || repo == null) continue;
-    seen.add(first);
-    const ids = [first];
-    for (let i = 0; i < ids.length; i++) {
-      const p = positions[ids[i]];
-      for (const d of DIRS) {
-        const n = occ.get(key(p.c + d.c, p.r + d.r));
-        if (n && !seen.has(n) && repoOf(n) === repo) {
-          seen.add(n);
-          ids.push(n);
-        }
-      }
-    }
-    ids.sort((a, b) => order.get(a)! - order.get(b)!);
-    const mine = new Set(ids);
-    const slot = placeNew(positions, repoOf, repo, ids);
-    const beside = (dc: number, dr: number) => mine.has(occ.get(key(slot.c + dc, slot.r + dr)) ?? "");
-    const side = beside(-1, 0) ? "w" : beside(0, -1) ? "n" : beside(1, 0) ? "e" : beside(0, 1) ? "s" : null;
-    out.push({ repo, ids, slot: side ? slot : null, side: side ?? "s" });
-  }
-  return out;
-}
-
 /** Which sides of a cell have a neighbour. */
 export interface Sides {
   n: boolean;
@@ -247,8 +197,12 @@ export interface Fillet {
   /** Which way the empty cell lies from the point. */
   dx: 1 | -1;
   dy: 1 | -1;
-  /** A chat bordering the corner, whose colour the fillet takes. */
+  /** The chat beside the empty cell horizontally, whose colour the fillet
+   *  takes, and the one beside it vertically: the two the arc joins. */
   chatId: string;
+  vChatId: string;
+  /** The chat diagonally across the grid point from the empty cell. */
+  dChatId: string;
 }
 
 export function fillets(positions: Record<string, Cell>): Fillet[] {
@@ -279,7 +233,9 @@ export function fillets(positions: Record<string, Cell>): Fillet[] {
     const [ec, er, dx, dy] = empty[0];
     // Take the colour of the cell beside the empty one horizontally.
     const chatId = occ.get(key(ec - dx, er))!;
-    out.push({ x, y, dx, dy, chatId });
+    const vChatId = occ.get(key(ec, er - dy))!;
+    const dChatId = occ.get(key(ec - dx, er - dy))!;
+    out.push({ x, y, dx, dy, chatId, vChatId, dChatId });
   }
   return out;
 }

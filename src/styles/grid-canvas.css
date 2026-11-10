@@ -401,32 +401,192 @@
   height: calc(var(--fr) + var(--fh));
   pointer-events: none;
   background: radial-gradient(
-    circle at var(--at),
+    circle at 100% 100%,
     transparent var(--fr),
     var(--gc-edge) var(--fr),
     var(--gc-edge) calc(var(--fr) + var(--fh)),
     var(--gc-bg) calc(var(--fr) + var(--fh))
   );
 }
+/* Every corner is drawn as the right-bottom one (the empty cell to the right
+   of and below the grid point), flipped into place. The windows round it then
+   always sit the same way: the horizontal one (h) on the left, the vertical
+   one (v) above and the diagonal one (d) up-left. */
 .gc-fillet--rb {
   left: calc(var(--x) * var(--cell-w) - var(--fh));
   top: calc(var(--y) * var(--cell-h) - var(--fh));
-  --at: 100% 100%;
 }
 .gc-fillet--lb {
   left: calc(var(--x) * var(--cell-w) - var(--fr));
   top: calc(var(--y) * var(--cell-h) - var(--fh));
-  --at: 0% 100%;
+  transform: scaleX(-1);
 }
 .gc-fillet--rt {
   left: calc(var(--x) * var(--cell-w) - var(--fh));
   top: calc(var(--y) * var(--cell-h) - var(--fr));
-  --at: 100% 0%;
+  transform: scaleY(-1);
 }
 .gc-fillet--lt {
   left: calc(var(--x) * var(--cell-w) - var(--fr));
   top: calc(var(--y) * var(--cell-h) - var(--fr));
-  --at: 0% 0%;
+  transform: scale(-1);
+}
+
+/* When h and v both need you (data-h / data-v / data-d carry the statuses),
+   the corner joins their rings up, at the same width and inset as on the
+   windows. Their outer rings bend round the arc: the stretch of each straight
+   ring under the corner is covered and the arc takes the ring instead, h's
+   colour on its half and v's on the other. Their rings along the seams with d
+   meet in a rounded turn round the grid point (the knot), with d's own ring
+   corner rounded to match inside it, so no ring ends short of another.
+   --ov/--oh: how far v's and h's seam rings sit from the seam line, which
+   depends on whether the seam border is drawn on their side (each window
+   draws its top and left); d's sit fh minus that. */
+.gc-fillet {
+  --e: calc(2px / var(--z));
+  --ov: var(--fh);
+  --oh: var(--fh);
+  --r2: var(--e);
+  --r1: calc(var(--r2) + var(--fh) + var(--e));
+  --st-h: transparent;
+  --st-v: transparent;
+  --st-d: transparent;
+}
+.gc-canvas--far .gc-fillet {
+  --e: calc(3px / var(--z));
+}
+.gc-fillet:is(.gc-fillet--lb, .gc-fillet--lt) {
+  --ov: 0px;
+}
+.gc-fillet:is(.gc-fillet--rt, .gc-fillet--lt) {
+  --oh: 0px;
+}
+.gc-fillet[data-h="awaiting_input"] {
+  --st-h: #d9b44a;
+}
+.gc-fillet[data-v="awaiting_input"] {
+  --st-v: #d9b44a;
+}
+.gc-fillet[data-d="awaiting_input"] {
+  --st-d: #d9b44a;
+}
+.gc-fillet[data-h="agent_done"] {
+  --st-h: #89d185;
+}
+.gc-fillet[data-v="agent_done"] {
+  --st-v: #89d185;
+}
+.gc-fillet[data-d="agent_done"] {
+  --st-d: #89d185;
+}
+.gc-fillet[data-h="error"] {
+  --st-h: #e2776f;
+}
+.gc-fillet[data-v="error"] {
+  --st-v: #e2776f;
+}
+.gc-fillet[data-d="error"] {
+  --st-d: #e2776f;
+}
+
+/* Covers the straight rings, in the corner's own fill (--gc-bg doesn't
+   inherit by itself): v's along the top and h's down the left, from just past
+   their seam rings, which the knot takes over. */
+.gc-fillet[data-h]::before {
+  --gc-bg: inherit;
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--e));
+  left: calc(-1 * var(--e));
+  right: 0;
+  bottom: 0;
+  background:
+    linear-gradient(var(--gc-bg), var(--gc-bg)) calc(var(--fh) + var(--ov) + 2 * var(--e)) 0 /
+      calc(100% - var(--fh) - var(--ov) - 2 * var(--e)) var(--e) no-repeat,
+    linear-gradient(var(--gc-bg), var(--gc-bg)) 0 calc(var(--fh) + var(--oh) + 2 * var(--e)) /
+      var(--e) calc(100% - var(--fh) - var(--oh) - 2 * var(--e)) no-repeat;
+}
+
+/* The ring round the arc. */
+.gc-fillet[data-h]::after {
+  content: "";
+  position: absolute;
+  top: calc(-1 * var(--e));
+  left: calc(-1 * var(--e));
+  right: 0;
+  bottom: 0;
+  background: conic-gradient(
+    from 270deg at 100% 100%,
+    var(--st-h) 0 45deg,
+    var(--st-v) 45deg 90deg
+  );
+  -webkit-mask: radial-gradient(
+    circle at 100% 100%,
+    transparent calc(var(--fr) + var(--fh)),
+    #000 calc(var(--fr) + var(--fh)),
+    #000 calc(var(--fr) + var(--fh) + var(--e)),
+    transparent calc(var(--fr) + var(--fh) + var(--e))
+  );
+  mask: radial-gradient(
+    circle at 100% 100%,
+    transparent calc(var(--fr) + var(--fh)),
+    #000 calc(var(--fr) + var(--fh)),
+    #000 calc(var(--fr) + var(--fh) + var(--e)),
+    transparent calc(var(--fr) + var(--fh) + var(--e))
+  );
+}
+
+/* The knot: a square from the turns' shared centre, up-left of the grid
+   point, out to the far side of v's and h's seam rings. It repaints that
+   patch of the three windows: fill, the two seam lines up to the point, d's
+   ring corner as a quarter circle of radius r2 and (::after) v's and h's
+   seam rings joined by a quarter circle of radius r1 round it. */
+.gc-fillet-knot {
+  --gc-bg: inherit;
+  --gc-seam: inherit;
+  --c: calc(var(--e) / 2 + var(--r2));
+  position: absolute;
+  left: calc(var(--ov) - var(--c));
+  top: calc(var(--oh) - var(--c));
+  width: calc(var(--r1) + var(--e) / 2);
+  height: calc(var(--r1) + var(--e) / 2);
+  background:
+    radial-gradient(
+      circle at 0 0,
+      transparent calc(var(--r2) - var(--e) / 2),
+      var(--st-d) calc(var(--r2) - var(--e) / 2),
+      var(--st-d) calc(var(--r2) + var(--e) / 2),
+      transparent calc(var(--r2) + var(--e) / 2)
+    ),
+    linear-gradient(var(--gc-seam), var(--gc-seam)) var(--c) 0 /
+      var(--fh) calc(var(--c) + var(--fh) - var(--oh)) no-repeat,
+    linear-gradient(var(--gc-seam), var(--gc-seam)) 0 var(--c) /
+      calc(var(--c) + var(--fh) - var(--ov)) var(--fh) no-repeat,
+    var(--gc-bg);
+}
+.gc-fillet-knot::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: conic-gradient(
+    from 90deg at 0 0,
+    var(--st-v) 0 45deg,
+    var(--st-h) 45deg 90deg
+  );
+  -webkit-mask: radial-gradient(
+    circle at 0 0,
+    transparent calc(var(--r1) - var(--e) / 2),
+    #000 calc(var(--r1) - var(--e) / 2),
+    #000 calc(var(--r1) + var(--e) / 2),
+    transparent calc(var(--r1) + var(--e) / 2)
+  );
+  mask: radial-gradient(
+    circle at 0 0,
+    transparent calc(var(--r1) - var(--e) / 2),
+    #000 calc(var(--r1) - var(--e) / 2),
+    #000 calc(var(--r1) + var(--e) / 2),
+    transparent calc(var(--r1) + var(--e) / 2)
+  );
 }
 
 /* Where dragged windows will land. */
@@ -445,11 +605,11 @@
   pointer-events: none;
 }
 
-/* "+" beside a repo's block: a new chat in that repo, in the free cell it sits
-   in, just past the edge that window would share with the block. JS shows it
-   (gc-add--shown) while the pointer is over the block. It sits at (--x, --y)
+/* "+" on a free edge of a window: a new chat in its repo, in the free cell it
+   sits in, just past the edge that window would share with it. JS shows a
+   window's "+"s (gc-add--shown) while the pointer is over the window. It sits at (--x, --y)
    and stays the same size on screen at any zoom, offset 24px into the cell
-   along (--dx, --dy); it grows out of the block's edge as it appears. */
+   along (--dx, --dy); it grows out of the window's edge as it appears. */
 .gc-add {
   --z: inherit;
   position: absolute;
@@ -520,17 +680,13 @@
   align-items: center;
   gap: 8px;
   padding: 0 8px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  /* Always the repo's colour; status shows in the pill and the ring instead. */
+  background: color-mix(in srgb, var(--repo) 14%, transparent);
+  border-bottom: 1px solid color-mix(in srgb, var(--repo) 32%, transparent);
   user-select: none;
   -webkit-user-select: none;
   touch-action: none;
   container: gc-head / inline-size;
-}
-
-/* Needs you: the title bar takes the status colour. */
-.gc-card--attention .gc-head {
-  background: color-mix(in srgb, var(--gc-status) 14%, transparent);
-  border-bottom-color: color-mix(in srgb, var(--gc-status) 32%, transparent);
 }
 
 .gc-head-side {
@@ -1768,4 +1924,220 @@
   font-size: 12px;
   color: rgba(255, 255, 255, 0.45);
   text-align: center;
+}
+
+/* ── Cmd+F: search the grid's chats ── */
+
+.gs {
+  position: absolute;
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: 40;
+  width: min(560px, calc(100% - 340px));
+  min-width: 320px;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid #2a2a2f;
+  border-radius: 12px;
+  background: rgba(25, 25, 28, 0.96);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(8px);
+  overflow: hidden;
+}
+
+.gs-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  height: 38px;
+  padding: 0 6px 0 12px;
+}
+
+.gs-icon {
+  flex: none;
+  color: #8a8a92;
+}
+
+.gs-input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0 6px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: #e8e8e8;
+  font: inherit;
+  font-size: 13px;
+}
+
+.gs-status {
+  flex: none;
+  padding: 0 6px;
+  color: #8a8a92;
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+.gs-btn {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: #c8c8ce;
+  cursor: pointer;
+}
+
+.gs-btn:hover:not(:disabled) {
+  background: #26262b;
+}
+
+.gs-btn:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.gs-list {
+  max-height: min(360px, 50vh);
+  overflow-y: auto;
+  border-top: 1px solid #26262b;
+  padding: 4px;
+}
+
+.gs-row {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  width: 100%;
+  padding: 7px 8px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: #e8e8e8;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.gs-row:hover {
+  background: #202024;
+}
+
+.gs-row--active {
+  background: #2a2a1e;
+  box-shadow: inset 2px 0 0 #f5c542;
+}
+
+.gs-row-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12.5px;
+}
+
+.gs-row-repo {
+  flex: none;
+  color: #8a8a92;
+}
+
+.gs-row-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.gs-row-count {
+  flex: none;
+  min-width: 18px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: rgba(245, 197, 66, 0.16);
+  color: #f5c542;
+  font-size: 11px;
+  line-height: 18px;
+  text-align: center;
+}
+
+.gs-row-snip {
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+  color: #a4a4ac;
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.gs-row-who {
+  margin-right: 6px;
+  color: #6c6c74;
+}
+
+.gs-row-snip mark {
+  border-radius: 3px;
+  background: rgba(245, 197, 66, 0.28);
+  color: #fff;
+}
+
+/* On the canvas: the windows that matched get a ring and their count (the
+   same size on screen at any zoom), the rest are dimmed. */
+.gs-hit,
+.gs-veil {
+  --z: inherit;
+  position: absolute;
+  z-index: 20;
+  left: calc(var(--c) * var(--cell-w));
+  top: calc(var(--r) * var(--cell-h));
+  width: var(--cell-w);
+  height: var(--cell-h);
+  border-radius: calc(20px / var(--z));
+  pointer-events: none;
+}
+
+.gs-veil {
+  background: rgba(8, 8, 9, 0.62);
+}
+
+.gs-hit {
+  box-shadow: inset 0 0 0 calc(2px / var(--z)) rgba(245, 197, 66, 0.7);
+}
+
+.gs-hit--active {
+  box-shadow:
+    inset 0 0 0 calc(3px / var(--z)) #f5c542,
+    0 0 calc(28px / var(--z)) rgba(245, 197, 66, 0.35);
+}
+
+.gs-hit-count {
+  position: absolute;
+  top: calc(10px / var(--z));
+  right: calc(10px / var(--z));
+  min-width: calc(22px / var(--z));
+  padding: 0 calc(7px / var(--z));
+  border-radius: calc(11px / var(--z));
+  background: #f5c542;
+  color: #1a1606;
+  font-size: calc(12px / var(--z));
+  font-weight: 600;
+  line-height: calc(22px / var(--z));
+  text-align: center;
+}
+
+::highlight(grid-search) {
+  background-color: rgba(245, 197, 66, 0.32);
+  color: inherit;
+}
+
+::highlight(grid-search-active) {
+  background-color: #f5c542;
+  color: #1a1606;
 }

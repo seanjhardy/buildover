@@ -104,6 +104,11 @@ test("woken items go first and aren't released until their news is worked", () =
   assert.deepEqual(pickRelease(items, true, 3).map((i) => i.key), []);
 });
 
+test("a paused source's items aren't started or woken", () => {
+  const items = [item({ key: "n1" }), item({ key: "w1", state: "ready", chatId: "c1", wake: "news" })];
+  assert.deepEqual(pickResearch(items, [], 2, 3).map((i) => i.key), []);
+});
+
 test("before-sweep sources check once in the hour before each sweep", () => {
   const src = { id: "mail", beforeSweeps: true } as SourceConfig;
   const sweeps = { sweeps: ["09:30", "14:00"] };

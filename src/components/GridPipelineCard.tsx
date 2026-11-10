@@ -1,5 +1,5 @@
 import { memo, useEffect, useState } from "react";
-import { CircleAlert, Play, Workflow } from "lucide-react";
+import { CircleAlert, Pause, Play, Workflow } from "lucide-react";
 import { api } from "../lib/api.js";
 import { openExternalUrl } from "../lib/openExternalUrl.js";
 import type { PipelineSourceView, PipelinesView } from "../types.js";
@@ -83,6 +83,7 @@ interface Props {
   focused: boolean;
   selected: boolean;
   onRun: (sourceId: string) => void;
+  onPause: (sourceId: string, paused: boolean) => void;
   /** Fly to a chat it started. */
   onFocusChat: (chatId: string) => void;
 }
@@ -98,6 +99,7 @@ export const GridPipelineCard = memo(function GridPipelineCard({
   focused,
   selected,
   onRun,
+  onPause,
   onFocusChat,
 }: Props) {
   const id = pipelineCardId(source.id);
@@ -105,12 +107,15 @@ export const GridPipelineCard = memo(function GridPipelineCard({
   const started = source.items.filter((i) => i.state !== "new" && i.chatId);
   const linedUp = source.items.filter((i) => i.state === "new");
   const busy = source.reading || source.counts.working > 0;
+  const paused = !!source.pausedAt;
 
   const status = source.reading
     ? `Reading ${source.name} now…`
-    : source.checkedAt
-      ? `Read at ${when(source.checkedAt)}, next at ${when(source.nextCheckAt)}`
-      : `First read at ${when(source.nextCheckAt)}`;
+    : paused
+      ? `Paused since ${when(source.pausedAt!)}`
+      : source.checkedAt
+        ? `Read at ${when(source.checkedAt)}, next at ${when(source.nextCheckAt)}`
+        : `First read at ${when(source.nextCheckAt)}`;
 
   const cost = [
     `${money(source.spendUsd)} this week`,
@@ -122,7 +127,7 @@ export const GridPipelineCard = memo(function GridPipelineCard({
   return (
     <div
       data-grid-card={id}
-      className={`gc-card gc-tinted gp-card${sideClass}${focused ? " gc-card--focused" : selected ? " gc-card--selected" : ""}`}
+      className={`gc-card gc-tinted gp-card${paused ? " gp-card--paused" : ""}${sideClass}${focused ? " gc-card--focused" : selected ? " gc-card--selected" : ""}`}
       style={
         {
           "--repo-hue": repoHue,
@@ -150,6 +155,22 @@ export const GridPipelineCard = memo(function GridPipelineCard({
       <div className="gc-card-body gp-body">
         <div className="gp-top">
           <span className="gp-status">{status}</span>
+          <button
+            type="button"
+            className="btn gp-run"
+            onClick={(e) => {
+              e.stopPropagation();
+              onPause(source.id, !paused);
+            }}
+            title={
+              paused
+                ? "Go back to reading it on schedule and working what it finds"
+                : "Stop reading it and starting work on it; what's already on the canvas stays"
+            }
+          >
+            {paused ? <Play size={12} /> : <Pause size={12} />}
+            {paused ? "Resume" : "Pause"}
+          </button>
           <button
             type="button"
             className="btn btn-primary gp-run"

@@ -35,6 +35,7 @@ import { GridQueue, timeAgo, type QueueEditor, type QueueItem, type WaitInput } 
 import { compareQueue, isSnoozed, sectionOf, shortWhen, TIER_KEYS, TIER_LABEL } from "../lib/queueOrder.js";
 import { GridSubagents, gridSubagents } from "./GridSubagents.js";
 import { GridPipelineCard, pipelineCardId } from "./GridPipelineCard.js";
+import { GridSearch, GridSearchMarks, useSearchHighlights, type GridSearchView } from "./GridSearch.js";
 import {
   FADE_SCALE,
   FAR_SCALE,
@@ -55,14 +56,12 @@ import {
   neighbourIn,
   occupancy,
   placeNew,
-  repoGroups,
   saveLayout,
   sidesOf,
   windowsTouching,
   type CanvasLayout,
   type Cell,
   type Dir,
-  type RepoGroup,
   type View,
 } from "../lib/gridCanvas.js";
 import { createValueStore, useStoreValue, type ValueStore } from "../lib/valueStore.js";
@@ -480,6 +479,13 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   const runPipeline = useCallback(async (id: string) => {
     try {
       setPipelines(await api.runPipeline(id));
+    } catch {
+      /* the next poll shows what happened */
+    }
+  }, []);
+  const pausePipeline = useCallback(async (id: string, paused: boolean) => {
+    try {
+      setPipelines(await api.pausePipeline(id, paused));
     } catch {
       /* the next poll shows what happened */
     }
@@ -1230,30 +1236,36 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   const filletList = useMemo(() => fillets(layout.positions), [layout.positions]);
   const entryById = useMemo(() => new Map(entries.map((e) => [e.chatId, e])), [entries]);
 
-  // ── "+" beside each repo block ──
-  // A block is a repo's windows joined edge to edge. Its "+" sits in the free
-  // cell its next chat would take, and shows while the pointer is over the
-  // block or that cell.
-  const groups = useMemo(
-    () => repoGroups(layout.positions, (id) => repoById.get(id)),
-    [repoById, layout.positions],
-  );
-  /** The block (named by its first window) whose "+" is showing. */
-  const hoverStore = useMemo(() => createValueStore<string | null>(null), []);
-  /** cell key → the block the pointer is "over" there. */
-  const hoverCells = useMemo(() => {
-    const out = new Map<string, string>();
-    for (const g of groups) {
-      for (const id of g.ids) {
-        const p = layout.positions[id];
-        out.set(cellKey(p.c, p.r), g.ids[0]);
+  // ── "+" on each free edge of a window ──
+  // Every edge a window shares with a free cell gets a "+" that starts a chat
+  // in the window's repo in that cell. A window's "+"s show while the pointer
+  // is over it or a free cell beside it.
+  const adds = useMemo(() => {
+    const out: WindowAdd[] = [];
+    for (const [chatId, p] of Object.entries(layout.positions)) {
+      const repo = repoById.get(chatId);
+      if (repo == null) continue;
+      for (const side of ADD_SIDES) {
+        const { dx, dy } = ADD_EDGE[side];
+        const slot = { c: p.c + dx, r: p.r + dy };
+        if (!occ.has(cellKey(slot.c, slot.r))) out.push({ chatId, repo, slot, side });
       }
     }
-    for (const g of groups) {
-      if (g.slot && !out.has(cellKey(g.slot.c, g.slot.r))) out.set(cellKey(g.slot.c, g.slot.r), g.ids[0]);
-    }
     return out;
-  }, [groups, layout.positions]);
+  }, [repoById, layout.positions, occ]);
+  /** The window whose "+"s are showing. */
+  const hoverStore = useMemo(() => createValueStore<string | null>(null), []);
+  /** cell key → the windows the pointer is "over" there: a window's own cell,
+   *  or every window beside a free cell. */
+  const hoverCells = useMemo(() => {
+    const out = new Map<string, string[]>();
+    for (const a of adds) {
+      const k = cellKey(a.slot.c, a.slot.r);
+      out.set(k, [...(out.get(k) ?? []), a.chatId]);
+    }
+    for (const [id, p] of Object.entries(layout.positions)) out.set(cellKey(p.c, p.r), [id]);
+    return out;
+  }, [adds, layout.positions]);
   const hoverCellsRef = useRef(hoverCells);
   hoverCellsRef.current = hoverCells;
 
@@ -1272,13 +1284,17 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
       const lay = layoutRef.current;
       const c = Math.floor((at.x - v.x) / v.scale / lay.cellW);
       const r = Math.floor((at.y - v.y) / v.scale / lay.cellH);
-      hoverStore.set(own ?? hoverCellsRef.current.get(cellKey(c, r)) ?? null);
+      // In a free cell beside several windows, stay with the one the pointer
+      // came from.
+      const near = hoverCellsRef.current.get(cellKey(c, r)) ?? [];
+      const cur = hoverStore.get();
+      hoverStore.set(own ?? (cur != null && near.includes(cur) ? cur : (near[0] ?? null)));
     };
     const onMove = (e: PointerEvent) => {
       const rect = viewport.getBoundingClientRect();
       at = { x: e.clientX - rect.left, y: e.clientY - rect.top };
       // Far out, the "+" itself reaches past its cell.
-      update((e.target as Element).closest<HTMLElement>(".gc-add")?.dataset.group);
+      update((e.target as Element).closest<HTMLElement>(".gc-add")?.dataset.chat);
     };
     const onLeave = () => {
       at = null;
@@ -1543,6 +1559,35 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [focusCard, revealCard, selectOnly, setComposerOpen, viewStore]);
 
+  // ── Cmd+F: find a phrase in every window's chat ──
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [searchToken, setSearchToken] = useState(0);
+  const [search, setSearch] = useState<GridSearchView | null>(null);
+  const scrollToMatch = useSearchHighlights(canvasRef, searchOpen ? search : null);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (!(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || e.key.toLowerCase() !== "f") return;
+      if (document.querySelector(".master-popover--open")) return;
+      e.preventDefault();
+      setSearchOpen(true);
+      setSearchToken((t) => t + 1);
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
+  const closeSearch = useCallback(() => {
+    setSearchOpen(false);
+    setSearch(null);
+  }, []);
+  const goToMatch = useCallback(
+    (chatId: string) => {
+      focusCard(chatId);
+      // Once it has flown in and the highlights have caught up.
+      setTimeout(() => scrollToMatch(chatId), 480);
+    },
+    [focusCard, scrollToMatch],
+  );
+
   const repoOptions = useMemo(() => {
     const seen = new Set<string>();
     const opts: { path: string; name: string }[] = [];
@@ -1585,25 +1630,32 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
             {filletList.map((f) => {
               const repo = repoById.get(f.chatId);
               const color = repo ? colorOf(repo) : { hue: 0, tone: 0 };
-              // A window that needs you carries its ring round its half of the
-              // arc. A focused or selected one sits over the corner, ring and
-              // all, so it doesn't.
+              // When both windows the arc joins need you, the corner joins
+              // their rings up (and rounds the diagonal one's to match). A
+              // focused or selected window sits over the corner, ring and all,
+              // so it doesn't count.
               const ringOf = (id: string) => {
                 const e = entryById.get(id);
                 if (!e || id === focusedId || selected.has(id)) return undefined;
                 const status = reports.get(id)?.status ?? e.chat.status;
                 return needsAttention(status) ? status : undefined;
               };
+              const h = ringOf(f.chatId);
+              const v = ringOf(f.vChatId);
+              const joined = h != null && v != null;
               return (
                 <div
                   key={`${f.x},${f.y}`}
                   data-at={`${f.x},${f.y}`}
-                  data-h={ringOf(f.chatId)}
-                  data-v={ringOf(f.vChatId)}
+                  data-h={joined ? h : undefined}
+                  data-v={joined ? v : undefined}
+                  data-d={joined ? ringOf(f.dChatId) : undefined}
                   className={`gc-fillet gc-tinted gc-fillet--${f.dx > 0 ? "r" : "l"}${f.dy > 0 ? "b" : "t"}`}
                   style={{ ...repoColorVars(color), "--x": f.x, "--y": f.y } as React.CSSProperties}
                   aria-hidden
-                />
+                >
+                  {joined && <div className="gc-fillet-knot" />}
+                </div>
               );
             })}
             {entries.map((entry) => {
@@ -1653,12 +1705,13 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
                   focused={focusedId === id}
                   selected={selected.has(id)}
                   onRun={runPipeline}
+                  onPause={pausePipeline}
                   onFocusChat={focusCard}
                 />
               );
             })}
-            <GroupAdds
-              groups={groups}
+            <WindowAdds
+              adds={adds}
               hover={hoverStore}
               entryById={entryById}
               colorOf={colorOf}
@@ -1666,6 +1719,7 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
               onAdd={createIn}
             />
             <DragGhost store={ghostStore} />
+            {searchOpen && <GridSearchMarks view={search} positions={layout.positions} />}
           </div>
           <div className="gc-marquee" ref={marqueeRef} aria-hidden />
         </div>
@@ -1679,6 +1733,18 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
             bring it back any time from <strong>New chat → Recent chats</strong>.
           </div>
         ) : null}
+
+        {searchOpen && (
+          <GridSearch
+            entries={entries}
+            entryById={entryById}
+            colorOf={colorOf}
+            focusToken={searchToken}
+            onChange={setSearch}
+            onGo={goToMatch}
+            onClose={closeSearch}
+          />
+        )}
 
         <div className="gc-toolbar" ref={menuRef}>
           <button
@@ -1806,28 +1872,41 @@ export function GridPanel({ openRepos, recents, settings, onOpenChat }: Props) {
   );
 }
 
-/** Where a block's "+" sits, by which side of its cell the block lies on: the
- *  middle of the edge the new window would share with the block, and the way
- *  into the free cell from there. */
-const ADD_EDGE: Record<RepoGroup["side"], { x: number; y: number; dx: number; dy: number }> = {
+type AddSide = "n" | "e" | "s" | "w";
+const ADD_SIDES: AddSide[] = ["n", "e", "s", "w"];
+
+/** Where a "+" sits, by which side of its free cell the window lies on: the
+ *  middle of the edge the new window would share with it, and the way into
+ *  the free cell from there. */
+const ADD_EDGE: Record<AddSide, { x: number; y: number; dx: number; dy: number }> = {
   w: { x: 0, y: 0.5, dx: 1, dy: 0 },
   n: { x: 0.5, y: 0, dx: 0, dy: 1 },
   e: { x: 1, y: 0.5, dx: -1, dy: 0 },
   s: { x: 0.5, y: 1, dx: 0, dy: -1 },
 };
 
-/** A small "+" beside each repo block, shown while the pointer is over the
- *  block. It starts a chat in that repo in the free cell it sits in, which is
- *  outlined while the "+" is hovered. */
-function GroupAdds({
-  groups,
+/** A "+" on one free edge of a window. */
+interface WindowAdd {
+  chatId: string;
+  repo: string;
+  /** The free cell the new chat takes. */
+  slot: Cell;
+  /** Which side of `slot` the window lies on. */
+  side: AddSide;
+}
+
+/** A small "+" on every free edge of each window, shown while the pointer is
+ *  over the window. Each starts a chat in that window's repo in the free cell
+ *  it sits in, which is outlined while the "+" is hovered. */
+function WindowAdds({
+  adds,
   hover,
   entryById,
   colorOf,
   disabled,
   onAdd,
 }: {
-  groups: RepoGroup[];
+  adds: WindowAdd[];
   hover: ValueStore<string | null>;
   entryById: Map<string, GridChatEntry>;
   colorOf: (repoPath: string) => RepoColor;
@@ -1837,20 +1916,19 @@ function GroupAdds({
   const shown = useStoreValue(hover);
   return (
     <>
-      {groups.map((g) => {
-        const slot = g.slot;
-        if (!slot) return null;
-        const edge = ADD_EDGE[g.side];
-        const label = `New chat in ${entryById.get(g.ids[0])?.repoName ?? "this repo"}`;
+      {adds.map((a) => {
+        const slot = a.slot;
+        const edge = ADD_EDGE[a.side];
+        const label = `New chat in ${entryById.get(a.chatId)?.repoName ?? "this repo"}`;
         return (
-          <Fragment key={g.ids[0]}>
+          <Fragment key={`${a.chatId}:${a.side}`}>
             <button
               type="button"
-              className={`gc-add gc-tinted${shown === g.ids[0] ? " gc-add--shown" : ""}`}
-              data-group={g.ids[0]}
+              className={`gc-add gc-tinted${shown === a.chatId ? " gc-add--shown" : ""}`}
+              data-chat={a.chatId}
               style={
                 {
-                  ...repoColorVars(colorOf(g.repo)),
+                  ...repoColorVars(colorOf(a.repo)),
                   "--x": slot.c + edge.x,
                   "--y": slot.r + edge.y,
                   "--dx": edge.dx,
@@ -1860,7 +1938,7 @@ function GroupAdds({
               disabled={disabled}
               title={label}
               aria-label={label}
-              onClick={() => void onAdd(g.repo, slot)}
+              onClick={() => void onAdd(a.repo, slot)}
             >
               <Plus size={14} />
             </button>
@@ -1989,6 +2067,14 @@ const GridCard = memo(function GridCard({
   const showFront = withFront && !flipped;
   // An offered answer other than the big one starts a message for Sean to finish.
   const [optionDraft, setOptionDraft] = useState<string | null>(null);
+  // What's typed but unsent, so an untitled chat is named by it when zoomed out.
+  const [draft, setDraft] = useState(() => {
+    try {
+      return localStorage.getItem(`buildover.draft.${entry.chatId}`) ?? "";
+    } catch {
+      return "";
+    }
+  });
   // Prefer the live session status over the polled summary, which lags.
   const status = agent.status ?? chat.status;
   const attention = needsAttention(status);
@@ -2142,7 +2228,7 @@ const GridCard = memo(function GridCard({
     return () => cancelAnimationFrame(frame);
   }, [composerOpen]);
 
-  const title = chat.title || "New chat";
+  const title = chat.title || draft.replace(/\s+/g, " ").trim() || "New chat";
   const headFlag = status === "agent_done" ? undefined : ATTENTION_LABEL[status];
   // Its tier shows as emphasis, not colour, so the repo's colour stays its own.
   const prio = isSnoozed(chat.snoozedUntil, Date.now())
@@ -2344,6 +2430,7 @@ const GridCard = memo(function GridCard({
                 });
                 setComposerOpen(false);
               }}
+              onDraftChange={setDraft}
               onInterrupt={agent.interrupt}
               disabled={agent.connection !== "connected"}
               isStreaming={agent.isStreaming}

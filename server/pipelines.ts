@@ -97,6 +97,8 @@ export interface PipelineStore {
   errors: Record<string, string>;
   /** Connectors a source needs signed in before it can be read. */
   signIn?: Record<string, string[]>;
+  /** Sources the user paused, with when: not read on schedule, nothing new started or shown. */
+  paused?: Record<string, string>;
 }
 
 const STORE_FILE = join(PIPELINES_DIR, "items.json");
@@ -186,7 +188,7 @@ const wakeable = (i: PipelineItem) => !!i.wake && !!i.chatId && i.state !== "wor
 export function pickResearch(items: PipelineItem[], sources: string[], maxAgents: number, ahead: number): PipelineItem[] {
   let free = maxAgents - items.filter((i) => i.state === "working").length;
   const out: PipelineItem[] = [];
-  for (const i of items.filter(wakeable).sort(byRank)) {
+  for (const i of items.filter((x) => wakeable(x) && sources.includes(x.source)).sort(byRank)) {
     if (free <= 0) break;
     out.push(i);
     free--;
@@ -256,6 +258,8 @@ let forceRelease = false;
 const forceRun = new Set<string>();
 /** The source being read right now. */
 let reading: string | null = null;
+/** Pauses asked for since the last tick read the store; it saves them. */
+const pauseChanges = new Map<string, boolean>();
 
 export function startPipelines(): void {
   if (timer) return;
@@ -281,6 +285,25 @@ export async function releaseNow(): Promise<void> {
   await tick();
 }
 
+/** Pause or resume one source. Takes effect at the next tick, which saves it. */
+export function setPaused(id: string, paused: boolean): void {
+  pauseChanges.set(id, paused);
+  void (async () => {
+    await ticking;
+    await tick();
+  })();
+}
+
+function applyPauses(store: PipelineStore) {
+  for (const [id, paused] of pauseChanges) {
+    if (paused) (store.paused ??= {})[id] ??= nowIso();
+    else delete store.paused?.[id];
+  }
+  pauseChanges.clear();
+}
+
+const isPaused = (store: PipelineStore, id: string) => pauseChanges.get(id) ?? !!store.paused?.[id];
+
 /** Read a source now and start work on its best new item, outside its schedule. */
 export function runNow(id: string): void {
   forceRun.add(id);
@@ -295,6 +318,7 @@ async function runTick(): Promise<void> {
   if (!sources.length) return;
   const settings = loadSettings();
   const store = await readStore();
+  applyPauses(store);
   const live: SourceConfig[] = [];
   for (const src of sources) {
     if (await getRepoMeta(src.repoPath).catch(() => null)) live.push(src);
@@ -308,6 +332,7 @@ async function runTick(): Promise<void> {
   for (const src of live) {
     const asked = forced.includes(src);
     if (!asked) {
+      if (isPaused(store, src.id)) continue;
       if (!syncDue(src, store.syncedAt[src.id], settings)) continue;
       // Coming up with ideas is research too: not once the budget is spent.
       if (atCap && src.fetch.kind === "ideas") continue;
@@ -345,7 +370,8 @@ async function runTick(): Promise<void> {
 
   await sampleUsage().catch(() => undefined);
   const agents = await researchAgents(store, settings);
-  for (const item of pickResearch(store.items, live.map((s) => s.id), agents, settings.slots ?? DEFAULT_SLOTS)) {
+  const running = live.filter((s) => !isPaused(store, s.id));
+  for (const item of pickResearch(store.items, running.map((s) => s.id), agents, settings.slots ?? DEFAULT_SLOTS)) {
     const src = live.find((s) => s.id === item.source)!;
     await (item.state === "new" ? startResearch(src, item, settings) : startWake(src, item, settings));
   }
@@ -359,7 +385,8 @@ async function runTick(): Promise<void> {
 
   const sweepDue = forceRelease || (!!store.releasedAt && nextSweep(new Date(store.releasedAt), settings.sweeps).getTime() <= Date.now());
   store.releasedAt ??= nowIso();
-  for (const item of pickRelease(store.items, sweepDue, settings.slots ?? DEFAULT_SLOTS)) {
+  const releasable = store.items.filter((i) => !isPaused(store, i.source));
+  for (const item of pickRelease(releasable, sweepDue, settings.slots ?? DEFAULT_SLOTS)) {
     await addToGrid(item.chatId!, item.repoPath);
     if (item.urgent) {
       void notifyAgentNeedsInput(item.title, basename(item.repoPath), item.summary).catch(() => undefined);
@@ -642,7 +669,7 @@ async function startChecks(store: PipelineStore, settings: PipelineSettings): Pr
   if (upcoming.getTime() - Date.now() > CHECK_AHEAD_MS) return;
   const sweep = upcoming.toISOString();
   const due = store.items.filter(
-    (i) => i.chatId && i.page?.event && (i.state === "waiting" || i.state === "shown") && !i.busy && !i.checking && !i.wake && i.checkedFor !== sweep,
+    (i) => !isPaused(store, i.source) && i.chatId && i.page?.event && (i.state === "waiting" || i.state === "shown") && !i.busy && !i.checking && !i.wake && i.checkedFor !== sweep,
   );
   for (const item of due) {
     item.checking = nowIso();
@@ -678,6 +705,7 @@ export async function pipelinesView(): Promise<PipelinesView> {
         counts,
         spendUsd: store.spend.bySource[src.id] ?? 0,
         reading: reading === src.id || forceRun.has(src.id),
+        ...(isPaused(store, src.id) ? { pausedAt: store.paused?.[src.id] ?? nowIso() } : {}),
         ...(store.syncedAt[src.id] ? { checkedAt: store.syncedAt[src.id] } : {}),
         nextCheckAt: nextCheck(src, store.syncedAt[src.id], settings).toISOString(),
         ...(store.errors[src.id] ? { error: store.errors[src.id] } : {}),

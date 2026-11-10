@@ -27,6 +27,15 @@
   flex: none;
 }
 
+.gp-top .gp-status {
+  flex: 1;
+}
+
+.gp-card--paused .gp-section,
+.gp-card--paused .gp-empty {
+  opacity: 0.5;
+}
+
 .gp-busy {
   animation: gp-pulse 1.6s ease-in-out infinite;
 }

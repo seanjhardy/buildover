@@ -802,6 +802,13 @@ export function useAgent(
     const id = chatIdRef.current;
     if (!id) return;
     agentSocket.send({ type: "interrupt", chatId: id });
+    // Show the stop straight away; the server's turn_end and status follow.
+    setTurns(withoutPartials);
+    setIsStreaming(false);
+    setPendingPermission(undefined);
+    setPendingAttention(undefined);
+    setSlotQueue(null);
+    setStatus("idle");
   }, []);
 
   // Stops one subagent / shell task, leaving the main turn alone.

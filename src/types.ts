@@ -1067,6 +1067,8 @@ export interface PipelineSourceView {
   spendUsd: number;
   /** Being read right now (or asked to be). */
   reading: boolean;
+  /** When the user paused it; absent while it runs. */
+  pausedAt?: string;
   /** When it was last read without failing. */
   checkedAt?: string;
   nextCheckAt: string;

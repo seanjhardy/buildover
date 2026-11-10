@@ -7,7 +7,6 @@ import {
   nearestFreeOffset,
   neighbourIn,
   placeNew,
-  repoGroups,
   sidesOf,
   occupancy,
   windowsTouching,
@@ -18,6 +17,7 @@ test("an L of three windows has one inner fillet, in the empty corner", () => {
   const f = fillets(positions);
   assert.equal(f.length, 1);
   assert.deepEqual({ x: f[0].x, y: f[0].y, dx: f[0].dx, dy: f[0].dy }, { x: 1, y: 1, dx: 1, dy: 1 });
+  assert.deepEqual({ h: f[0].chatId, v: f[0].vChatId, d: f[0].dChatId }, { h: "c", v: "b", d: "a" });
 });
 
 test("a straight row and a full square have no fillets", () => {
@@ -52,35 +52,14 @@ test("new chats grow their repo's block compactly and new repos start apart", ()
   assert.deepEqual(connectedGroup("b1", positions), ["b1"]);
 });
 
-test("each block of a repo gets its own next cell, beside that block", () => {
+test("a new chat scoped to one block of a repo goes beside that block", () => {
   // Repo x in two blocks (a b, and d on its own), repo y's window between them.
   const repo: Record<string, string> = { a: "x", b: "x", y1: "y", d: "x" };
   const positions = { a: { c: 0, r: 0 }, b: { c: 1, r: 0 }, y1: { c: 3, r: 0 }, d: { c: 5, r: 0 } };
   const repoOf = (id: string) => repo[id];
-  assert.deepEqual(
-    repoGroups(positions, repoOf).map((g) => [g.ids, g.slot, g.side]),
-    [
-      [["a", "b"], { c: 0, r: 1 }, "n"],
-      [["y1"], { c: 3, r: 1 }, "n"],
-      [["d"], { c: 6, r: 0 }, "w"],
-    ],
-  );
-  // Unscoped, a new x chat still grows the bigger block.
+  // Unscoped, a new x chat grows the bigger block.
   assert.deepEqual(placeNew(positions, repoOf, "x"), { c: 0, r: 1 });
   assert.deepEqual(placeNew(positions, repoOf, "x", ["d"]), { c: 6, r: 0 });
-});
-
-test("a block boxed in by other repos has no next cell", () => {
-  const repo: Record<string, string> = { z: "z", n: "y", e: "y", s: "y", w: "y" };
-  const positions = {
-    z: { c: 1, r: 1 },
-    n: { c: 1, r: 0 },
-    e: { c: 2, r: 1 },
-    s: { c: 1, r: 2 },
-    w: { c: 0, r: 1 },
-  };
-  const z = repoGroups(positions, (id) => repo[id]).find((g) => g.repo === "z");
-  assert.equal(z?.slot, null);
 });
 
 test("a drop onto another window lands on the nearest free cell", () => {

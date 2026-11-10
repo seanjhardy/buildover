@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { indexOfPromptAbove } from "../lib/promptPeek.js";
 
-// Resting the pointer on the top edge of a chat peeks at the user's message
+// Resting the pointer on the upper part of a chat peeks at the user's message
 // that has scrolled off above, so a long reply can be read with its prompt.
-const HOVER_BAND_PX = 32;
+const HOVER_BAND_PX = 80;
 // A pointer only passing through the band (on its way down from the header)
 // shouldn't flash the peek.
 const SHOW_DELAY_MS = 120;

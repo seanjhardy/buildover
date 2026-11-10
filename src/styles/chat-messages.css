@@ -69,7 +69,7 @@
   pointer-events: none;
 }
 
-/* ---- Prompt peek: resting the pointer on the top edge of a chat shows the
+/* ---- Prompt peek: resting the pointer on the upper part of a chat shows the
    user's message that has scrolled off above. The zero-height sticky anchor
    pins it to the top of the viewport without taking room in the transcript. */
 .prompt-peek-anchor {

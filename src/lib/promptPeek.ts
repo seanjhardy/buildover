@@ -1,6 +1,6 @@
 // Which of the user's messages the reader has lost sight of: the newest one
 // that starts above the top of the chat's viewport. PromptPeek shows it when
-// the pointer rests on the top edge of a chat, so a long reply can be read
+// the pointer rests on the upper part of a chat, so a long reply can be read
 // with the message it answers in view.
 
 /** A rendered user message and the viewport y of its top edge. */

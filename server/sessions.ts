@@ -427,6 +427,12 @@ class AgentSession {
   // window parks instead of also starting: two turns on one process overwrite
   // each other's output sink, and the loser hangs the chat as "running" forever.
   private starting = false;
+  // Stop was pressed while a turn was starting: its abort controller doesn't
+  // exist yet, so the turn aborts itself the moment it creates one.
+  private stopDuringStart = false;
+  // The current turn was ended by the Stop button: it doesn't hand on to
+  // parked, queued or nudge turns when it finishes.
+  private stoppedByUser = false;
   // Structural chat operations (edit/resend, branch switch, revert) can arrive
   // while an aborted turn is still unwinding, or while an invisible compact
   // turn is running. These waiters let those operations wait for the session
@@ -1361,6 +1367,23 @@ class AgentSession {
     if (!this.running) void this.healAndBroadcast();
   }
 
+  // The Stop button. Ends the turn now and kills the chat's CLI process with
+  // every subagent / shell task it was running, so nothing wakes the chat back
+  // up and there is no wait for the CLI to wind the turn down. A turn still
+  // starting up is cancelled before it reaches the model, and queued messages
+  // are paused rather than started.
+  async stop(): Promise<void> {
+    if (this.running || this.starting) this.stoppedByUser = true;
+    if (this.starting) this.stopDuringStart = true;
+    this.interrupt();
+    this.closeLive();
+    const record = await readChat(this.repoPath, this.chatId);
+    if (record?.queuedTurns?.length && !record.queuePaused) {
+      const paused = await setQueuePaused(this.repoPath, this.chatId, true);
+      if (paused) await this.pushStatusForRecord(paused);
+    }
+  }
+
   // Stops the turn and kills every subagent / shell task the chat's CLI
   // process is running. Used when the chat is deleted.
   dispose(): void {
@@ -1767,12 +1790,21 @@ class AgentSession {
       started = true;
     } finally {
       this.starting = false;
-      if (!started) this.resumeAfterAbortedStart();
+      if (!started) {
+        const stopped = this.stoppedByUser;
+        this.stopDuringStart = false;
+        this.stoppedByUser = false;
+        if (!stopped) this.resumeAfterAbortedStart();
+      }
     }
 
     this.running = true;
     this.currentTurnSilent = args.silent ?? false;
     this.abort = new AbortController();
+    if (this.stopDuringStart) {
+      this.stopDuringStart = false;
+      this.abort.abort();
+    }
     this.currentPermissionMode = args.permissionMode;
     // A real message restarts the keep-warm clock when its turn ends.
     if (!args.keepAlive) this.clearKeepWarm();
@@ -2101,6 +2133,8 @@ class AgentSession {
       // Global cap on concurrent turns. Silent turns (compaction, handoff
       // notes) are exempt: they chain off a turn that already held a slot.
       if (!args.silent && !(await this.acquireSlot())) throw SLOT_WAIT_ABORTED;
+      // Stopped before the model was reached: don't start it at all.
+      if (this.abort?.signal.aborted) throw SLOT_WAIT_ABORTED;
 
       // Route to the correct runner based on the model provider.
       const provider = args.adoptLive ? "claude" : getModelProvider(args.model);
@@ -2298,6 +2332,8 @@ class AgentSession {
       this.waitingForSlot = false;
       const wasSilent = this.currentTurnSilent;
       const wasAborted = this.abort?.signal.aborted === true;
+      const wasStopped = this.stoppedByUser;
+      this.stoppedByUser = false;
       this.currentTurnSilent = false;
       this.pendingPermissions.clear();
       let final: ChatRecord | null = null;
@@ -2444,6 +2480,8 @@ class AgentSession {
           isRetry: true,  // don't echo "/compact" as a user message
           silent: true,   // suppress assistant/result turns from reaching the UI
         });
+      } else if (wasStopped) {
+        // Stopped by the user: the chat stays idle until they send something.
       } else if (this.pendingUserTurns.length > 0) {
         // One or more user messages arrived while a silent compact turn was
         // running and were parked (see the running guard above). Now that the

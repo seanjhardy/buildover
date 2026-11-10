@@ -186,6 +186,14 @@ export interface MasterInfo {
   model: Model;
 }
 
+/** A grid chat that mentions a Cmd+F query (see server/gridSearch.ts). */
+export interface GridSearchHit {
+  chatId: string;
+  count: number;
+  /** The newest few matches in context: text[start, start + length) matched. */
+  snippets: { role: "title" | "user" | "assistant"; text: string; start: number; length: number; ts?: string }[];
+}
+
 export interface RecentChatEntry {
   repoPath: string;
   repoName: string;
@@ -623,6 +631,8 @@ export const api = {
   getPipelines: () => getJson<PipelinesView>(`/api/pipelines`),
   releasePipelines: () => send<PipelinesView>("POST", `/api/pipelines/release`),
   runPipeline: (id: string) => send<PipelinesView>("POST", `/api/pipelines/${encodeURIComponent(id)}/run`),
+  pausePipeline: (id: string, paused: boolean) =>
+    send<PipelinesView>("POST", `/api/pipelines/${encodeURIComponent(id)}/pause`, { paused }),
 
   // ── Grid ─────────────────────────────────────────────────────────────────
   listGrid: () =>
@@ -638,6 +648,11 @@ export const api = {
       "POST",
       `/api/grid/chats`,
       body,
+    ),
+
+  searchGrid: (q: string) =>
+    getJson<{ hits: GridSearchHit[] }>(`/api/grid/search?q=${encodeURIComponent(q)}`).then(
+      (r) => r.hits,
     ),
 
   listRecentChats: () =>
